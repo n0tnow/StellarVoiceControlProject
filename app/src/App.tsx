@@ -17,7 +17,7 @@ import {
 const FALLBACK_GEOMETRY: NotchGeometry = {
   idleWidth: 216,
   idleHeight: 34,
-  expandedWidth: 216 + 2 * 160,
+  expandedWidth: 216 + 2 * 110,
   expandedHeight: 34,
   pillTopRadius: 4.25,
   pillBottomRadius: 8.5,
@@ -162,14 +162,18 @@ export default function App() {
   const error = connectionError ?? status.error;
   const durationMs = status.recording?.durationMs ?? 0;
 
+  // The label is the ONLY thing drawn in the left ear, so it has to stay short:
+  // the ear is deliberately narrow and anything longer would be clipped (it can
+  // never spill right, because that is the camera housing). The full wording
+  // still reaches assistive tech through the live region below.
   const label = showPermissionHint
-    ? "Enable hold-to-talk"
+    ? "Grant access"
     : state === "recording"
       ? "Listening"
       : state === "ready"
-        ? "Ready to send"
+        ? "Ready"
         : state === "error"
-          ? "Recording unavailable"
+          ? "Mic error"
           : "Connecting";
   const detail = showPermissionHint
     ? "System Settings › Privacy & Security › Accessibility"
@@ -206,17 +210,10 @@ export default function App() {
       >
         <div className="notch-content" aria-hidden={!expanded}>
           <div className="notch-copy">
+            {/* Label only. `detail` and `error` are not drawn — the ear is too
+                narrow for them and the housing to its right cannot be used —
+                but they still reach assistive tech via the live region below. */}
             <p className="notch-label">{label}</p>
-            {state === "error" && error ? (
-              // The error stays inside the fixed expanded height: the message
-              // truncates on one line and the retry hint keeps its own space.
-              <p className="notch-detail notch-detail-error">
-                <span className="notch-error-text">{error}</span>
-                <span className="notch-error-hint">{detail}</span>
-              </p>
-            ) : (
-              <p className="notch-detail">{detail}</p>
-            )}
           </div>
           {/* The camera housing: no pixels exist here, so it stays empty. */}
           <span className="notch-gap" aria-hidden="true" />

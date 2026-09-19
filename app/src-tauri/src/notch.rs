@@ -115,10 +115,10 @@ fn idle_cutout_size(housing: f64, safe_top: f64) -> (f64, f64) {
 ///
 /// There are no pixels behind the camera housing, so anything drawn over the
 /// cutout is simply not displayed. All content therefore lives in the two ears,
-/// and the shell has to be wide enough to hold it: the label plus its truncated
-/// hint on the left, the indicator on the right. 160 pt fits both at the 13 pt /
-/// 9 pt type scale with room to spare.
-const EAR_WIDTH: f64 = 160.0;
+/// and the shell is only as wide as that content needs: a short status label on
+/// the left, the indicator on the right. 110 pt holds the longest label
+/// ("Enable hold-to-talk") at the 13 pt type scale.
+const EAR_WIDTH: f64 = 110.0;
 
 /// Centred-pill fallback for displays without a camera housing.
 pub const FALLBACK: NotchGeometry = {
@@ -322,9 +322,9 @@ mod tests {
 
     #[test]
     fn the_shell_widens_by_two_ears_and_stays_inside_the_window() {
-        // 179 pt cutout on this machine + two 160 pt ears = 499 pt.
+        // 179 pt cutout on this machine + two 110 pt ears = 399 pt.
         let (width, _) = expanded_size(179.0, 32.0, 780.0);
-        assert!((width - 499.0).abs() < 0.01, "got {width}");
+        assert!((width - 399.0).abs() < 0.01, "got {width}");
         // Each ear must really be EAR_WIDTH, or content lands over the cutout
         // where the display has no pixels.
         assert!(((width - 179.0) / 2.0 - EAR_WIDTH).abs() < 0.01);
