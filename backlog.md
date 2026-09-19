@@ -14,6 +14,7 @@
 |---|---|---|---|---|---|
 | 2026-09-19 | **A0 — harness**: global hotkey (press/release) + microphone capture to WAV + wire both into the existing log pane; delete the temporary `dev_self_test` command | Owner A | open — [PR #6](https://github.com/n0tnow/StellarVoiceControlProject/pull/6) closed unmerged; resume from `rescue/a0-harness` (`7a024a6`) | [`backlog/2026-09-19-a0-harness.md`](backlog/2026-09-19-a0-harness.md) | P0 |
 | 2026-09-19 | Owner B: fill in `stellar/` (anchor SEP-10/38/6 client, `sendPayment` tool) — stubs throw `NotImplementedError` today | Owner B | merged 2026-09-19 — [#10](https://github.com/n0tnow/StellarVoiceControlProject/pull/10) (`a8c4416`), [#9](https://github.com/n0tnow/StellarVoiceControlProject/pull/9) (`259dbe9`), [#11](https://github.com/n0tnow/StellarVoiceControlProject/pull/11) (`a01d6a1`) | [`backlog/anchor-sep6.md`](backlog/anchor-sep6.md), [`backlog/keeper.md`](backlog/keeper.md), [`backlog/guard-rules-schedule.md`](backlog/guard-rules-schedule.md) | P0 |
+| 2026-09-19 | **A1 — STT**: research done; implementation pending (whisper-rs 0.16 + Metal, `ggml-small.bin` warm worker, force language, short failure labels) | research worker (opencode) | research complete — implementation not started | [`backlog/2026-09-19-stt-research.md`](backlog/2026-09-19-stt-research.md) + [`docs/reports/2026-09-19-stt-whisper.md`](docs/reports/2026-09-19-stt-whisper.md) | P0 |
 
 ## Round-2 Reports (2026-09-19)
 
