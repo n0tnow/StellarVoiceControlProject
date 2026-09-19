@@ -19,7 +19,8 @@
     "build": "npm run build --workspaces --if-present",
     "dev": "npm run tauri:dev -w @polaris/app",
     "start:app": "npm run tauri:dev -w @polaris/app",
-    "agent": "npm run start -w @polaris/agent"
+    "agent": "npm run start -w @polaris/agent",
+    "e2e:intent": "node --env-file-if-exists=.env scripts/e2e-intent.mjs"
   },
   "devDependencies": {
     "typescript": "7.0.2"
