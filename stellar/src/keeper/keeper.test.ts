@@ -23,7 +23,7 @@ class FakeChain implements KeeperChain {
     if (this.listDueError) throw this.listDueError;
     return this.due.slice(0, limit);
   }
-  async getSchedule(id: number): Promise<Schedule> {
+  async getSchedule(id: number): Promise<Schedule | null> {
     return { id, owner: "GOWNER", to: "GTO", asset: "CASSET", amount: 10n, next_run_at: 1n, interval_secs: 0n, runs_left: 1, active: true };
   }
   async execute(id: number, opts: { dryRun: boolean }): Promise<ExecResult> {
@@ -245,4 +245,108 @@ test("an aborted signal stops the tick between ids", async () => {
   ac.abort();
   const s = await keeper.tick(ac.signal);
   assert.equal(s.attempted, 0);
+});
+
+// ── polaris_guard semantics: missed runs are skipped, never replayed ─────────
+
+/**
+ * Minimal model of the contract's schedule rules (`execute_schedule`):
+ * one run per call, `next_run_at` jumps to the first slot strictly after now,
+ * `runs_left` is decremented once per executed run.
+ */
+class SkipSemanticsChain implements KeeperChain {
+  nowSec = 1_000;
+  executed: Array<{ atSec: number; nextRunAt: number; runsLeft: number }> = [];
+  rejectWith: ClassifiedError | undefined;
+  sched = { id: 1, next_run_at: 1_000, interval_secs: 100, runs_left: 5, active: true };
+
+  async listDue(limit: number): Promise<number[]> {
+    const s = this.sched;
+    return s.active && s.next_run_at <= this.nowSec ? [s.id].slice(0, limit) : [];
+  }
+  async getSchedule(): Promise<Schedule | null> {
+    const s = this.sched;
+    return { id: s.id, owner: "O", to: "T", asset: "A", amount: 1n, next_run_at: BigInt(s.next_run_at), interval_secs: BigInt(s.interval_secs), runs_left: s.runs_left, active: s.active };
+  }
+  async execute(): Promise<ExecResult> {
+    const s = this.sched;
+    if (this.rejectWith) return { kind: "rejected", error: this.rejectWith };
+    if (!s.active) return { kind: "rejected", error: { kind: "inactive", name: "ScheduleInactive", message: "" } };
+    if (this.nowSec < s.next_run_at) return { kind: "rejected", error: { kind: "not_due", name: "ScheduleNotDue", message: "" } };
+    s.runs_left -= 1;
+    if (s.runs_left === 0) s.active = false;
+    else s.next_run_at += (Math.floor((this.nowSec - s.next_run_at) / s.interval_secs) + 1) * s.interval_secs;
+    this.executed.push({ atSec: this.nowSec, nextRunAt: s.next_run_at, runsLeft: s.runs_left });
+    return { kind: "success", hash: `h${this.executed.length}`, ledger: this.nowSec };
+  }
+  async checkPending(): Promise<ExecResult> {
+    return { kind: "pending", hash: "x", expiresAt: 0 };
+  }
+}
+
+function skipHarness() {
+  const chain = new SkipSemanticsChain();
+  const logs: Array<{ level: LogLevel } & LogFields> = [];
+  const keeper = new Keeper(
+    { pollSeconds: 15, maxPerTick: 5, dryRun: false },
+    { chain, log: (level, f) => logs.push({ level, ...f }), now: () => chain.nowSec * 1000, sleep: async () => {} },
+  );
+  return { chain, keeper, logs };
+}
+
+test("a keeper that was offline for many intervals executes the schedule once, not once per missed slot", async () => {
+  const { chain, keeper, logs } = skipHarness();
+  chain.nowSec = 1_000 + 100 * 50; // 50 intervals missed while the keeper was down
+  const first = await keeper.tick();
+  assert.equal(first.executed, 1);
+  assert.equal(chain.executed.length, 1);
+  assert.equal(chain.sched.runs_left, 4, "one run consumed, not 50");
+  assert.ok(chain.sched.next_run_at > chain.nowSec, "moved strictly into the future");
+
+  // Later ticks inside the same interval do nothing (nothing is due, no replay).
+  for (let i = 0; i < 5; i++) {
+    chain.nowSec += 15;
+    assert.equal((await keeper.tick()).attempted, 0);
+  }
+  assert.equal(chain.executed.length, 1);
+
+  // The executed log line carries the post-run state read back from the contract.
+  const line = logs.find((l) => l.event === "executed");
+  assert.deepEqual(line?.after, { next_run_at: BigInt(chain.sched.next_run_at), runs_left: 4, active: true });
+});
+
+test("after a long refusal period, fixing the cause yields exactly one run then normal cadence", async () => {
+  const { chain, keeper } = skipHarness();
+  chain.rejectWith = { kind: "allowance_missing", name: "InsufficientAllowance", message: "" };
+  // A week of ticks while the owner's allowance is missing: attempts are rare (backoff), payments zero.
+  for (let i = 0; i < 7 * 24 * 4; i++) {
+    chain.nowSec += 900;
+    await keeper.tick();
+  }
+  assert.equal(chain.executed.length, 0);
+  chain.rejectWith = undefined;
+  chain.nowSec += 3_600; // backoff window (max 1h) elapses
+  await keeper.tick();
+  assert.equal(chain.executed.length, 1, "one payment, no catch-up burst");
+  assert.equal(chain.sched.runs_left, 4);
+  await keeper.tick();
+  assert.equal(chain.executed.length, 1);
+});
+
+test("a not-due answer (clock skew) is handled quietly: info log, short backoff, then it runs", async () => {
+  const { chain, keeper, logs } = skipHarness();
+  chain.sched.next_run_at = 2_000;
+  // list_due (stale read) claims the id is due although the ledger clock disagrees.
+  chain.listDue = async () => [1];
+  chain.nowSec = 1_500;
+  const s = await keeper.tick();
+  assert.equal(s.failed, 1);
+  const rej = logs.find((l) => l.event === "rejected");
+  assert.equal(rej?.level, "info");
+  assert.equal((rej?.error as ClassifiedError).name, "ScheduleNotDue");
+  assert.equal(rej?.retryInMs, backoffMs("not_due", 1));
+  assert.equal((await keeper.tick()).attempted, 0, "suppressed during backoff");
+
+  chain.nowSec = 2_000 + 30; // due now, backoff (15s) over
+  assert.equal((await keeper.tick()).executed, 1);
 });

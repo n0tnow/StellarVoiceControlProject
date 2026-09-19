@@ -190,7 +190,17 @@ export class Keeper {
     switch (result.kind) {
       case "success":
         this.backoff.delete(id);
-        this.log("info", { event: "executed", id, hash: result.hash, status: "SUCCESS", ledger: result.ledger });
+        // The contract skips missed slots instead of replaying them, so one success
+        // is one payment and the schedule is already moved to a future slot. Log
+        // that post-run state (best effort) so operators can see it.
+        this.log("info", {
+          event: "executed",
+          id,
+          hash: result.hash,
+          status: "SUCCESS",
+          ledger: result.ledger,
+          after: postRunState(await this.describe(id)),
+        });
         return;
       case "dry_run": {
         const schedule = await this.describe(id);
@@ -257,11 +267,15 @@ export class Keeper {
 
   private async describe(id: number): Promise<Schedule | undefined> {
     try {
-      return await this.chain.getSchedule(id);
+      return (await this.chain.getSchedule(id)) ?? undefined;
     } catch {
       return undefined; // purely informational
     }
   }
+}
+
+function postRunState(s: Schedule | undefined): Pick<Schedule, "next_run_at" | "runs_left" | "active"> | undefined {
+  return s ? { next_run_at: s.next_run_at, runs_left: s.runs_left, active: s.active } : undefined;
 }
 
 /** Expected refusals are info; things an operator should look at are warn/error. */

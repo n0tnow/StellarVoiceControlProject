@@ -67,8 +67,8 @@ export type ExecResult =
 export interface KeeperChain {
   /** Ids of schedules due at the current ledger time (at most `limit`). */
   listDue(limit: number): Promise<number[]>;
-  /** Full schedule record, for logs and dry runs. */
-  getSchedule(id: number): Promise<Schedule>;
+  /** Full schedule record for logs and dry runs; `null` when the id does not exist. */
+  getSchedule(id: number): Promise<Schedule | null>;
   /** Run one occurrence of the schedule. Throws only on transport errors. */
   execute(id: number, opts: { dryRun: boolean }): Promise<ExecResult>;
   /** Re-check a previously submitted, unresolved transaction. */
@@ -117,9 +117,10 @@ export class SorobanChain implements KeeperChain {
     return value.map((v) => Number(v));
   }
 
-  async getSchedule(id: number): Promise<Schedule> {
+  /** `get_schedule` returns `Option<Schedule>`: void (None) decodes to null. */
+  async getSchedule(id: number): Promise<Schedule | null> {
     const value = await this.readCall("get_schedule", nativeToScVal(id, { type: "u32" }));
-    return value as Schedule;
+    return value === null || value === undefined ? null : (value as Schedule);
   }
 
   /** Simulate a read-only call from the keeper account and decode the return value. */
