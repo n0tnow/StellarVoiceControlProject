@@ -14,6 +14,7 @@
 | 2026-09-19 | Polaris architecture & tech-stack decision | research team | [docs/architecture.md](../architecture.md) | tauri, electron, touch-id, keychain, soroban, react, mpp, sep-6, hackathon |
 | 2026-09-19 | Raven / Stellar-side feasibility & ecosystem prior art | research worker (opencode) | [docs/reports/2026-09-19-raven-stellar-feasibility.md](2026-09-19-raven-stellar-feasibility.md) | raven-mcp, oauth, pkce, tauri, anchor, sep-6, sep-38, soroban, soroswap, defindex, prior-art |
 | 2026-09-19 | Genesis hackathon reality check & prior-art research | research worker (opencode) | [docs/reports/2026-09-19-hackathon-prior-art.md](2026-09-19-hackathon-prior-art.md) | genesis, rise-in, scope, mvp, cut-list, prior-art, voice-first, mpp, x402, touch-id |
+| 2026-09-19 | macOS notch overlay research for Polaris | research worker (notch-research) | [docs/reports/2026-09-19-notch-overlay-research.md](2026-09-19-notch-overlay-research.md) | macos, notch, tauri, react, transparent-window, nsscreen, nswindow, hotkey, animation |
 
 ---
 
