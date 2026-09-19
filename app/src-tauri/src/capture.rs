@@ -277,6 +277,17 @@ impl Capture {
         status
     }
 
+    /// Whether `recording` is still the capture the engine considers current —
+    /// the one whose transcription is running.
+    ///
+    /// A take superseded by a newer push-to-talk session must not emit its
+    /// transcript (that would spawn a turn for stale audio), so the STT worker
+    /// re-checks this after transcription completes (M3).
+    pub fn is_current(&self, recording: &CaptureRecording) -> bool {
+        let guard = self.shared.inner.lock().unwrap_or_else(|error| error.into_inner());
+        matches!(&*guard, Inner::Transcribing(current) if current.path == recording.path)
+    }
+
     /// `transcribing -> idle` after a successful transcript. The overlay returns
     /// to the resting pill; the text itself travels on the `transcript` event.
     pub fn mark_transcribed(&self, app: &AppHandle) -> CaptureStatus {
@@ -716,5 +727,37 @@ mod tests {
         assert_ne!(first, second);
         assert_eq!(first.parent(), Some(Path::new("/tmp/polaris-tests")));
         assert_eq!(first.extension().and_then(|ext| ext.to_str()), Some("wav"));
+    }
+
+    /// Regression guard for M3: a capture superseded by a newer push-to-talk
+    /// session must stop being "current", so the STT worker can drop its
+    /// transcript instead of spawning a turn for stale audio.
+    #[test]
+    fn a_superseded_recording_is_not_current() {
+        let capture = test_capture(PathBuf::from("/tmp/polaris-tests"));
+        let older = CaptureRecording {
+            path: "/tmp/polaris-older.wav".into(),
+            duration_ms: 400,
+        };
+        let newer = CaptureRecording {
+            path: "/tmp/polaris-newer.wav".into(),
+            duration_ms: 400,
+        };
+
+        // The STT worker marked `older` as transcribing.
+        *capture.shared.inner.lock().unwrap_or_else(|error| error.into_inner()) =
+            Inner::Transcribing(older.clone());
+        assert!(capture.is_current(&older));
+        assert!(!capture.is_current(&newer));
+
+        // A new take supersedes it while its transcription is still running.
+        *capture.shared.inner.lock().unwrap_or_else(|error| error.into_inner()) =
+            Inner::Recording(Active {
+                stop: std::sync::mpsc::channel().0,
+            });
+        assert!(
+            !capture.is_current(&older),
+            "a superseded recording must not be treated as current"
+        );
     }
 }

@@ -381,22 +381,33 @@ fn handle(
 
     match outcome {
         Ok(transcription) => {
-            println!(
-                "polaris: transcript in {elapsed_ms} ms (audio {} ms) via {}: {}",
-                recording.duration_ms,
-                backend.name(),
-                transcription.text
-            );
-            capture.mark_transcribed(app);
-            events::emit(
-                app,
-                PolarisEvent::Transcript {
-                    text: transcription.text,
-                    r#final: true,
-                },
-            );
-            // Success is the only path that deletes the WAV: once the text is
-            // out, the audio has served its purpose.
+            // M3: a take superseded by a newer push-to-talk session must not
+            // emit its transcript — that would spawn an agent turn for stale
+            // audio. The supersede can happen while this worker is blocked on
+            // the backend, so re-check now, after transcription.
+            if capture.is_current(&recording) {
+                println!(
+                    "polaris: transcript in {elapsed_ms} ms (audio {} ms) via {}: {}",
+                    recording.duration_ms,
+                    backend.name(),
+                    transcription.text
+                );
+                capture.mark_transcribed(app);
+                events::emit(
+                    app,
+                    PolarisEvent::Transcript {
+                        text: transcription.text,
+                        r#final: true,
+                    },
+                );
+            } else {
+                println!(
+                    "polaris: discarding the transcript for superseded recording {}",
+                    recording.path
+                );
+            }
+            // The audio served its purpose either way: it was transcribed, it is
+            // just no longer the current take. A superseded WAV must not linger.
             if let Err(error) = std::fs::remove_file(&recording.path) {
                 eprintln!(
                     "polaris: could not delete the transcribed recording {}: {error}",
