@@ -16,8 +16,12 @@ tauri-build = { version = "2.6.3", features = [] }
 
 [dependencies]
 tauri = { version = "2.11.5", features = [] }
+tauri-plugin-global-shortcut = "2.3.2"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
-# Step A0 will add: cpal (audio capture), tauri-plugin-global-shortcut (hotkey).
+# Step A0: global push-to-talk hotkey + microphone capture to WAV.
+cpal = "0.18.2"
+hound = "3.5.1"
+
 # Step A5 will add: security-framework (Keychain) + objc2-local-authentication (Touch ID).

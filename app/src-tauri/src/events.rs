@@ -59,6 +59,11 @@ pub enum PolarisEvent {
         hash: String,
         explorer_url: String,
     },
+    /// Step A0: a recording was written to disk. The path feeds step A1 (STT).
+    AudioCaptured {
+        path: String,
+        duration_ms: u64,
+    },
     Error {
         message: String,
     },
@@ -74,6 +79,7 @@ impl PolarisEvent {
             Self::ApprovalRequest { .. } => "approval_request",
             Self::ApprovalResult { .. } => "approval_result",
             Self::TxSubmitted { .. } => "tx_submitted",
+            Self::AudioCaptured { .. } => "audio_captured",
             Self::Error { .. } => "error",
         }
     }
@@ -114,6 +120,16 @@ mod tests {
         assert_eq!(
             json,
             r#"{"type":"tx_submitted","hash":"abc","explorerUrl":"https://stellar.expert/x"}"#
+        );
+
+        let json = serde_json::to_string(&PolarisEvent::AudioCaptured {
+            path: "/tmp/polaris-1.wav".into(),
+            duration_ms: 4230,
+        })
+        .unwrap();
+        assert_eq!(
+            json,
+            r#"{"type":"audio_captured","path":"/tmp/polaris-1.wav","durationMs":4230}"#
         );
     }
 

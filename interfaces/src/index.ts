@@ -92,6 +92,8 @@ export type PolarisEvent =
     }
   | { type: "approval_result"; payloadHash: string; approved: boolean }
   | { type: "tx_submitted"; hash: string; explorerUrl: string }
+  /** Step A0: a WAV was written after push-to-talk ended; feeds step A1 (STT). */
+  | { type: "audio_captured"; path: string; durationMs: number }
   | { type: "error"; message: string };
 
 /**

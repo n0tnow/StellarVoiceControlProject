@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { Mic, Plug, RadioTower, Trash2 } from "lucide-react";
 import type { AppInfo } from "@polaris/interfaces";
@@ -7,29 +7,36 @@ import { EventLog } from "@/components/EventLog";
 import { Button } from "@/components/ui/button";
 import {
   describeEvent,
-  devSelfTest,
   getAppInfo,
   listenPolarisEvents,
   makeLine,
+  startCapture,
+  stopCapture,
   type LogLine,
 } from "@/lib/polaris";
 
 type StreamState = "connecting" | "live" | "failed";
 
+/** Default push-to-talk hotkey (Rust side: `audio::DEFAULT_HOTKEY`). */
+const HOTKEY_LABEL = "Ctrl + Option + Space";
+
 /**
- * Polaris shell — skeleton stage.
+ * Polaris shell — step A0 harness.
  *
- * Wired today: the typed `polaris-event` channel from Rust, app metadata, and the
- * log pane that every later step is demoed through.
- * Not wired yet: hotkey and microphone (step A0), STT (A1), the agent round trip
- * (A2), speech output (A3), Touch ID approval (A5).
+ * Wired today: the typed `polaris-event` stream, push-to-talk via the global
+ * hotkey (Ctrl+Option+Space) or by holding the button below; each push writes a
+ * WAV recording and lands an `audio_captured` line in the log pane.
+ * Not wired yet: STT (A1), the agent round trip (A2), speech output (A3),
+ * screen reading (A4), Touch ID approval + signing (A5).
  */
 export default function App() {
   const [lines, setLines] = useState<LogLine[]>([]);
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [stream, setStream] = useState<StreamState>("connecting");
-  const [busy, setBusy] = useState(false);
+  const [recording, setRecording] = useState(false);
   const [wireEventCount, setWireEventCount] = useState(0);
+  // Ref mirror of `recording` for stable callbacks (StrictMode, pointer races).
+  const recordingRef = useRef(false);
 
   const append = useCallback((line: Omit<LogLine, "id" | "at">) => {
     setLines((previous) => [...previous, makeLine(line)]);
@@ -43,6 +50,16 @@ export default function App() {
     listenPolarisEvents((event) => {
       setWireEventCount((count) => count + 1);
       append(describeEvent(event));
+
+      // Keep the recording indicator in sync with whatever started the push
+      // (hotkey or button) — the UI must not be the source of truth here.
+      if (event.type === "hotkey") {
+        recordingRef.current = event.state === "down";
+        setRecording(event.state === "down");
+      } else if (event.type === "audio_captured" || event.type === "error") {
+        recordingRef.current = false;
+        setRecording(false);
+      }
     })
       .then((stop) => {
         if (cancelled) {
@@ -51,11 +68,7 @@ export default function App() {
         }
         unlisten = stop;
         setStream("live");
-        append({
-          origin: "ui",
-          title: "Subscribed to polaris-event",
-          tone: "ok",
-        });
+        append({ origin: "ui", title: "Subscribed to polaris-event", tone: "ok" });
       })
       .catch((error: unknown) => {
         setStream("failed");
@@ -92,30 +105,52 @@ export default function App() {
     };
   }, [append]);
 
-  const runSelfTest = useCallback(async () => {
-    setBusy(true);
+  const startTalk = useCallback(async () => {
+    if (recordingRef.current) return;
+    recordingRef.current = true;
+    setRecording(true);
+    append({ origin: "ui", title: "Recording started (button)", tone: "accent" });
     try {
-      const expected = await devSelfTest();
-      append({
-        origin: "ui",
-        title: `dev_self_test emitted ${expected.length} events`,
-        detail: expected.map((event) => event.type).join(" -> "),
-        tone: "ok",
-      });
+      await startCapture();
     } catch (error: unknown) {
+      recordingRef.current = false;
+      setRecording(false);
       append({
         origin: "ui",
-        title: "dev_self_test failed",
+        title: "Could not start recording",
         detail: String(error),
         tone: "danger",
       });
-    } finally {
-      setBusy(false);
+    }
+  }, [append]);
+
+  const stopTalk = useCallback(async () => {
+    if (!recordingRef.current) return;
+    recordingRef.current = false;
+    setRecording(false);
+    // The `audio_captured` event (or an `error` event) lands via the stream.
+    try {
+      await stopCapture();
+    } catch (error: unknown) {
+      const message = String(error);
+      if (!message.includes("not recording")) {
+        append({
+          origin: "ui",
+          title: "Could not stop recording",
+          detail: message,
+          tone: "danger",
+        });
+      }
     }
   }, [append]);
 
   const statusTone = useMemo(
-    () => (stream === "live" ? "text-polaris-ok" : stream === "failed" ? "text-polaris-danger" : "text-polaris-warn"),
+    () =>
+      stream === "live"
+        ? "text-polaris-ok"
+        : stream === "failed"
+          ? "text-polaris-danger"
+          : "text-polaris-warn",
     [stream],
   );
 
@@ -127,19 +162,13 @@ export default function App() {
         </div>
         <div className="min-w-0 flex-1">
           <h1 className="text-sm font-semibold tracking-wide">Polaris</h1>
-          <p className="text-xs text-polaris-muted">
-            push-to-talk Stellar assistant · skeleton
-          </p>
+          <p className="text-xs text-polaris-muted">push-to-talk Stellar assistant · A0 harness</p>
         </div>
         <div className="flex items-center gap-2 text-[11px] text-polaris-muted">
           {info ? (
             <>
-              <span className="rounded-md border border-polaris-line px-2 py-0.5">
-                v{info.version}
-              </span>
-              <span className="rounded-md border border-polaris-line px-2 py-0.5">
-                {info.network}
-              </span>
+              <span className="rounded-md border border-polaris-line px-2 py-0.5">v{info.version}</span>
+              <span className="rounded-md border border-polaris-line px-2 py-0.5">{info.network}</span>
             </>
           ) : null}
           <span className={`flex items-center gap-1.5 ${statusTone}`}>
@@ -153,23 +182,23 @@ export default function App() {
 
       <footer className="flex items-center gap-3 border-t border-polaris-line px-5 py-4">
         <Button
-          variant="default"
+          variant={recording ? "danger" : "default"}
           className="gap-2"
-          disabled
-          title="Step A0: global hotkey + microphone capture are not wired yet"
+          disabled={stream !== "live"}
+          title={`Hold to talk — or hold ${HOTKEY_LABEL} anywhere`}
+          onPointerDown={() => void startTalk()}
+          onPointerUp={() => void stopTalk()}
+          onPointerLeave={() => void stopTalk()}
         >
           <Mic className="size-4" />
-          Hold to talk
-        </Button>
-        <Button variant="secondary" onClick={runSelfTest} disabled={busy || stream !== "live"}>
-          {busy ? "Running…" : "Run self-test"}
+          {recording ? "Recording… release to stop" : "Hold to talk"}
         </Button>
         <Button variant="ghost" onClick={() => setLines([])}>
           <Trash2 className="size-4" />
           Clear
         </Button>
         <span className="ml-auto text-[11px] text-polaris-muted">
-          {wireEventCount} events received · next: A0 audio capture
+          {wireEventCount} events · hotkey: {HOTKEY_LABEL} · next: A1 speech-to-text
         </span>
       </footer>
     </div>

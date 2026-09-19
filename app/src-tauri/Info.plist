@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Partial Info.plist for the bundled macOS app. Tauri merges this with its
+  generated default (it auto-discovers `Info.plist` next to tauri.conf.json).
+
+  Microphone access (step A0): without this key, a signed/bundled build is killed
+  by TCC the moment cpal opens the input device.
+-->
+<plist version="1.0">
+  <dict>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Polaris records audio from your microphone only while you hold the push-to-talk hotkey.</string>
+  </dict>
+</plist>

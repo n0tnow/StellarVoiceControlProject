@@ -21,12 +21,21 @@ export async function getAppInfo(): Promise<AppInfo> {
 }
 
 /**
- * Stand-in for the step-A0 hotkey path: asks Rust to push a full
- * `hotkey -> transcript -> agent_status` sequence over the event channel so the
- * log pane can be verified by hand. Deleted once real audio capture lands.
+ * Stand-in replaced in step A0: the shell now owns real push-to-talk. These two
+ * commands mirror what the global hotkey does (key down -> `capture_start`,
+ * key up -> `capture_stop`), so the on-screen button is a first-class fallback.
  */
-export async function devSelfTest(): Promise<PolarisEvent[]> {
-  return invoke<PolarisEvent[]>("dev_self_test");
+export interface CapturedRecording {
+  path: string;
+  durationMs: number;
+}
+
+export async function startCapture(): Promise<void> {
+  return invoke<void>("capture_start");
+}
+
+export async function stopCapture(): Promise<CapturedRecording> {
+  return invoke<CapturedRecording>("capture_stop");
 }
 
 /** Subscribes to the typed event stream. Events with an unknown shape are ignored. */
@@ -73,8 +82,8 @@ export function describeEvent(event: PolarisEvent): Omit<LogLine, "id" | "at"> {
     case "hotkey":
       return {
         origin: "rust",
-        title: event.state === "down" ? "Hotkey pressed" : "Hotkey released",
-        tone: "accent",
+        title: event.state === "down" ? "Push-to-talk pressed — recording" : "Push-to-talk released",
+        tone: event.state === "down" ? "accent" : "neutral",
       };
     case "transcript":
       return {
@@ -101,6 +110,13 @@ export function describeEvent(event: PolarisEvent): Omit<LogLine, "id" | "at"> {
       };
     case "tx_submitted":
       return { origin: "rust", title: "Transaction submitted", detail: event.hash, tone: "ok" };
+    case "audio_captured":
+      return {
+        origin: "rust",
+        title: `Recording saved (${(event.durationMs / 1000).toFixed(1)}s)`,
+        detail: event.path,
+        tone: "ok",
+      };
     case "error":
       return { origin: "rust", title: "Error", detail: event.message, tone: "danger" };
   }

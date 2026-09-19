@@ -3,7 +3,7 @@
 use serde::Serialize;
 use tauri::AppHandle;
 
-use crate::events::{self, AgentStage, HotkeyState, PolarisEvent};
+use crate::audio::{self, CapturedRecording};
 
 /// Testnet only — mainnet is an explicit non-goal (`docs/architecture.md` §1).
 pub const NETWORK: &str = "testnet";
@@ -29,40 +29,17 @@ pub fn app_info(app: AppHandle) -> AppInfo {
     }
 }
 
-/// TEMPORARY (step A0 replacement target): stands in for the push-to-talk path so
-/// the event stream can be exercised by hand before audio capture exists. Emits a
-/// realistic `hotkey -> transcript -> agent_status` sequence and returns it, so a
-/// caller can assert on the same data the UI received.
-///
-/// Delete this command when the global hotkey and microphone are wired.
+/// Starts microphone capture. Mirrors what the global hotkey's key-down does,
+/// so the on-screen button is a first-class fallback for the hotkey.
 #[tauri::command]
-pub fn dev_self_test(app: AppHandle) -> Vec<PolarisEvent> {
-    let events = vec![
-        PolarisEvent::Hotkey {
-            state: HotkeyState::Down,
-        },
-        PolarisEvent::Transcript {
-            text: "polaris, self test: one two three".to_string(),
-            r#final: true,
-        },
-        PolarisEvent::AgentStatus {
-            stage: AgentStage::Thinking,
-        },
-        PolarisEvent::AgentStatus {
-            stage: AgentStage::ToolCall,
-        },
-        PolarisEvent::AgentStatus {
-            stage: AgentStage::Done,
-        },
-        PolarisEvent::Hotkey {
-            state: HotkeyState::Up,
-        },
-    ];
+pub fn capture_start(app: AppHandle) -> Result<(), String> {
+    audio::begin_capture(&app)
+}
 
-    for event in &events {
-        events::emit(&app, event.clone());
-    }
-    events
+/// Stops microphone capture and returns the written WAV file.
+#[tauri::command]
+pub fn capture_stop(app: AppHandle) -> Result<CapturedRecording, String> {
+    audio::finish_capture(&app)
 }
 
 #[cfg(test)]
