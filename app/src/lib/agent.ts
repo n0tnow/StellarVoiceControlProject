@@ -1,13 +1,15 @@
 /**
- * The webview's half of the agent wiring (step A2).
+ * The webview's half of the agent wiring (step A2; transport moved to Rust in A6).
  *
  * The transcript arrives from Rust on the `polaris-event` stream; this module
  * turns it into a structured intent with the same agent core the CLI uses. The
- * only desktop-specific detail is the base URL: the webview calls a same-origin
- * `/agent-api` path, which the Vite dev server proxies to the real provider and
- * where it injects the API key. The credential therefore never enters this
- * bundle, and provider switching stays a `.env` change.
+ * only desktop-specific detail is the transport: the webview does **not** call
+ * `fetch` against the provider. It invokes the Rust `agent_chat` command
+ * (`app/src-tauri/src/agent.rs`), which owns the provider URL and the credential
+ * and holds no webview restrictions. The key therefore never enters this bundle,
+ * and the same path works in a packaged app — there is no dev-only proxy any more.
  */
+import { invoke } from "@tauri-apps/api/core";
 import {
   createDefaultRegistry,
   createEventBus,
@@ -17,14 +19,40 @@ import {
 } from "@polaris/agent";
 import type { Intent, PolarisEvent } from "@polaris/interfaces";
 
-/** Same-origin path served by the Vite proxy in `app/vite.config.ts`. */
-export const AGENT_BASE_URL = "/agent-api";
+/**
+ * Logical transport label, only ever used in error copy. The real provider root
+ * is read in Rust; the webview never holds it or the credential.
+ */
+export const AGENT_BASE_URL = "agent+polaris://provider";
 
-/** Model id is safe to bundle (no secret); the proxy injects the credential. */
+/** Model id is safe to bundle (no secret); Rust injects the credential. */
 export const AGENT_MODEL =
   import.meta.env.POLARIS_AGENT_MODEL && import.meta.env.POLARIS_AGENT_MODEL.trim().length > 0
     ? import.meta.env.POLARIS_AGENT_MODEL.trim()
     : "glm-5.3-flash";
+
+/** Reply shape of the Rust `agent_chat` command (`AgentHttpResponse`). */
+interface AgentHttpResponse {
+  status: number;
+  body: string;
+}
+
+/**
+ * The agent's HTTP transport: one `invoke` into Rust. The provider status and
+ * raw body come back and are rebuilt into a `Response`, so `OpenAiCompatibleLlm`
+ * keeps its exact request/parse/error behaviour unchanged. A transport failure
+ * rejects `invoke`, which the client maps to `AgentError("network")`.
+ */
+async function tauriAgentFetch(_input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const headers = (init?.headers ?? {}) as Record<string, string>;
+  const sessionId = headers["x-opencode-session"] ?? "";
+  const body = typeof init?.body === "string" ? init.body : "";
+  const response = await invoke<AgentHttpResponse>("agent_chat", { body, sessionId });
+  return new Response(response.body, {
+    status: response.status,
+    headers: { "content-type": "application/json" },
+  });
+}
 
 export interface AgentOutcome {
   transcript: string;
@@ -53,8 +81,9 @@ const bus = createEventBus();
 const llm = new OpenAiCompatibleLlm({
   baseUrl: AGENT_BASE_URL,
   model: AGENT_MODEL,
-  // Empty on purpose: the dev proxy adds `Authorization` server-side.
+  // Empty on purpose: the Rust transport adds `Authorization` server-side.
   apiKey: "",
+  fetchImpl: tauriAgentFetch,
 });
 
 /** Subscribes to the agent's local event stream (status stages for the UI). */

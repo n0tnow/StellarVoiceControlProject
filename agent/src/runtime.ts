@@ -2,8 +2,9 @@
  * Default agent wiring (step A2).
  *
  * One place assembles the registry and the provider so the CLI, the demo and the
- * desktop app all run the same objects. The app swaps in a same-origin base URL
- * (its dev proxy) instead of the provider root; everything else is identical.
+ * desktop app all run the same objects. The desktop app keeps this same client
+ * and injects a Rust-backed `fetchImpl` (its transport); everything else is
+ * identical.
  */
 import type { AgentLlm } from "./loop.ts";
 import { openAiOptionsFromEnv, processEnv, type AgentEnv } from "./llm/config.ts";

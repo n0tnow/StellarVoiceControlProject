@@ -6,6 +6,7 @@
 //! and the Touch ID signing gate; each one grows this crate, never the seam
 //! (`docs/interfaces.md`).
 
+mod agent;
 mod capture;
 mod commands;
 mod env;
@@ -40,6 +41,7 @@ pub fn run() {
             commands::capture_stop,
             commands::capture_status,
             commands::speak,
+            agent::agent_chat,
             notch::notch_geometry,
             hotkey::hotkey_permission,
         ])
