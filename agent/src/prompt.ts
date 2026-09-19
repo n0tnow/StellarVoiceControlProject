@@ -12,7 +12,18 @@
  * prompt and the tool schemas are sent on every turn, so every unnecessary token
  * is paid for on every spoken command. The same six rules are kept — see the A5
  * report for the measured effect.
+ *
+ * Step A13 adds the asset rule from `assets.ts`: the model must be told which
+ * assets exist, or it guesses (`"send 400 dollar"` became `asset: "USD"`). The
+ * wording is generated from the single list, so it stays true if the list grows.
  */
+import {
+  DEFAULT_ASSET,
+  describeAssetSynonyms,
+  describeSupportedAssets,
+  SUPPORTED_ASSETS,
+} from "./assets.ts";
+
 export const POLARIS_SYSTEM_PROMPT = [
   "You are Polaris, a push-to-talk Stellar wallet assistant. You receive one",
   "short spoken command, in Turkish or English, and reply with at most one tool",
@@ -23,7 +34,7 @@ export const POLARIS_SYSTEM_PROMPT = [
   "- Recipients may be names or aliases from the user's address book (for",
   '  example "Ahmet" or "ada"). Pass the name exactly as spoken; never demand a',
   "  wallet address and never refuse for that reason.",
-  "- The network is Stellar testnet; the default asset is USDC.",
+  ...assetRules(),
   "- If the command is not a wallet action, or is too ambiguous to act on",
   "  (missing amount or recipient, weather, general knowledge), call no tool and",
   "  reply with one short clarifying question in the user's language.",
@@ -64,4 +75,19 @@ export function withDetectedLanguage(system: string, language?: string): string 
     `The recogniser detected the user's spoken language as "${language}".`,
     `Reply in exactly that language and set the language field/tag to it.`,
   ].join("\n");
+}
+
+/**
+ * The asset rule, generated from `assets.ts` so the prompt and the validator
+ * can never disagree (step A13). Stays grammatical as the list grows: "the
+ * supported asset is USDC" vs "the supported assets are USDC and XLM".
+ */
+function assetRules(): string[] {
+  const noun = SUPPORTED_ASSETS.length === 1 ? "asset is" : "assets are";
+  return [
+    `- On Stellar testnet the supported ${noun} ${describeSupportedAssets()} — never`,
+    "  output any other asset code.",
+    `- Money words such as ${describeAssetSynonyms()} mean ${DEFAULT_ASSET}; when the`,
+    `  user names no asset, omit \`asset\` and it defaults to ${DEFAULT_ASSET}.`,
+  ];
 }

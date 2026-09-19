@@ -87,6 +87,28 @@ test("a bogus tool call becomes a clarification, not an intent", async () => {
   assert.match(result.answer, /couldn't turn that into a payment/i);
 });
 
+test("a colloquial money word is canonicalised to the supported asset (step A13)", async () => {
+  // The measured bug: "send 400 dollar" produced `asset: "USD"`. It must reach
+  // the approval seam as the supported stablecoin, never as an invented code.
+  const { run } = harness(
+    { toolCalls: [{ name: "send_payment", input: { amount: "400", asset: "USD", recipient: "bilal" } }] },
+    "can you send 400 dollar to bilal",
+  );
+  const result = await run();
+  assert.equal(result.intent?.asset, "USDC");
+  assert.equal(result.intent?.recipient, "bilal");
+});
+
+test("an unsupported asset becomes a clarification, not an intent (step A13)", async () => {
+  const { run } = harness(
+    { toolCalls: [{ name: "send_payment", input: { amount: "400", asset: "EUR", recipient: "bilal" } }] },
+    "can you send 400 euro to bilal",
+  );
+  const result = await run();
+  assert.equal(result.intent, undefined);
+  assert.match(result.answer, /couldn't turn that into a payment/i);
+});
+
 test("more than one action at once is refused", async () => {
   const { run } = harness(
     {

@@ -35,6 +35,14 @@ export {
 } from "./loop.ts";
 export { POLARIS_SYSTEM_PROMPT, withDetectedLanguage } from "./prompt.ts";
 export {
+  ASSET_SYNONYMS,
+  DEFAULT_ASSET,
+  describeAssetSynonyms,
+  describeSupportedAssets,
+  normalizeAsset,
+  SUPPORTED_ASSETS,
+} from "./assets.ts";
+export {
   capSpokenText,
   confirmationSentence,
   isSpeakable,

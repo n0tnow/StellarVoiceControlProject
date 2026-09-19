@@ -30,6 +30,33 @@ test("a missing or blank asset defaults to USDC", () => {
   assert.equal(parseSendPayment({ amount: "1", asset: "   ", recipient: "Ahmet" }, ctx).asset, "USDC");
 });
 
+test("colloquial money words canonicalise to the supported stablecoin (step A13)", () => {
+  for (const asset of ["USD", "usd", "dollar", "dollars", "dolar", "$"]) {
+    assert.equal(
+      parseSendPayment({ amount: "1", asset, recipient: "bilal" }, ctx).asset,
+      "USDC",
+      `${asset} should map to USDC`,
+    );
+  }
+});
+
+test("a supported code is canonicalised regardless of case", () => {
+  assert.equal(parseSendPayment({ amount: "1", asset: "xlm", recipient: "bilal" }, ctx).asset, "XLM");
+});
+
+test("a genuinely unsupported asset is rejected as bad input (step A13)", () => {
+  for (const asset of ["EUR", "BTC", "DOGE"]) {
+    try {
+      parseSendPayment({ amount: "1", asset, recipient: "bilal" }, ctx);
+      assert.fail(`asset ${asset} should be rejected`);
+    } catch (error) {
+      assert.ok(error instanceof AgentError);
+      assert.equal(error.kind, "input");
+      assert.match(error.detail, /not supported/i);
+    }
+  }
+});
+
 test("an optional memo is carried through and omitted when absent", () => {
   const withMemo = parseSendPayment({ amount: "1", asset: "XLM", recipient: "a", memo: " rent " }, ctx);
   assert.equal(withMemo.memo, "rent");
