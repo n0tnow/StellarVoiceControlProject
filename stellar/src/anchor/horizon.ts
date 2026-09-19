@@ -71,3 +71,8 @@ export function explorerTxUrl(hash: string, passphrase: string): string {
   const net = passphrase.startsWith("Test") ? "testnet" : "public";
   return `https://stellar.expert/explorer/${net}/tx/${hash}`;
 }
+
+export function explorerAccountUrl(account: string, passphrase: string): string {
+  const net = passphrase.startsWith("Test") ? "testnet" : "public";
+  return `https://stellar.expert/explorer/${net}/account/${account}`;
+}

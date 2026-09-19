@@ -1,7 +1,7 @@
-import { Account, Asset, Keypair, Networks, Operation, Transaction, TransactionBuilder, WebAuth } from "@stellar/stellar-sdk";
+import { Account, Asset, Keypair, Memo, Networks, Operation, Transaction, TransactionBuilder, WebAuth } from "@stellar/stellar-sdk";
 import { describe, expect, it } from "vitest";
 import { TESTNET_PASSPHRASE } from "../config.ts";
-import { authenticate, ChallengeError, decodeJwt, isExpired, validateChallenge } from "../sep10.ts";
+import { authenticate, ChallengeError, decodeJwt, isExpired, MAX_CHALLENGE_WINDOW_SECONDS, validateChallenge } from "../sep10.ts";
 import { EnvSigner } from "../testSigner.ts";
 import type { Signer } from "../types.ts";
 import { CLIENT, fakeFetch, fakeJwt, HOME, jsonResponse, makeChallenge, makeCtx, SERVER, TOML } from "./helpers.ts";
@@ -79,6 +79,39 @@ describe("SEP-10 challenge validation", () => {
     tx.sign(SERVER);
     expect(() => validate(tx.toXDR())).toThrow(/web_auth_domain/);
   });
+
+  it("rejects a challenge carrying a memo we never asked for", () => {
+    const account = new Account(SERVER.publicKey(), "-1");
+    const now = Math.floor(Date.now() / 1000);
+    const tx = new TransactionBuilder(account, { fee: "100", networkPassphrase: TESTNET_PASSPHRASE, timebounds: { minTime: now - 10, maxTime: now + 300 } })
+      .addOperation(Operation.manageData({ name: `${HOME} auth`, value: Buffer.alloc(48, 1).toString("base64"), source: CLIENT.publicKey() }))
+      .addOperation(Operation.manageData({ name: "web_auth_domain", value: HOME, source: SERVER.publicKey() }))
+      .addMemo(Memo.id("7"))
+      .build();
+    tx.sign(SERVER);
+    expect(() => validate(tx.toXDR())).toThrow(/memo/);
+  });
+
+  it("checks expiry and the validity window against the injected clock", () => {
+    const challenge = makeChallenge(); // 300 s window from "now"
+    const now = new Date();
+    expect(() => validate(challenge, { now })).not.toThrow();
+    expect(() => validate(challenge, { now: new Date(now.getTime() + 600_000) })).toThrow(/expired/);
+    expect(() => validate(challenge, { now: new Date(now.getTime() - 120_000) })).toThrow(/not valid yet/);
+
+    const account = new Account(SERVER.publicKey(), "-1");
+    const nowSec = Math.floor(now.getTime() / 1000);
+    const long = new TransactionBuilder(account, {
+      fee: "100",
+      networkPassphrase: TESTNET_PASSPHRASE,
+      timebounds: { minTime: nowSec - 10, maxTime: nowSec + MAX_CHALLENGE_WINDOW_SECONDS + 600 },
+    })
+      .addOperation(Operation.manageData({ name: `${HOME} auth`, value: Buffer.alloc(48, 1).toString("base64"), source: CLIENT.publicKey() }))
+      .addOperation(Operation.manageData({ name: "web_auth_domain", value: HOME, source: SERVER.publicKey() }))
+      .build();
+    long.sign(SERVER);
+    expect(() => validate(long.toXDR(), { now })).toThrow(/unreasonably long/);
+  });
 });
 
 describe("SEP-10 authenticate()", () => {
@@ -146,6 +179,12 @@ describe("SEP-10 authenticate()", () => {
 
   it("rejects a token issued for a different account", async () => {
     const bad = fakeJwt({ sub: Keypair.random().publicKey(), exp });
+    const { fetch } = routes(makeChallenge(), bad);
+    await expect(authenticate(makeCtx(fetch), TOML, signer)).rejects.toThrow(/not for us/);
+  });
+
+  it("rejects a token whose subject merely STARTS WITH our account (memo smuggling)", async () => {
+    const bad = fakeJwt({ sub: `${CLIENT.publicKey()}0`, exp });
     const { fetch } = routes(makeChallenge(), bad);
     await expect(authenticate(makeCtx(fetch), TOML, signer)).rejects.toThrow(/not for us/);
   });

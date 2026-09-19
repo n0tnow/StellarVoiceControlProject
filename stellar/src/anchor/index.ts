@@ -2,36 +2,63 @@
 export * from "./config.ts";
 export * from "./explain.ts";
 export * from "./types.ts";
-export { AnchorHttpError } from "./http.ts";
-export { parseStellarToml, discoverAnchor, findAsset, TomlError } from "./sep1.ts";
-export { validateChallenge, requestChallenge, completeChallenge, authenticate, decodeJwt, isExpired, ChallengeError } from "./sep10.ts";
+export { assertAmount, toStroops } from "./amount.ts";
+export { safeHttpsUrl, safeId, sanitizeAnchorText } from "./text.ts";
+export { assertSafeEndpoint, parseHomeDomain, UnsafeAnchorError, type NetPolicy } from "./net.ts";
+export { AnchorHttpError, MAX_JSON_BYTES, MAX_TOML_BYTES, readCapped } from "./http.ts";
+export { discoverAnchor, findAsset, parseStellarToml, TomlError } from "./sep1.ts";
+export {
+  authenticate,
+  ChallengeError,
+  completeChallenge,
+  decodeJwt,
+  isExpired,
+  MAX_CHALLENGE_WINDOW_SECONDS,
+  requestChallenge,
+  validateChallenge,
+} from "./sep10.ts";
 export { ensureCustomer, getCustomer, KycRequiredError, type CustomerInfo, type CustomerStatus } from "./sep12.ts";
 export { getPrice, QuoteError, type PriceRequest } from "./sep38.ts";
 export {
-  getInfo,
-  startDeposit,
-  startWithdraw,
   buildWithdrawPayment,
+  classifyStatus,
+  cleanFieldNames,
+  explainStatus,
+  FINAL_STATUSES,
+  getInfo,
   getTransaction,
   listTransactions,
   parseTransaction,
-  classifyStatus,
-  explainStatus,
+  parseWithdrawMemo,
   pollTransaction,
+  PollInterruptedError,
   PollTimeoutError,
-  FINAL_STATUSES,
+  quoteNumericMemo,
+  startDeposit,
+  startWithdraw,
+  TransactionInfoRequiredError,
   type DepositParams,
-  type WithdrawParams,
   type PollOptions,
   type PollOutcome,
   type PollResult,
   type Sep6Info,
   type StatusClass,
+  type WithdrawParams,
 } from "./sep6.ts";
-export { preflight, inspectAccount, buildTrustlineTx, type PreflightResult, type PreflightOptions, type AccountState } from "./preflight.ts";
-export { loadAccount, submitEnvelope, explorerTxUrl, balanceOf, hasTrustline } from "./horizon.ts";
+export { assertSameTransaction, describeXdr, withdrawalSummary, type ApprovalSummary } from "./describe.ts";
+export { buildTrustlineTx, inspectAccount, preflight, type AccountState, type PreflightOptions, type PreflightResult } from "./preflight.ts";
+export { balanceOf, explorerAccountUrl, explorerTxUrl, hasTrustline, loadAccount, submitEnvelope } from "./horizon.ts";
 export { simulateBankTransfer } from "./sandbox.ts";
-export { AnchorSession, assertAmount, type AnchorSessionConfig } from "./session.ts";
+export { AnchorSession, type AnchorSessionConfig } from "./session.ts";
 export { runDepositFlow, runWithdrawFlow, type DepositFlowOptions, type DepositFlowResult, type WithdrawFlowOptions, type WithdrawFlowResult } from "./flows.ts";
 export { EnvSigner } from "./testSigner.ts";
-export { configureAnchor, getAnchorSession, depositTry, submitSignedTx, describeXdr, type SubmitResult } from "./chainTools.ts";
+export {
+  configureAnchor,
+  depositTry,
+  getAnchorSession,
+  submitSignedTx,
+  withdrawTry,
+  type AnchorIntent,
+  type AnchorIntentKind,
+  type SubmitResult,
+} from "./chainTools.ts";

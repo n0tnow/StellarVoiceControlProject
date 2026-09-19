@@ -7,7 +7,11 @@
 import { TransactionBuilder, WebAuth } from "@stellar/stellar-sdk";
 import { requestJson } from "./http.ts";
 import { shortKey } from "./explain.ts";
+import { sanitizeAnchorText } from "./text.ts";
 import type { AnchorContext, AnchorToml, AuthToken, Signer } from "./types.ts";
+
+/** Real anchors use 5-15 minutes; anything much longer is not a normal challenge. */
+export const MAX_CHALLENGE_WINDOW_SECONDS = 15 * 60;
 
 export class ChallengeError extends Error {
   constructor(message: string) {
@@ -32,8 +36,11 @@ export function validateChallenge(input: {
   networkPassphrase: string;
   clientAccount: string;
   reportedPassphrase?: string | undefined;
+  /** Injected clock (defaults to the system clock). */
+  now?: Date;
 }): { clientAccount: string; webAuthDomain: string } {
   const { challengeXdr, toml, networkPassphrase, clientAccount, reportedPassphrase } = input;
+  const now = input.now ?? new Date();
   if (reportedPassphrase !== undefined && reportedPassphrase !== networkPassphrase) {
     throw new ChallengeError(
       `challenge was issued for network "${reportedPassphrase}", not "${networkPassphrase}"`,
@@ -53,6 +60,22 @@ export function validateChallenge(input: {
     throw new ChallengeError(
       `challenge is for ${shortKey(read.clientAccountID)}, not for our account ${shortKey(clientAccount)}`,
     );
+  }
+  // We never ask for a memo, so a challenge carrying one is not the challenge we asked for.
+  if (read.memo !== null && read.memo !== undefined) {
+    throw new ChallengeError("challenge carries a memo although we did not request one");
+  }
+  // The SDK checks the time bounds against the system clock with a 5-minute grace. We
+  // re-check with the injected clock, strictly, and refuse absurdly long validity windows.
+  const tb = read.tx.timeBounds;
+  const nowSec = Math.floor(now.getTime() / 1000);
+  const minTime = Number(tb?.minTime ?? 0);
+  const maxTime = Number(tb?.maxTime ?? 0);
+  if (!tb || maxTime === 0) throw new ChallengeError("challenge has no expiry time");
+  if (nowSec > maxTime) throw new ChallengeError("challenge has expired");
+  if (minTime > nowSec + 60) throw new ChallengeError("challenge is not valid yet");
+  if (maxTime - nowSec > MAX_CHALLENGE_WINDOW_SECONDS) {
+    throw new ChallengeError("challenge stays valid for an unreasonably long time");
   }
   // SEP-10 v3: the web_auth_domain operation must be present, not merely "valid if present".
   const ops = read.tx.operations as Array<{ type: string; name?: string }>;
@@ -106,23 +129,24 @@ export async function requestChallenge(ctx: AnchorContext, toml: AnchorToml, acc
     query: { account, home_domain: toml.homeDomain },
   });
   if (!ch || typeof ch.transaction !== "string") throw new ChallengeError("anchor did not return a challenge transaction");
-  ctx.explain.record(
-    "sep10.challenge",
-    `SEP-10: the anchor sent a one-off challenge for ${shortKey(account)}. It is a transaction that can never be submitted to the network.`,
-    "It is the anchor's way of asking \"prove you own this account\" without a password.",
-  );
   validateChallenge({
     challengeXdr: ch.transaction,
     toml,
     networkPassphrase: ctx.networkPassphrase,
     clientAccount: account,
     reportedPassphrase: ch.network_passphrase,
+    now: ctx.now(),
   });
   ctx.explain.record(
+    "sep10.challenge",
+    `SEP-10: the anchor sent a login challenge for ${shortKey(account)}. It is a transaction with sequence number 0, so it cannot be run on the network.`,
+    "It is the anchor's way of asking \"prove you own this account\" without a password.",
+  );
+  ctx.explain.record(
     "sep10.verify",
-    `SEP-10: checked the challenge before signing — it is signed by the anchor's published key ${shortKey(toml.signingKey)}, ` +
-      `has sequence number 0 (so it cannot move money), is for ${toml.homeDomain}, and has not expired.`,
-    "This stops a fake website from tricking us into signing a real payment disguised as a login.",
+    `SEP-10: checked the challenge before signing — it is signed by the key ${toml.homeDomain} publishes (${shortKey(toml.signingKey)}), ` +
+      `has sequence number 0, contains only login entries for ${toml.homeDomain}, and is not expired.`,
+    "This stops a login prompt from smuggling in a real payment. It confirms the challenge is well-formed and matches what the anchor's own domain publishes; it cannot prove the domain itself is trustworthy.",
   );
   return ch.transaction;
 }
@@ -147,8 +171,11 @@ export async function completeChallenge(
   });
   if (!res.token) throw new ChallengeError("anchor accepted the signature but returned no token");
   const claims = decodeJwt(res.token);
-  if (claims.sub && !claims.sub.startsWith(account)) {
-    throw new ChallengeError(`anchor issued a token for ${shortKey(claims.sub)}, not for us`);
+  // We asked for no memo, so the token subject must be exactly our account.
+  if (claims.sub !== account) {
+    throw new ChallengeError(
+      claims.sub ? `anchor issued a token for ${shortKey(sanitizeAnchorText(String(claims.sub), 20) ?? "?")}, not for us` : "anchor issued a token without a subject",
+    );
   }
   const token: AuthToken = { jwt: res.token, account };
   if (typeof claims.exp === "number") token.expiresAt = new Date(claims.exp * 1000);

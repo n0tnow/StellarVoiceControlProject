@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ExplainLog, narrate, shortKey } from "../explain.ts";
-import { discoverAnchor, findAsset, normaliseHomeDomain, parseStellarToml, TomlError } from "../sep1.ts";
+import { parseHomeDomain } from "../net.ts";
+import { discoverAnchor, findAsset, parseStellarToml, TomlError } from "../sep1.ts";
 import { fakeFetch, HOME, makeCtx, SERVER, TOML_TEXT, USDC_ISSUER } from "./helpers.ts";
 
 describe("SEP-1 stellar.toml", () => {
@@ -17,17 +18,22 @@ describe("SEP-1 stellar.toml", () => {
   });
 
   it("rejects a toml without SEP-10 / SEP-6 / a valid signing key", () => {
-    expect(() => parseStellarToml(HOME, 'NETWORK_PASSPHRASE="x"\nTRANSFER_SERVER="https://a/s"\nSIGNING_KEY="' + SERVER.publicKey() + '"')).toThrow(/WEB_AUTH_ENDPOINT/);
-    expect(() => parseStellarToml(HOME, 'NETWORK_PASSPHRASE="x"\nWEB_AUTH_ENDPOINT="https://a/auth"\nSIGNING_KEY="' + SERVER.publicKey() + '"')).toThrow(/TRANSFER_SERVER/);
     expect(() =>
-      parseStellarToml(HOME, 'NETWORK_PASSPHRASE="x"\nWEB_AUTH_ENDPOINT="https://a/auth"\nTRANSFER_SERVER="https://a/s"\nSIGNING_KEY="nope"'),
+      parseStellarToml(HOME, `NETWORK_PASSPHRASE="x"\nTRANSFER_SERVER="https://${HOME}/s"\nSIGNING_KEY="${SERVER.publicKey()}"`),
+    ).toThrow(/WEB_AUTH_ENDPOINT/);
+    expect(() =>
+      parseStellarToml(HOME, `NETWORK_PASSPHRASE="x"\nWEB_AUTH_ENDPOINT="https://${HOME}/auth"\nSIGNING_KEY="${SERVER.publicKey()}"`),
+    ).toThrow(/TRANSFER_SERVER/);
+    expect(() =>
+      parseStellarToml(HOME, `NETWORK_PASSPHRASE="x"\nWEB_AUTH_ENDPOINT="https://${HOME}/auth"\nTRANSFER_SERVER="https://${HOME}/s"\nSIGNING_KEY="nope"`),
     ).toThrow(/SIGNING_KEY/);
     expect(() => parseStellarToml(HOME, "this is = = not toml")).toThrow(TomlError);
   });
 
   it("normalises home domains", () => {
-    expect(normaliseHomeDomain("https://tr-mock-anchor.fly.dev/")).toBe("tr-mock-anchor.fly.dev");
-    expect(normaliseHomeDomain(" tr-mock-anchor.fly.dev ")).toBe("tr-mock-anchor.fly.dev");
+    expect(parseHomeDomain("https://tr-mock-anchor.fly.dev/")).toBe("tr-mock-anchor.fly.dev");
+    expect(parseHomeDomain(" tr-mock-anchor.fly.dev ")).toBe("tr-mock-anchor.fly.dev");
+    expect(parseHomeDomain("TR-MOCK-ANCHOR.FLY.DEV")).toBe("tr-mock-anchor.fly.dev");
   });
 
   it("discovers over HTTPS from /.well-known and explains it", async () => {

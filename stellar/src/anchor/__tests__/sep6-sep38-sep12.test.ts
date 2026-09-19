@@ -141,14 +141,14 @@ describe("SEP-6 deposit / withdraw requests", () => {
     expect((err as Error).message).toContain("Minimum off-ramp is 1.0000000 USDC");
   });
 
-  it("withdraw returns the account + memo to pay", async () => {
+  it("withdraw returns the account + validated memo to pay", async () => {
     const { fetch } = fakeFetch({
       [`GET ${HOME}/sep6/withdraw`]: { account_id: SERVER.publicKey(), memo_type: "id", memo: "523107803354", id: "sep_w1", min_amount: 1, fee_percent: 0.5 },
     });
     const ctx = makeCtx(fetch);
     const w = await startWithdraw(ctx, TOML, TOKEN, { assetCode: "USDC", account: CLIENT.publicKey(), amount: "1" });
-    expect(w).toMatchObject({ id: "sep_w1", accountId: SERVER.publicKey(), memo: "523107803354", memoType: "id" });
-    expect(ctx.explain.all()[0]?.what).toContain("with memo 523107803354");
+    expect(w).toMatchObject({ id: "sep_w1", accountId: SERVER.publicKey(), memo: { type: "id", value: "523107803354" } });
+    expect(ctx.explain.all()[0]?.what).toContain("with id memo 523107803354");
   });
 
   it("builds the withdrawal payment with the anchor's memo type (id) and asset", () => {
@@ -159,8 +159,7 @@ describe("SEP-6 deposit / withdraw requests", () => {
       asset: { code: "USDC", issuer: USDC_ISSUER },
       amount: "1.0000000",
       destination: SERVER.publicKey(),
-      memo: "523107803354",
-      memoType: "id",
+      memo: { type: "id", value: "523107803354" },
     });
     const tx = TransactionBuilder.fromXDR(xdr, TESTNET_PASSPHRASE) as Transaction;
     expect(tx.sequence).toBe("101");
@@ -174,7 +173,16 @@ describe("SEP-6 deposit / withdraw requests", () => {
       expect(op.asset.code).toBe("USDC");
       expect(op.asset.issuer).toBe(USDC_ISSUER);
     }
-    expect(() => buildWithdrawPayment({ sourceAccount: CLIENT.publicKey(), sequence: "1", networkPassphrase: TESTNET_PASSPHRASE, asset: { code: "USDC", issuer: USDC_ISSUER }, amount: "1", destination: SERVER.publicKey(), memo: "x", memoType: "weird" })).toThrow(/memo type/);
+    expect(() =>
+      buildWithdrawPayment({
+        sourceAccount: CLIENT.publicKey(),
+        sequence: "1",
+        networkPassphrase: TESTNET_PASSPHRASE,
+        asset: { code: "USDC", issuer: USDC_ISSUER },
+        amount: "1",
+        destination: "not-a-key",
+      }),
+    ).toThrow(/plain G/);
   });
 });
 
@@ -188,17 +196,30 @@ describe("SEP-6 status classification and narration", () => {
     for (const s of ["pending_anchor", "pending_stellar", "pending_external", "pending_user_transfer_complete", "something_new"]) expect(classifyStatus(s)).toBe("in_progress");
   });
 
-  it("explains pending_trust as the missing-trustline gotcha", () => {
-    const e = explainStatus("deposit", { status: "pending_trust", message: "Add a USDC trustline" });
+  it("explains pending_trust as the missing-trustline gotcha (anchor text never enters the narration)", () => {
+    const e = explainStatus("deposit", { status: "pending_trust" });
     expect(e.what).toMatch(/HOLDING the deposit/);
-    expect(e.what).toContain("Add a USDC trustline");
     expect(e.why).toMatch(/trustline/);
   });
 
-  it("parses a transaction record and keeps the raw payload", () => {
-    const tx = parseTransaction({ id: "a", kind: "withdrawal", status: "completed", amount_in: "1.0", amount_out: "48.54", amount_out_asset: TRY, withdraw_memo_type: "id", completed_at: null, extra: 1 });
-    expect(tx).toMatchObject({ id: "a", kind: "withdrawal", status: "completed", amountIn: "1.0", amountOut: "48.54", withdrawMemoType: "id", completedAt: null });
-    expect(tx.raw.extra).toBe(1);
+  it("parses a transaction record, sanitising text and dropping unknown fields", () => {
+    const tx = parseTransaction({
+      id: "a",
+      kind: "withdrawal",
+      status: "completed",
+      amount_in: "1.0",
+      amount_out: "48.54",
+      amount_out_asset: TRY,
+      withdraw_memo_type: "id",
+      withdraw_memo: "4242",
+      completed_at: null,
+      message: "all\n good",
+      extra: 1,
+    });
+    expect(tx).toMatchObject({ id: "a", kind: "withdrawal", status: "completed", amountIn: "1.0", amountOut: "48.54", withdrawMemoType: "id", withdrawMemo: "4242", completedAt: null });
+    expect(tx.message).toBe("all good");
+    expect("extra" in tx).toBe(false);
+    expect("raw" in tx).toBe(false);
   });
 });
 

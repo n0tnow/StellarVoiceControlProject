@@ -1,9 +1,10 @@
 import { TransactionBuilder, type Transaction } from "@stellar/stellar-sdk";
 import { describe, expect, it } from "vitest";
-import { describeXdr, configureAnchor, depositTry } from "../chainTools.ts";
+import { assertAmount } from "../amount.ts";
+import { describeXdr, configureAnchor, depositTry, withdrawTry } from "../chainTools.ts";
 import { TESTNET_PASSPHRASE } from "../config.ts";
 import { preflight } from "../preflight.ts";
-import { AnchorSession, assertAmount } from "../session.ts";
+import { AnchorSession } from "../session.ts";
 import { runDepositFlow, runWithdrawFlow } from "../flows.ts";
 import { EnvSigner } from "../testSigner.ts";
 import type { Signer } from "../types.ts";
@@ -234,9 +235,26 @@ describe("AnchorSession", () => {
     world.chain.state.usdc = "0.5000000";
     const s = countingSigner();
     const session = newSession(world, s);
-    const w = await session.startWithdraw("1");
-    await expect(session.payWithdrawal(w.data, "1")).rejects.toThrow(/not enough USDC/);
+    await session.startWithdraw("1");
+    await expect(session.payWithdrawal("1")).rejects.toThrow(/not enough USDC/);
     expect(s.signed.filter((x) => (TransactionBuilder.fromXDR(x, TESTNET_PASSPHRASE) as Transaction).operations[0]?.type === "payment")).toHaveLength(0);
+  });
+
+  it("prepareWithdrawal returns the unsigned payment and an approval summary with the ISSUER", async () => {
+    const world = fullWorld({ startTrustline: true });
+    world.chain.state.usdc = "2.0000000";
+    const s = countingSigner();
+    const session = newSession(world, s);
+    await session.startWithdraw("1");
+    const prep = await session.prepareWithdrawal("1");
+    // Only the SEP-10 login was signed before this point; no payment preview is signed.
+    expect(s.signed.filter((x) => (TransactionBuilder.fromXDR(x, TESTNET_PASSPHRASE) as Transaction).operations[0]?.type === "payment")).toHaveLength(0);
+    const tx = TransactionBuilder.fromXDR(prep.data.xdr, TESTNET_PASSPHRASE) as Transaction;
+    expect(tx.signatures).toHaveLength(0);
+    const text = [prep.data.summary.title, ...prep.data.summary.lines].join("\n");
+    expect(text).toContain(USDC_ISSUER);
+    expect(text).toMatch(/Asset issuer/);
+    expect(text).toMatch(/Withdrawal order wd_/);
   });
 });
 
@@ -270,10 +288,28 @@ describe("ChainTool wiring (depositTry)", () => {
     expect(d.data.id).toBe("dep_1");
   });
 
+  it("withdrawTry returns the unsigned payment with the issuer and memo in the approval card", async () => {
+    const world = fullWorld({ startTrustline: true });
+    world.chain.state.usdc = "2.0000000";
+    configureAnchor(newSession(world));
+    const res = await withdrawTry({ kind: "withdraw", asset: "USDC", amount: "1" });
+    const tx = TransactionBuilder.fromXDR(res.unsignedXdr, TESTNET_PASSPHRASE) as Transaction;
+    expect(tx.signatures).toHaveLength(0);
+    expect(tx.operations[0]?.type).toBe("payment");
+    expect(tx.memo.type).toBe("id");
+    const text = [res.summary.title, ...res.summary.lines].join("\n");
+    expect(text).toMatch(/Cash out 1 USDC/);
+    expect(text).toContain(USDC_ISSUER); // issuer, not just the code
+    expect(text).toMatch(/Asset issuer/);
+    expect(text).toMatch(/Memo \(id\): 4242/);
+    expect(res.summary.estimatedFee).toMatch(/XLM$/);
+  });
+
   it("rejects intents that are not deposits, and bad amounts", async () => {
     configureAnchor(newSession(fullWorld({ startTrustline: true })));
     await expect(depositTry({ kind: "send", asset: "USDC", amount: "1" })).rejects.toThrow(/"deposit" intent/);
     await expect(depositTry({ kind: "deposit", asset: "TRY", amount: "0" })).rejects.toThrow(/decimal string/);
+    await expect(withdrawTry({ kind: "deposit", asset: "USDC", amount: "1" })).rejects.toThrow(/"withdraw" intent/);
   });
 
   it("describeXdr decodes from XDR, not from prose", () => {

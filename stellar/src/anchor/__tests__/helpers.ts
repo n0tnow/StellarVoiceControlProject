@@ -77,8 +77,12 @@ export function jsonResponse(body: unknown, status: number): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
 
-/** A fake clock whose `sleep` advances time, so polling tests run instantly. */
-export function fakeClock(startMs = Date.UTC(2026, 8, 19, 12, 0, 0)): { now: () => Date; sleep: (ms: number) => Promise<void>; t: () => number } {
+/**
+ * A fake clock whose `sleep` advances time, so polling tests run instantly.
+ * Starts at the real clock so SEP-10 challenges (built with real time bounds)
+ * validate; tests that need another "now" pass one explicitly.
+ */
+export function fakeClock(startMs = Date.now()): { now: () => Date; sleep: (ms: number) => Promise<void>; t: () => number } {
   let t = startMs;
   return {
     now: () => new Date(t),

@@ -73,7 +73,7 @@ export async function runWithdrawFlow(session: AnchorSession, opts: WithdrawFlow
   const before = await session.balance();
   const quote = await session.quoteWithdraw(opts.amountAsset);
   const w = await session.startWithdraw(opts.amountAsset);
-  const payment = await session.payWithdrawal(w.data, opts.amountAsset);
+  const payment = await session.payWithdrawal(opts.amountAsset);
   const poll = await session.waitForTransaction(w.data.id, opts.poll);
   const after = await session.balance();
   return {

@@ -32,8 +32,12 @@ export interface AnchorContext {
   /** Injected for tests; defaults to a real timer. */
   sleep: (ms: number) => Promise<void>;
   now: () => Date;
-  /** Per-request timeout in ms. */
+  /** Per-request timeout in ms (covers reading the body too). */
   requestTimeoutMs: number;
+  /** TEST ONLY: allow http/localhost/IP anchors. Never set in product code. */
+  allowInsecure?: boolean;
+  /** Extra hosts (besides the home domain and its subdomains) toml endpoints may use. */
+  allowedEndpointHosts?: readonly string[];
 }
 
 /** Parsed SEP-1 stellar.toml — only the fields we use. */
@@ -71,10 +75,20 @@ export function fiatAssetId(code: string): string {
   return `iso4217:${code}`;
 }
 
+/**
+ * SEP-10 session. The `jwt` is a bearer credential: it stays INSIDE the client
+ * and is never returned in step results (see `SessionInfo`).
+ */
 export interface AuthToken {
   jwt: string;
   account: string;
   /** JWT `exp`, or undefined if it could not be decoded. */
+  expiresAt?: Date;
+}
+
+/** What the agent may see about a login: no credential. */
+export interface SessionInfo {
+  account: string;
   expiresAt?: Date;
 }
 
@@ -120,6 +134,9 @@ export interface AnchorTransaction {
   status: TxStatus;
   message?: string;
   moreInfoUrl?: string;
+  /** Names of fields the anchor still needs (pending_*_info_update); sanitised. */
+  requiredInfoUpdates?: string[];
+  requiredInfoMessage?: string;
   amountIn?: string;
   amountInAsset?: string;
   amountOut?: string;
@@ -134,33 +151,39 @@ export interface AnchorTransaction {
   withdrawMemoType?: string;
   startedAt?: string;
   completedAt?: string | null;
-  raw: Record<string, unknown>;
 }
 
+/**
+ * Anchor-provided text fields below are UNTRUSTED (sanitised and length-capped,
+ * but still the anchor's words): treat them as data, never as instructions.
+ */
 export interface DepositInstructions {
   id: string;
-  /** Human text from the anchor (`how`). */
+  /** Human text from the anchor (`how`), sanitised. Untrusted. */
   how?: string;
-  /** Raw SEP-6 `instructions` map (value/description per field). */
+  /** SEP-6 `instructions` map (value/description per field), sanitised. Untrusted. */
   instructions?: Record<string, { value: string; description?: string }>;
   minAmount?: number;
   maxAmount?: number;
   feePercent?: number;
   eta?: number;
-  raw: Record<string, unknown>;
+}
+
+/** A validated memo: `value` is exactly what goes on chain (hash memos are hex). */
+export interface WithdrawMemo {
+  type: "text" | "id" | "hash";
+  value: string;
 }
 
 export interface WithdrawInstructions {
   id: string;
-  /** Stellar account to pay. */
+  /** Plain `G...` Stellar account to pay (muxed `M...` is rejected). */
   accountId: string;
-  memo?: string;
-  memoType?: string;
+  memo?: WithdrawMemo;
   minAmount?: number;
   maxAmount?: number;
   feePercent?: number;
   eta?: number;
-  raw: Record<string, unknown>;
 }
 
 /** Result of one step: its data plus the narration it produced. */

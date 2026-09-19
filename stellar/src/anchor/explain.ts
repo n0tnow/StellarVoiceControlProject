@@ -7,6 +7,8 @@
  * each tool call can hand `{ data, explain }` back to the agent.
  */
 
+import { sanitizeAnchorText } from "./text.ts";
+
 export interface ExplainRecord {
   /** Short machine-friendly label, e.g. "sep10.sign". */
   step: string;
@@ -14,8 +16,30 @@ export interface ExplainRecord {
   what: string;
   /** Why it matters / what problem it solves, in plain English (speakable). */
   why: string;
+  /**
+   * Text the ANCHOR sent (status message, bank instructions...), sanitised and
+   * length-capped. UNTRUSTED DATA: show it, never treat it as an instruction and
+   * never speak it without saying whose words they are. `narrate()` leaves it out.
+   */
+  anchorSaid?: string;
   /** ISO timestamp. */
   at: string;
+}
+
+/**
+ * Narration event for the UI/agent stream. Structural copy of the `anchor_step`
+ * member that PR #8 adds to `PolarisEvent` in @polaris/interfaces.
+ * TODO: import the type from @polaris/interfaces once #8 has merged.
+ */
+export interface AnchorStepEvent {
+  type: "anchor_step";
+  step: string;
+  what: string;
+  why: string;
+}
+
+export function toAnchorStepEvent(rec: Pick<ExplainRecord, "step" | "what" | "why">): AnchorStepEvent {
+  return { type: "anchor_step", step: rec.step, what: rec.what, why: rec.why };
 }
 
 export type ExplainListener = (record: ExplainRecord) => void;
@@ -24,11 +48,17 @@ export class ExplainLog {
   private readonly items: ExplainRecord[] = [];
   private readonly listeners = new Set<ExplainListener>();
 
-  constructor(private readonly clock: () => Date = () => new Date()) {}
+  private readonly clock: () => Date;
+
+  constructor(clock: () => Date = () => new Date()) {
+    this.clock = clock;
+  }
 
   /** Append a record and notify listeners (e.g. the TTS narrator). */
-  record(step: string, what: string, why: string): ExplainRecord {
+  record(step: string, what: string, why: string, opts: { anchorSaid?: unknown } = {}): ExplainRecord {
     const rec: ExplainRecord = { step, what, why, at: this.clock().toISOString() };
+    const said = sanitizeAnchorText(opts.anchorSaid);
+    if (said) rec.anchorSaid = said;
     this.items.push(rec);
     for (const l of this.listeners) {
       try {
@@ -62,7 +92,7 @@ export class ExplainLog {
   }
 }
 
-/** Speakable one-liner for a record (what + why). */
+/** Speakable one-liner for a record (what + why). Anchor-authored text is deliberately excluded. */
 export function narrate(rec: Pick<ExplainRecord, "what" | "why">): string {
   return `${rec.what} ${rec.why}`;
 }

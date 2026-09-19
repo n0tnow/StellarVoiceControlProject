@@ -56,7 +56,7 @@ async function main(): Promise<void> {
     const t = wd.poll.tx;
     console.log(
       `\nWithdraw ${wd.withdraw.id}: ${wd.poll.outcome} (${wd.poll.history.join(" -> ")})\n` +
-        `  pay ${wd.withdraw.accountId} memo=${wd.withdraw.memo ?? "-"} (${wd.withdraw.memoType ?? "-"}) tx=${wd.payment.hash}\n` +
+        `  pay ${wd.withdraw.accountId} memo=${wd.withdraw.memo?.value ?? "-"} (${wd.withdraw.memo?.type ?? "-"}) tx=${wd.payment.hash}\n` +
         `  in: ${t.amountIn} ${t.amountInAsset}  out: ${t.amountOut} ${t.amountOutAsset}  fee: ${t.amountFee} ${t.amountFeeAsset}\n` +
         `  USDC balance: ${wd.balanceBefore} -> ${wd.balanceAfter}`,
     );

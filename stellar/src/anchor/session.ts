@@ -6,12 +6,15 @@
  *
  * The session never holds a key: all signing goes through the injected Signer.
  */
-import { DEFAULT_ASSET_CODE, DEFAULT_HOME_DOMAIN, TESTNET_FRIENDBOT_URL, TESTNET_HORIZON_URL, TESTNET_PASSPHRASE } from "./config.ts";
+import { assertAmount, toStroops } from "./amount.ts";
+import { DEFAULT_ASSET_CODE, DEFAULT_HOME_DOMAIN, KNOWN_ISSUERS, TESTNET_FRIENDBOT_URL, TESTNET_HORIZON_URL, TESTNET_PASSPHRASE } from "./config.ts";
+import { assertSameTransaction, withdrawalSummary, type ApprovalSummary } from "./describe.ts";
 import { ExplainLog, shortKey } from "./explain.ts";
 import { balanceOf, loadAccount, submitEnvelope, explorerTxUrl } from "./horizon.ts";
+import { parseHomeDomain } from "./net.ts";
 import { buildTrustlineTx, inspectAccount, preflight, type AccountState, type PreflightOptions, type PreflightResult } from "./preflight.ts";
 import { authenticate, completeChallenge, isExpired, requestChallenge } from "./sep10.ts";
-import { discoverAnchor, findAsset, normaliseHomeDomain } from "./sep1.ts";
+import { discoverAnchor, findAsset } from "./sep1.ts";
 import { ensureCustomer, type CustomerInfo } from "./sep12.ts";
 import { getPrice } from "./sep38.ts";
 import {
@@ -37,6 +40,7 @@ import type {
   DepositInstructions,
   FetchLike,
   Quote,
+  SessionInfo,
   Signer,
   StepResult,
   WithdrawInstructions,
@@ -57,15 +61,17 @@ export interface AnchorSessionConfig {
   requestTimeoutMs?: number;
   /** Share a log with other components (e.g. the narrator). */
   explain?: ExplainLog;
+  /** TEST ONLY: allow http/localhost/IP anchors (local mock servers). Never set in product code. */
+  allowInsecure?: boolean;
+  /** Extra hosts (besides the home domain and its subdomains) toml endpoints may use. */
+  allowedEndpointHosts?: readonly string[];
 }
 
-const DECIMAL = /^\d+(\.\d{1,7})?$/;
-
-/** Rejects floats-as-numbers, negatives, zero and >7 decimals. */
-export function assertAmount(amount: string, label = "amount"): void {
-  if (typeof amount !== "string" || !DECIMAL.test(amount) || Number(amount) <= 0) {
-    throw new Error(`${label} must be a positive decimal string with at most 7 decimals, got ${JSON.stringify(amount)}`);
-  }
+/** Strips the bearer credential: step results may only show who we logged in as. */
+function toSessionInfo(token: AuthToken): SessionInfo {
+  const info: SessionInfo = { account: token.account };
+  if (token.expiresAt) info.expiresAt = token.expiresAt;
+  return info;
 }
 
 export class AnchorSession {
@@ -79,10 +85,12 @@ export class AnchorSession {
   private customerOk = false;
   private pendingChallenge: string | undefined;
   private assetCache: (AnchorAsset & { fiat?: string }) | undefined;
+  /** The withdraw order the session itself created; `payWithdrawal` refuses anything else. */
+  private withdrawRequest: { instructions: WithdrawInstructions; amount: string } | undefined;
 
   constructor(config: AnchorSessionConfig) {
     this.signer = config.signer;
-    this.homeDomain = normaliseHomeDomain(config.homeDomain ?? DEFAULT_HOME_DOMAIN);
+    this.homeDomain = parseHomeDomain(config.homeDomain ?? DEFAULT_HOME_DOMAIN, { allowInsecure: config.allowInsecure });
     this.assetCode = config.assetCode ?? DEFAULT_ASSET_CODE;
     this.explain = config.explain ?? new ExplainLog(config.now);
     this.ctx = {
@@ -94,6 +102,8 @@ export class AnchorSession {
       sleep: config.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms))),
       now: config.now ?? (() => new Date()),
       requestTimeoutMs: config.requestTimeoutMs ?? 20_000,
+      ...(config.allowInsecure ? { allowInsecure: true } : {}),
+      ...(config.allowedEndpointHosts ? { allowedEndpointHosts: config.allowedEndpointHosts } : {}),
     };
   }
 
@@ -118,7 +128,10 @@ export class AnchorSession {
 
   private async asset(): Promise<AnchorAsset & { fiat?: string }> {
     if (!this.assetCache) {
-      const found = findAsset(await this.toml(), this.assetCode);
+      // Pinned issuers (when we know the anchor) refuse a look-alike asset from a hijacked toml.
+      const found = findAsset(await this.toml(), this.assetCode, {
+        expectedIssuer: KNOWN_ISSUERS[this.homeDomain]?.[this.assetCode],
+      });
       const a: AnchorAsset & { fiat?: string } = { code: found.code, issuer: found.issuer };
       if (found.anchorAsset) a.fiat = found.anchorAsset;
       this.assetCache = a;
@@ -156,9 +169,13 @@ export class AnchorSession {
     return this.step(async () => getInfo(this.ctx, await this.toml(), this.assetCode));
   }
 
-  /** SEP-10: log in by signing the anchor's challenge (cached until near expiry). */
-  login(): Promise<StepResult<AuthToken>> {
-    return this.step(() => this.token());
+  /**
+   * SEP-10: log in by signing the anchor's challenge (cached until near expiry).
+   * The bearer JWT stays inside the session; the step result carries only the
+   * public session info (account, expiry).
+   */
+  login(): Promise<StepResult<SessionInfo>> {
+    return this.step(async () => toSessionInfo(await this.token()));
   }
 
   /**
@@ -174,19 +191,20 @@ export class AnchorSession {
     });
   }
 
-  /** Completes `beginLogin()` with the signed challenge. */
-  finishLogin(signedChallengeXdr: string): Promise<StepResult<AuthToken>> {
+  /** Completes `beginLogin()` with the signed challenge. Also returns no credential. */
+  finishLogin(signedChallengeXdr: string): Promise<StepResult<SessionInfo>> {
     return this.step(async () => {
       if (!this.pendingChallenge) throw new Error("call beginLogin() first");
-      this.tokenCache = await completeChallenge(
+      const token = await completeChallenge(
         this.ctx,
         await this.toml(),
         await this.signer.publicKey(),
         this.pendingChallenge,
         signedChallengeXdr,
       );
+      this.tokenCache = token;
       this.pendingChallenge = undefined;
-      return this.tokenCache;
+      return toSessionInfo(token);
     });
   }
 
@@ -274,42 +292,87 @@ export class AnchorSession {
     return this.step(async () => {
       assertAmount(amountAsset, "withdraw amount");
       await this.kyc();
-      return startWithdraw(this.ctx, await this.toml(), await this.token(), {
+      const instructions = await startWithdraw(this.ctx, await this.toml(), await this.token(), {
         assetCode: this.assetCode,
         account: await this.signer.publicKey(),
         amount: amountAsset,
       });
+      // Bind the order to THIS session: payWithdrawal only ever pays what the anchor
+      // told us in this response, never an object a caller hands it.
+      this.withdrawRequest = { instructions, amount: amountAsset };
+      return instructions;
     });
   }
 
-  /** Pays the anchor the on-chain asset it asked for (signed via the injected Signer). */
-  payWithdrawal(w: WithdrawInstructions, amountAsset: string): Promise<StepResult<{ hash: string; explorerUrl: string }>> {
+  /**
+   * Builds the unsigned on-chain payment that funds the withdrawal this session
+   * requested, plus the approval-card summary decoded from that XDR (destination,
+   * memo, asset code AND issuer). No signing, no network write.
+   */
+  private async buildWithdrawal(amountAsset: string): Promise<{ xdr: string; summary: ApprovalSummary; instructions: WithdrawInstructions; asset: AnchorAsset }> {
+    assertAmount(amountAsset, "payment amount");
+    const request = this.withdrawRequest;
+    if (!request) throw new Error("call startWithdraw() first: this session has no withdrawal to pay");
+    if (toStroops(request.amount) !== toStroops(amountAsset)) {
+      throw new Error(`this withdrawal was requested for ${request.amount} ${this.assetCode}; refusing to pay ${amountAsset}`);
+    }
+    const account = await this.signer.publicKey();
+    const acct = await loadAccount(this.ctx, account);
+    if (!acct) throw new Error(`account ${shortKey(account)} does not exist yet`);
+    const asset = await this.asset();
+    const have = balanceOf(acct, asset);
+    if (toStroops(have) < toStroops(amountAsset)) {
+      throw new Error(`not enough ${asset.code}: have ${have}, need ${amountAsset}`);
+    }
+    const w = request.instructions;
+    const xdr = buildWithdrawPayment({
+      sourceAccount: account,
+      sequence: acct.sequence,
+      networkPassphrase: this.ctx.networkPassphrase,
+      asset,
+      amount: amountAsset,
+      destination: w.accountId,
+      memo: w.memo,
+    });
+    const summary = withdrawalSummary({
+      xdr,
+      networkPassphrase: this.ctx.networkPassphrase,
+      orderId: w.id,
+      homeDomain: this.homeDomain,
+      asset,
+      destination: w.accountId,
+      amount: amountAsset,
+    });
+    return { xdr, summary, instructions: w, asset };
+  }
+
+  /** Unsigned payment for the current withdrawal + the summary a human must approve. */
+  prepareWithdrawal(amountAsset: string): Promise<StepResult<{ xdr: string; summary: ApprovalSummary }>> {
     return this.step(async () => {
-      assertAmount(amountAsset, "payment amount");
-      const account = await this.signer.publicKey();
-      const acct = await loadAccount(this.ctx, account);
-      if (!acct) throw new Error(`account ${shortKey(account)} does not exist yet`);
-      const asset = await this.asset();
-      const have = balanceOf(acct, asset);
-      if (Number(have) < Number(amountAsset)) {
-        throw new Error(`not enough ${asset.code}: have ${have}, need ${amountAsset}`);
-      }
-      const xdr = buildWithdrawPayment({
-        sourceAccount: account,
-        sequence: acct.sequence,
-        networkPassphrase: this.ctx.networkPassphrase,
-        asset,
-        amount: amountAsset,
-        destination: w.accountId,
-        memo: w.memo,
-        memoType: w.memoType,
-      });
+      const { xdr, summary } = await this.buildWithdrawal(amountAsset);
+      return { xdr, summary };
+    });
+  }
+
+  /**
+   * Pays the anchor the on-chain asset it asked for. The destination and memo
+   * come ONLY from this session's own withdraw response; the signed envelope is
+   * checked against the unsigned one before it reaches the network. Any mismatch
+   * aborts. Signing goes through the injected Signer.
+   */
+  payWithdrawal(amountAsset: string): Promise<StepResult<{ hash: string; explorerUrl: string }>> {
+    return this.step(async () => {
+      const { xdr, instructions, asset } = await this.buildWithdrawal(amountAsset);
       const signed = await this.signer.signTransaction(xdr, { networkPassphrase: this.ctx.networkPassphrase });
+      assertSameTransaction(xdr, signed, this.ctx.networkPassphrase);
       const out = await submitEnvelope(this.ctx, signed);
+      this.withdrawRequest = undefined; // one withdraw order = at most one payment
       const explorerUrl = explorerTxUrl(out.hash, this.ctx.networkPassphrase);
+      const memo = instructions.memo;
+      const memoText = memo ? ` with ${memo.type} memo ${memo.type === "hash" ? shortKey(memo.value) : memo.value}` : ", with no memo";
       this.explain.record(
         "withdraw.pay",
-        `Sent ${amountAsset} ${asset.code} to the anchor's account ${shortKey(w.accountId)}${w.memo ? ` with memo ${w.memo}` : ""} ` +
+        `Sent ${amountAsset} ${asset.code} to the anchor's account ${shortKey(instructions.accountId)}${memoText} ` +
           `(transaction ${out.hash.slice(0, 8)}...).`,
         "This on-chain payment is the anchor's trigger: when it sees the tokens and memo it pays out the local currency to your bank.",
       );

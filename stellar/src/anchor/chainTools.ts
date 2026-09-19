@@ -13,14 +13,27 @@
  *
  * See the report / README for the recommended `@polaris/interfaces` extension.
  */
-import { Transaction, TransactionBuilder } from "@stellar/stellar-sdk";
-import type { ChainTool, ChainToolResult } from "@polaris/interfaces";
+import { TransactionBuilder } from "@stellar/stellar-sdk";
+import type { ChainTool, ChainToolResult, Intent } from "@polaris/interfaces";
+import { assertAmount } from "./amount.ts";
 import { TESTNET_FRIENDBOT_URL, TESTNET_HORIZON_URL, TESTNET_PASSPHRASE } from "./config.ts";
+import { describeXdr } from "./describe.ts";
 import { ExplainLog } from "./explain.ts";
 import { explorerTxUrl, submitEnvelope } from "./horizon.ts";
 import { displayAsset } from "./sep38.ts";
-import { AnchorSession, assertAmount, type AnchorSessionConfig } from "./session.ts";
+import { AnchorSession, type AnchorSessionConfig } from "./session.ts";
 import type { AnchorContext } from "./types.ts";
+
+// The narration event the anchor emits for the UI/TTS stream is a structural copy
+// of the `anchor_step` member PR #8 adds to `PolarisEvent`; see `explain.ts`.
+
+/**
+ * Structural copy of the intent kinds this package handles. PR #8 adds
+ * `"withdraw"` (and more) to `IntentKind` in @polaris/interfaces.
+ * TODO: replace with `Intent` from @polaris/interfaces once #8 has merged.
+ */
+export type AnchorIntentKind = Intent["kind"] | "withdraw";
+export type AnchorIntent = Omit<Intent, "kind"> & { kind: AnchorIntentKind };
 
 let active: AnchorSession | undefined;
 
@@ -35,29 +48,8 @@ export function getAnchorSession(): AnchorSession {
   return active;
 }
 
-/** Human-readable lines decoded FROM the XDR (never from LLM text). */
-export function describeXdr(xdr: string, networkPassphrase: string): { lines: string[]; feeXlm: string } {
-  const tx = TransactionBuilder.fromXDR(xdr, networkPassphrase);
-  if (!(tx instanceof Transaction)) throw new Error("fee-bump envelopes are not supported here");
-  const lines = tx.operations.map((op) => describeOperation(op));
-  if (tx.memo.type !== "none") lines.push(`Memo (${tx.memo.type}): ${String(tx.memo.value)}`);
-  return { lines, feeXlm: (Number(tx.fee) / 1e7).toFixed(7) };
-}
-
-type Op = Transaction["operations"][number];
-
-function describeOperation(op: Op): string {
-  switch (op.type) {
-    case "changeTrust":
-      return `Trust asset ${op.line && "code" in op.line ? op.line.code : "?"} (opt in to hold it)`;
-    case "payment":
-      return `Pay ${op.amount} ${op.asset.code} to ${op.destination}`;
-    case "manageData":
-      return `Login proof entry "${op.name}" (authentication only; this transaction is never submitted to the network)`;
-    default:
-      return `Operation: ${op.type}`;
-  }
-}
+/** Human-readable lines decoded FROM the XDR (never from LLM text). Re-exported from `describe.ts`. */
+export { describeXdr };
 
 /**
  * `ChainTool` for "deposit lira": amount is the LOCAL-currency amount (TRY).
@@ -101,6 +93,34 @@ export const depositTry: ChainTool = async (intent): Promise<ChainToolResult> =>
         ...(state.exists ? [] : ["Your account does not exist on the network yet; it must be funded first (testnet: Friendbot)."]),
       ],
       estimatedFee: "0 XLM (authentication only, never submitted)",
+    },
+  };
+};
+
+/**
+ * `ChainTool` for "cash out": amount is the ON-CHAIN asset amount (USDC) to
+ * withdraw to the user's bank. Creates the anchor order, then returns the
+ * unsigned on-chain payment the user must approve (decoded summary includes the
+ * destination, memo, amount and the asset CODE + ISSUER). After the shell signs
+ * it, `submitSignedTx(signedXdr)` submits; then poll with the session.
+ */
+export const withdrawTry = async (intent: AnchorIntent): Promise<ChainToolResult> => {
+  if (intent.kind !== "withdraw") throw new Error(`withdrawTry expects a "withdraw" intent, got "${intent.kind}"`);
+  assertAmount(intent.amount, "withdraw amount");
+  const session = getAnchorSession();
+  const quote = (await session.quoteWithdraw(intent.amount)).data;
+  await session.startWithdraw(intent.amount); // binds destination + memo to this session
+  const prep = (await session.prepareWithdrawal(intent.amount)).data;
+  const sold = displayAsset(quote.sellAsset);
+  const bought = displayAsset(quote.buyAsset);
+  return {
+    unsignedXdr: prep.xdr,
+    summary: {
+      ...prep.summary,
+      lines: [
+        `Cash out ${quote.sellAmount} ${sold} at ${session.homeDomain}; the anchor pays about ${quote.buyAmount} ${bought} to your bank.`,
+        ...prep.summary.lines,
+      ],
     },
   };
 };

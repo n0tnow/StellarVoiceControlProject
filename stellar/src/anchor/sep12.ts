@@ -4,6 +4,7 @@
  * we surface those instead of guessing/inventing personal data.
  */
 import { requestJson } from "./http.ts";
+import { sanitizeAnchorText } from "./text.ts";
 import type { AnchorContext, AnchorToml, AuthToken } from "./types.ts";
 
 export type CustomerStatus = "ACCEPTED" | "PROCESSING" | "NEEDS_INFO" | "REJECTED" | (string & {});
@@ -17,13 +18,14 @@ export interface CustomerInfo {
 }
 
 export class KycRequiredError extends Error {
-  constructor(
-    message: string,
-    readonly status: CustomerStatus,
-    readonly missingFields: string[],
-  ) {
+  readonly status: CustomerStatus;
+  readonly missingFields: string[];
+
+  constructor(message: string, status: CustomerStatus, missingFields: string[]) {
     super(message);
     this.name = "KycRequiredError";
+    this.status = status;
+    this.missingFields = missingFields;
   }
 }
 
@@ -31,11 +33,14 @@ function parseCustomer(body: unknown): CustomerInfo {
   const b = (body ?? {}) as Record<string, unknown>;
   const fields = (b.fields ?? {}) as Record<string, { optional?: boolean }>;
   const missing = Object.entries(fields)
-    .filter(([, v]) => !v?.optional)
-    .map(([k]) => k);
-  const info: CustomerInfo = { status: typeof b.status === "string" ? b.status : "NEEDS_INFO", missingFields: missing };
-  if (typeof b.id === "string") info.id = b.id;
-  if (typeof b.message === "string") info.message = b.message;
+    .filter(([k, v]) => !v?.optional && /^[A-Za-z0-9_]{1,40}$/.test(k))
+    .map(([k]) => k)
+    .slice(0, 20);
+  const status = typeof b.status === "string" && /^[A-Z_]{1,30}$/.test(b.status) ? b.status : "NEEDS_INFO";
+  const info: CustomerInfo = { status, missingFields: missing };
+  if (typeof b.id === "string" && /^[A-Za-z0-9_.:-]{1,80}$/.test(b.id)) info.id = b.id;
+  const message = sanitizeAnchorText(b.message);
+  if (message) info.message = message;
   return info;
 }
 
@@ -44,10 +49,16 @@ function kycServer(toml: AnchorToml): string {
   return toml.kycServer;
 }
 
-export async function getCustomer(ctx: AnchorContext, toml: AnchorToml, token: AuthToken): Promise<CustomerInfo> {
+/** `GET /customer`; with `transactionId` it asks what a specific paused order still needs (SEP-6/12). */
+export async function getCustomer(
+  ctx: AnchorContext,
+  toml: AnchorToml,
+  token: AuthToken,
+  opts: { transactionId?: string } = {},
+): Promise<CustomerInfo> {
   const body = await requestJson(ctx, `${kycServer(toml)}/customer`, {
     bearer: token.jwt,
-    query: { account: token.account },
+    query: { account: token.account, transaction_id: opts.transactionId },
   });
   return parseCustomer(body);
 }

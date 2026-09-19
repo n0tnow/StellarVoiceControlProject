@@ -45,7 +45,8 @@ export const sendPayment = todo("sendPayment");
 export const swap = todo("swap");
 export const guardPolicy = todo("guardPolicy");
 
-// Anchor client (SEP-1/10/12/38/6): `depositTry` and `submitSignedTx` live in ./anchor/chainTools.ts.
-// `submitSignedTx` receives XDR only after the shell's Touch ID gate has approved the payload hash.
-export { depositTry, submitSignedTx, type SubmitResult } from "./anchor/chainTools.ts";
+// Anchor client (SEP-1/10/12/38/6): `depositTry`, `withdrawTry` and `submitSignedTx` live in
+// ./anchor/chainTools.ts. `submitSignedTx` receives XDR only after the shell's Touch ID gate
+// has approved the payload hash.
+export { depositTry, withdrawTry, submitSignedTx, type SubmitResult } from "./anchor/chainTools.ts";
 export * as anchor from "./anchor/index.ts";
