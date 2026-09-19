@@ -2,8 +2,8 @@
 
 > **Status:** design / decision record. **Testnet only.** No implementation exists yet — everything
 > marked PLANNED is a future file or task, not code.
-> This document records the decisions D10, D10b, D10c and D11 taken on **2026-09-19**, plus the
-> keeper-hosting decision D12 which is **PROPOSED**.
+> This document records the decisions D10, D10b, D10c, D11, D13 and D14 taken on **2026-09-19**, plus
+> the keeper-hosting decision D12 which is **PROPOSED**.
 > Ground truth for the contract facts below: `contracts/DEPLOYED.md` (ABI + "Known limitations"),
 > `stellar/src/keeper/README.md`, and the source notes for this round.
 > Related: `docs/confidential-payments.md` (privacy modes), `docs/interfaces.md` (reserved seam),
@@ -27,6 +27,8 @@ so the later TypeScript/UI implementation can be done in one pass against fixed 
 | **D10c** | Enabling/loosening is **never silent**: a voice request creates a **draft** that is read back, and is applied only after **ONE approval card + Touch ID**. Tightening/disabling (lower limit, revoke executor, cancel schedule) may be done by voice with read-back and needs the **lighter confirmation**. The **app-side preference can only be STRICTER than the chain, never looser** — the chain is the last defence against a compromised agent. |
 | **D11** | **Smart suggestions** are computed **locally and deterministically** (statistics). An LLM may only phrase them; raw history never leaves the device (only aggregates, and only if the owner allows). A suggestion is **never applied automatically** — it becomes a draft that goes through the same read-back + card + Touch ID flow as any change. |
 | **D12 (PROPOSED)** | Keeper hosting for the demo = the **same Mac** as the app, wrapped in `caffeinate -i`; production = an always-on small server. **Awaiting user confirmation.** |
+| **D13** | The enable-auto-pay flow executes **allowance → rule → executor** (`approve`, `set_rule`, `set_executor`): registering the executor is the **last, arming** step. The single approval card lists the same three actions in the same order and calls out the arming step. Disable reverses it: `revoke_executor` (disarm) first, then the optional `approve(0)`. Every earlier "allowance last" ordering is **SUPERSEDED by D13**. |
+| **D14** | The keeper **cannot** live inside the contract — Soroban has no scheduler/timers and every run needs a transaction from someone. `execute_schedule` is auth-free, so the **app can act as an opportunistic keeper** (on start / while open) and the payee can trigger too; a future **tip-paying `polaris_guard_v2`** for third-party keepers is **PARKED**. The demo keeps D12. |
 
 **In scope:** approval profiles, the voice/settings flows that enable or tighten them, `RuleDraft` /
 `ScheduleDraft` handling, schedule creation/cancellation UX, the local suggestions engine, keeper
@@ -91,27 +93,34 @@ auto-pay profile (see §10, open question).
 ## 3. Enabling auto-pay (voice and settings)
 
 Auto-pay is enabled **on top of the "Always ask" baseline state** from §2, which already contains the
-mandatory SAC allowance. Enabling auto-pay **adds** `set_executor` + `set_rule` to that baseline and
+mandatory SAC allowance. Enabling auto-pay **adds** `set_rule` + `set_executor` to that baseline and
 **raises the allowance** if the intended mandate (plus schedules) exceeds the current allowance. The
 allowance is never optional: without it even `pay_owner` cannot settle.
+
+> **Safe execution order (D13).** The allowance is mandatory for every guard payment, so the baseline
+> state already has one; what actually **arms** unattended payments is the executor registration
+> together with a positive `auto_approve_limit`. The flow therefore executes as
+> **`approve` → `set_rule` → `set_executor`**: registering the executor is the **last, arming** step.
+> The approval card lists the same three actions in the same order and calls out the arming step.
+> Earlier text that says "allowance last" or lists `set_executor, set_rule, approve` as the execution order is **SUPERSEDED by D13**.
 
 ### 3.1 Voice/settings flow
 
 Enabling auto-pay is **three owner-signed Soroban calls**, each a separate transaction (a Soroban
-transaction carries one invoke-host-function operation): `set_executor`, `set_rule`, SAC `approve`.
-The app presents them as **ONE approval card** listing all three and **one Touch ID**, then submits
-them in order.
+transaction carries one invoke-host-function operation): SAC `approve`, `set_rule`, `set_executor`.
+The app presents them as **ONE approval card** listing all three in that order and **one Touch ID**,
+then submits them in order.
 
 | Step | User says/does | App/agent does | On-chain result |
 |---|---|---|---|
 | 1 | Says "don't ask me for payments under 25 USDC" (or opens **Settings → Security**) | Parses intent, resolves the owner's asset locally, reads current rule | none |
 | 2 | — | Builds a `RuleDraft` (speech-derived, unsigned) with threshold and daily limit | none |
 | 3 | Hears the read-back | Speaks: **"Allow automatic payments up to 25 USDC, max 100 USDC per day, to saved contacts only, for 30 days?"** | none |
-| 4 | Confirms | Shows **ONE approval card** listing the three owner calls: `set_executor`, `set_rule`, `approve` | none |
+| 4 | Confirms | Shows **ONE approval card** listing the three owner calls in order — SAC `approve`, `set_rule`, `set_executor` — and calls out step 3 as the **arming** step | none |
 | 5 | Touch ID | Authenticates once for the card | none |
-| 6 | — | Submits `set_executor(owner, executor)` | Executor registered |
-| 7 | — | Submits `set_rule(owner, rule)` (threshold, daily limit, asset, contacts-only) | Rule published |
-| 8 | — | Submits SAC `approve(from=owner, spender=guard, amount, live_until_ledger)` | Allowance set |
+| 6 | — | Submits SAC `approve(from=owner, spender=guard, amount, live_until_ledger)` | Allowance set |
+| 7 | — | Submits `set_rule(owner, rule)` (threshold, daily limit, asset, contacts-only) | Rule published (no executor yet → auto-pay **not** armed) |
+| 8 | — | Submits `set_executor(owner, executor)` | Executor registered — **auto-pay armed** |
 | 9 | — | Reports the three results | Auto-pay active |
 | 10 | Hears/sees confirmation | Speaks/shows: "Auto-pay is on: up to 25 USDC per payment, max 100 USDC per day." | none |
 
@@ -126,6 +135,10 @@ them in order.
   and a SAC allowance. Any partial combination therefore **fails closed**: a rule + allowance without
   an executor cannot auto-pay, and an executor without a rule/allowance cannot move funds through
   `pay_executor`.
+- **State after a failure (D13):** after step 1 (`approve`) only the allowance changed; after step 2
+  (`set_rule`) the new rule is stored but **no executor exists**, so nobody can auto-pay; after step 3
+  (`set_executor`) auto-pay is **armed**.
+- **Disable order (D13):** `revoke_executor` first (**disarm**), then the optional `approve(0)`.
 - The app must re-read the on-chain state after a partial failure and show the user what actually
   landed before offering to retry.
 
@@ -139,7 +152,8 @@ them in order.
 
 ### 3.4 Disabling auto-pay
 
-- `revoke_executor(owner)` — one owner call. Revoking the allowance is optional: SAC `approve` with amount 0.
+- **Order (D13):** `revoke_executor(owner)` first (**disarm**) — one owner call. Revoking the allowance
+  is optional and happens after: SAC `approve` with amount 0.
 - Disabling is a **tightening** (see §3.5): voice with read-back + lighter confirmation is allowed.
 - Note: revoking the executor does **not** stop existing schedules (F-01); each schedule must be
   cancelled separately, or the allowance revoked (which also disables `pay_owner`).
@@ -243,9 +257,9 @@ the read-back sentence from the draft — exact example in §3.1.)*
   "summary": {
     "title": "Turn on auto-pay up to 25 USDC",
     "actions": [
-      { "index": 1, "title": "Register the agent key", "call": "set_executor", "lines": ["Executor: GB3H...DYLX5"] },
+      { "index": 1, "title": "Approve the guard allowance", "call": "approve", "lines": ["Amount: 700 USDC", "Valid for ~30 days"] },
       { "index": 2, "title": "Publish the spending rule", "call": "set_rule", "lines": ["Per payment: 25 USDC", "Per day: 100 USDC", "Saved contacts only"] },
-      { "index": 3, "title": "Approve the guard allowance", "call": "approve", "lines": ["Amount: 700 USDC", "Valid for ~30 days"] }
+      { "index": 3, "title": "Register the agent key (arms auto-pay)", "call": "set_executor", "lines": ["Executor: GB3H...DYLX5", "Last step: this arms unattended payments"] }
     ],
     "estimatedFee": "~0.00003 XLM (3 transactions)",
     "privacy": { "mode": "public" }
@@ -501,6 +515,15 @@ and sends `execute_schedule` for each due id.
 | **(a) Same Mac as the app** | Simplest; no extra setup during the demo | Stops if the Mac sleeps or the process quits; use `caffeinate -i` |
 | **(b) Always-on small cloud VM/container** | Keeps working when the Mac is off | Setup time; needs `KEEPER_SECRET` funded on testnet + `GUARD_CONTRACT_ID` |
 | **(c) Anyone else's machine** | Trustless by design; multiple keepers possible | Not under our control; for production, run several |
+| **(d) App as opportunistic keeper** | No extra process; the app triggers due schedules on start and while it is open; the payee can also trigger one (D14) | Only runs while the app is open — not a reliable unattended keeper |
+| **(e) Tip-paying v2 contract (PARKED)** | Pays a small tip to whoever triggers a due schedule, so unrelated third parties run keepers (D14) | Needs a **new crate** (`polaris_guard_v2`, D9) + incentive design; out of scope for the hackathon |
+
+**Can the keeper live inside the contract? (D14 — no.)** Soroban has **no scheduler or timers** and a
+contract cannot wake itself: every execution needs a transaction from someone. `execute_schedule` needs
+**no auth**, so **(d) the app can act as an opportunistic keeper** (it runs due schedules on start and
+while open) and the **payee** can trigger one too. A future **(e) tip-paying `polaris_guard_v2`** could
+incentivise third-party keepers, but it is **PARKED** — a new crate per D9, not for the hackathon. The
+demo keeps option (a) under D12.
 
 **Demo recommendation (D12 — PROPOSED, awaiting user confirmation):** option **(a)**, the same Mac as
 the app, wrapped in `caffeinate -i`. Production pitch: option **(b)** with **multiple independent
@@ -541,7 +564,7 @@ keepers**.
 
 | ID | Task | Owner | Files/dirs | Depends on | Acceptance criteria (measurable) | Effort |
 |---|---|---|---|---|---|---|
-| **T1** | Approval policy + profiles: `approvalPolicy` routing (`always_ask` \| `auto_under_limit`), profile→on-chain mapping, `enableAutoPay(draft)` producing the three unsigned calls + ONE combined summary, `disableAutoPay()` | B | `stellar/src/guard/` (PLANNED) | Guard client (in progress) | Offline unit tests: `enableAutoPay` yields exactly 3 ordered unsigned calls (`set_executor`, `set_rule`, `approve`) and one summary; the third (`approve`) is the mandatory allowance; `disableAutoPay` yields `revoke_executor` (+ optional approve 0); routing sends > threshold to `pay_owner` | M |
+| **T1** | Approval policy + profiles: `approvalPolicy` routing (`always_ask` \| `auto_under_limit`), profile→on-chain mapping, `enableAutoPay(draft)` producing the three unsigned calls + ONE combined summary, `disableAutoPay()`, `buildBaselineSetup()`, `buildTightenRule()` | B | `stellar/src/guard/` (PLANNED) | Guard client (in progress) | Offline unit tests: `enableAutoPay` yields exactly 3 ordered unsigned calls (`approve`, `set_rule`, `set_executor` — **D13**) and one summary, the card listing them in that order and calling out the arming step; `disableAutoPay` yields `revoke_executor` (**disarm**) first, then optional `approve(0)`; routing sends > threshold to `pay_owner`; `buildBaselineSetup` yields an allowance + `set_rule` with **no executor** and `auto_approve_limit` **0 allowed** (the first-time "Always ask" setup, §11e); `buildTightenRule` **refuses loosening by default**; `invalid_asset` validation rejects an unsupported asset; card **caveats** state that revoking the executor does not stop existing schedules and that revoking the allowance disables ALL guard payments including owner-approved ones; the card shows an **"allowance old → new"** line with a warning when the new allowance is lower than the current one | M |
 | **T2** | Schedule tools: `schedulePayment`, `cancelSchedule`, `listSchedules` ChainTools (unsigned XDR + summary) + explicit-timezone local→UTC helper | B | `stellar/src/payments/` or `stellar/src/guard/` (PLANNED) | Guard client | Offline tests: "every Friday for 8 weeks" → `interval_secs 604800, runs 8`; one-shot → `0,1`; ambiguous cancel → agent asks; local+UTC both in summary | M |
 | **T3** | Suggestions engine: pure `suggest()` + fixtures + tests | B | `stellar/src/suggest/` (PLANNED) | — (offline) | Fixture with 14 payments yields `auto_pay_threshold` 20 and `daily_limit` 60; `< 8` payments yields none | S |
 | **T4** | History readers: local encrypted history store (design `docs/confidential-payments.md` §6) + Horizon/`Paid` events reader | B | PLANNED (history store + chain reader) | T3 (shape), network for live runs | Offline: fixture history parses; live: reader returns public payments for the owner account (network run needs approval) | M |
@@ -576,8 +599,8 @@ This mirrors the source notes' ordering (after the headless slice).
 | a | Deriving `daily_limit` / `per_tx_limit` from a voice request like "don't ask under 25" | The agent must **not** invent them: it asks one question for the daily limit; the card offers `per_tx_limit = threshold`, `daily_limit = 4 × threshold` as **editable fields**; nothing is applied until the user confirms the read-back (**PROPOSED**). | Avoid inventing a daily mandate from an ambiguous utterance; keep the user in control. | Owner A + Owner B |
 | b | Natural-language time ("tomorrow 15:00", "every Friday 10:00") | The **agent** resolves the phrase into explicit local date + time + **IANA timezone** before calling the chain tool; timezone source = the **device timezone**, shown on the card and editable; default `runs` when omitted for "every X" = **ask** ("for how many weeks?"), **never infinite**; one-shot when no repeat is given (**PROPOSED**). | The chain takes UTC epoch seconds; ambiguity must be resolved and shown before signing. | Owner B (helper) + Owner A (card) |
 | c | `DisableAutoPay` result shape | `{ steps: [ {kind:"revoke_executor", unsignedXdr, payloadHash}, optional {kind:"approve", amount:"0", ...} ], summary, confirmation:"light" }` (mirrors the enable builder) (**PROPOSED**). | The disable flow needs a fixed type for T1/T5. | Owner B |
-| d | Acceptance criteria for "app preference is never looser than the chain" | Property test: for random rules/amounts the app policy never routes to `pay_executor` when `chooseGuardedRoute` (chain-based) would not; and the combined enable card lists **exactly three** actions in the order `set_executor`, `set_rule`, `approve` (allowance last) (**PROPOSED**). | Makes the invariant and the card order testable. | Owner B |
-| e | First-time setup flow (allowance before anything else) | Setup wizard = `approve` allowance → `set_rule` (default profile **Always ask**: executor not registered) → aliases; this is the "Always ask" baseline state (**PROPOSED**). | The allowance is mandatory for every guard payment including `pay_owner` (§2). | Owner A + Owner B |
+| d | Acceptance criteria for "app preference is never looser than the chain" | Property test: for random rules/amounts the app policy never routes to `pay_executor` when `chooseGuardedRoute` (chain-based) would not; and the combined enable card lists **exactly three** actions in the order **`approve`, `set_rule`, `set_executor`** (executor last = **arming**) (**D13**; the earlier "allowance last" order is **SUPERSEDED by D13**). | Makes the invariant and the card order testable. | Owner B |
+| e | First-time setup flow (allowance before anything else) | `buildBaselineSetup` implements the first-time "Always ask" setup: `approve` allowance → `set_rule` with **no executor** and `auto_approve_limit` **0 allowed** → aliases; this is the "Always ask" baseline state (**D13**, §3). | The allowance is mandatory for every guard payment including `pay_owner` (§2). | Owner A + Owner B |
 | f | Keeper hosting (D12) | Stays **PROPOSED**: same Mac for the demo. | Awaiting user confirmation; no decision recorded. | User |
 
 ---
@@ -585,4 +608,4 @@ This mirrors the source notes' ordering (after the headless slice).
 *Cross-references: `docs/confidential-payments.md` (privacy modes, D1–D8), `docs/interfaces.md`
 (reserved seam), `contracts/DEPLOYED.md` (ABI, rule semantics, F-01/F-03/F-06/F-12),
 `stellar/src/keeper/README.md` (keeper config/behaviour), `docs/demo-runbook.md` (demo steps),
-`notes.md` (D10/D10b/D10c/D11/D12), `sprints.md` (M2b/M3c), `backlog.md` (T1–T6).*
+`notes.md` (D10/D10b/D10c/D11/D12/D13/D14), `sprints.md` (M2b/M3c), `backlog.md` (T1–T6).*

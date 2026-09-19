@@ -147,7 +147,8 @@ export interface RuleDraft {
 }
 
 // RESERVED. Combined multi-action approval summary (provisional). The auto-pay enable card
-// lists three owner calls (set_executor, set_rule, SAC approve) behind ONE card + Touch ID.
+// lists three owner calls in safe order (SAC approve -> set_rule -> set_executor, executor last =
+// arming; D13) behind ONE card + Touch ID.
 // `actions[]` is NEW to `interfaces/src` only — the base `TxSummary` already exists in the Rust
 // mirror (`app/src-tauri/src/types.rs`). This is a PROVISIONAL extension — field name and shape
 // to be confirmed with Owner A.

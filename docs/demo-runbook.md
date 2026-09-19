@@ -122,8 +122,9 @@ default, aliases set, and the mandatory SAC allowance already in place (§1). A 
 approval card and requires Touch ID. Nothing is auto-approved. *(base slice; no T1 needed.)*
 
 **4.2 Enable auto-pay by voice.** Say "don't ask me for payments under 25 USDC". The app builds a
-`RuleDraft`, reads it back, then shows **ONE approval card** listing the three owner calls
-(`set_executor`, `set_rule`, SAC `approve`); one Touch ID submits them in order. *(requires T1 + T5.)*
+`RuleDraft`, reads it back, then shows **ONE approval card** listing the three owner calls in safe
+order (SAC `approve`, `set_rule`, `set_executor` last = **arming**; D13); one Touch ID submits them in
+order. *(requires T1 + T5.)*
 
 **4.3 Small payment goes through without a card.** Send an amount ≤ the threshold; it runs via
 `pay_executor`, agent-signed, bound by the on-chain limits. *(requires T1 + T2.)*

@@ -173,6 +173,19 @@
 - **ABI impact:** additive read function; still bundled into the single new deployment
   (`polaris_guard_v2`).
 
+### V2-idea (PARKED) — Keeper tip (D14)
+- **Idea:** `execute_schedule` needs no auth, so anyone can trigger a due schedule. A future
+  `polaris_guard_v2` could pay a small **tip** to whoever triggers a due schedule, so unrelated third
+  parties run keepers without us hosting one.
+- **Status:** **PARKED** — not for the hackathon. Would need a new crate per D9 plus careful incentive
+  design. The hackathon demo relies on D12 (keeper on the same Mac) and the D14 "app as opportunistic
+  keeper" option.
+- **Exact change (if picked up):** add tip accounting to the schedule run path; transfer the tip to the
+  caller on a successful `execute_schedule`, with the tip size bounded by the rule/allowance.
+- **Files:** `contracts/polaris_guard_v2/src/lib.rs`, `contracts/polaris_guard_v2/src/test.rs`,
+  `contracts/DEPLOYED.md` (new `polaris_guard_v2` section), keeper docs.
+- **ABI impact:** new tip parameters + an extra transfer per run; bundle into the single v0.2 deployment.
+
 ### Missing tests to add with the batch (from audit §6)
 The following audit §6 cases are not yet covered and should land with the items above (not all map to a
 single item): #2 (`create_schedule` disallowed asset), #3 (foreign signatures on
@@ -196,6 +209,7 @@ schedule advance), #8 (rule removed after schedule creation → `NotConfigured`)
 
 ## Unfinished (handed off)
 - All nine items above (V2-01…V2-09), plus the missing tests and the read-only hash check.
+- Parked idea **"V2-idea: keeper tip"** (D14) — see above; not part of the v0.2 batch unless promoted.
 - Decision on V2-08 (keep vs re-check F-03).
 
 ## Blockers

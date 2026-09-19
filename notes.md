@@ -178,6 +178,8 @@
   read back and applied only after **ONE card + Touch ID**; tightening/disabling may be done by voice
   with read-back and the lighter confirmation; the **app preference can only be STRICTER than the
   chain, never looser**.
+- **Execution order:** fixed later by **D13** — `approve` → `set_rule` → `set_executor` (executor last
+  = arming); any earlier "allowance last" ordering is **SUPERSEDED by D13**.
 - **Pointer:** [`docs/approval-and-scheduling.md`](docs/approval-and-scheduling.md) §2–§4.
 - **Status:** decided
 
@@ -199,3 +201,37 @@
   words.
 - **Pointer:** [`docs/approval-and-scheduling.md`](docs/approval-and-scheduling.md) §7.
 - **Status:** open (PROPOSED — needs user confirmation)
+
+## 2026-09-19 — D13: Safe Execution Order of the Enable-Auto-Pay Flow
+- **Decision (D13):** the SAC allowance is mandatory for every guard payment, so a baseline allowance
+  already exists in the "Always ask" profile; what **arms** unattended payments is registering the
+  executor together with a positive `auto_approve_limit`. The enable flow therefore executes as
+  **1) `approve` (allowance), 2) `set_rule`, 3) `set_executor`** — registering the executor is the
+  **last, arming** step.
+- **Card:** the approval card lists the same three actions in the same order and calls out the arming
+  step; it is still **ONE card and ONE Touch ID**.
+- **State after a failure:** after step 1 only the allowance changed; after step 2 the new rule is
+  stored but no executor exists so nobody can auto-pay; after step 3 auto-pay is armed.
+- **Disable order:** `revoke_executor` first (**disarm**), then the optional `approve(0)`.
+- **Supersedes:** every earlier statement that the "allowance is last" or that the execution order is
+  `set_executor, set_rule, approve` — all **SUPERSEDED by D13** (D10c note; `docs/approval-and-scheduling.md` §3, §9, §11d; the JSON
+  card example; `docs/interfaces.md` §6.1; `docs/demo-runbook.md`; `sprints.md`; `backlog.md` T1 row).
+- **New T1 deliverables:** `buildBaselineSetup` (allowance + `set_rule` with no executor and
+  `auto_approve_limit` 0 allowed) implements the first-time "Always ask" setup (§11e); `buildTightenRule`
+  refuses loosening by default; `invalid_asset` validation; card caveats (revoking the executor does not
+  stop existing schedules; revoking the allowance disables ALL guard payments including owner-approved
+  ones); an "allowance old → new" line with a warning when the new allowance is lower than the current.
+- **Pointer:** [`docs/approval-and-scheduling.md`](docs/approval-and-scheduling.md) §3, §9, §11.
+- **Status:** decided
+
+## 2026-09-19 — D14: Can the Keeper Live Inside the Contract?
+- **Decision (D14):** **No.** Soroban has no scheduler or timers; a contract cannot wake itself — every
+  execution needs a transaction from someone.
+- **What is possible:** (a) `execute_schedule` needs no auth, so anyone can trigger it — the **app can
+  act as an opportunistic keeper** (on start and while open it runs due schedules) and the **payee** can
+  trigger it too; (b) a future contract (**a NEW crate, per D9**, e.g. `polaris_guard_v2`) could pay a
+  small **tip** to whoever triggers a due schedule so third parties run keepers — **PARKED**, not for
+  the hackathon; (c) the demo keeps **D12** (keeper on the same Mac, **PROPOSED**).
+- **Pointer:** [`docs/approval-and-scheduling.md`](docs/approval-and-scheduling.md) §7; parked idea in
+  [`backlog/guard-v0.2-hardening.md`](backlog/guard-v0.2-hardening.md).
+- **Status:** decided
