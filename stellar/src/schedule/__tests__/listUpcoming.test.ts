@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { DEFAULT_POLL_SECONDS } from "../constants.ts";
 import { listUpcoming } from "../listUpcoming.ts";
 import {
   ADA,
@@ -6,6 +7,7 @@ import {
   FakeGuardRpc,
   GUARD_ID,
   OWNER,
+  errSim,
   makeDeps,
   refusalOf,
   schedule,
@@ -101,6 +103,20 @@ describe("listUpcoming — status grading", () => {
     expect(rows[0]?.status).toBe("delayed");
   });
 
+  it("grades exactly 2 poll intervals overdue as delayed (boundary)", async () => {
+    const rpc = new FakeGuardRpc();
+    scriptList(rpc, [schedule({ next_run_at: BigInt(NOW_SEC - 2 * DEFAULT_POLL_SECONDS) })]);
+    const rows = await listUpcoming(deps(rpc))({ now: NOW, timeZone: "UTC" });
+    expect(rows[0]?.status).toBe("delayed");
+  });
+
+  it("grades one second before 2 poll intervals overdue as due (boundary)", async () => {
+    const rpc = new FakeGuardRpc();
+    scriptList(rpc, [schedule({ next_run_at: BigInt(NOW_SEC - (2 * DEFAULT_POLL_SECONDS - 1)) })]);
+    const rows = await listUpcoming(deps(rpc))({ now: NOW, timeZone: "UTC" });
+    expect(rows[0]?.status).toBe("due");
+  });
+
   it("honours an injected poll interval", async () => {
     const rpc = new FakeGuardRpc();
     scriptList(rpc, [schedule({ next_run_at: BigInt(NOW_SEC - 10) })]);
@@ -157,6 +173,14 @@ describe("listUpcoming — input validation", () => {
     scriptList(rpc, []);
     const rows = await listUpcoming(deps(rpc))({ now: NOW, timeZone: "UTC" });
     expect(rows).toEqual([]);
+  });
+
+  it("translates a guard read failure through scheduleRefusalFromGuard", async () => {
+    const rpc = new FakeGuardRpc();
+    rpc.sims = [errSim("HostError: Error(Contract, #100)")];
+    const err = await refusalOf(() => listUpcoming(deps(rpc))({ now: NOW, timeZone: "UTC" }));
+    expect(err.code).toBe("guard_rule_missing");
+    expect(err.details?.guardErrorName).toBe("NotConfigured");
   });
 
   it("exposes the pinned USDC asset code and raw amount", async () => {

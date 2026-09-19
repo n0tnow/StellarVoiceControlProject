@@ -10,13 +10,26 @@
  *  - `finished`  — no runs left / inactive (defensive; `list_schedules`
  *                  normally omits these)
  *
+ * The design's **"failing/retrying"** status is intentionally not modelled:
+ * the contract exposes no on-chain failure signal (only `active` and
+ * `runs_left`), so a run that failed to settle is indistinguishable from a
+ * keeper that has not fired yet. The UI lane (T5) should read a long-`delayed`
+ * row as "possibly failing". No `getAllowance` read is needed here (this is a
+ * pure read), but `schedulePayment` requires it.
+ *
  * Sorted by next run (then id). The local time is rendered in the requested
  * IANA zone; the chain value itself is always UTC epoch seconds.
  */
 import { fromRawUnits } from "../guard/amount.ts";
 import type { Schedule } from "../guard/types.ts";
+import { DEFAULT_POLL_SECONDS } from "./constants.ts";
 import { ScheduleRefusal } from "./errors.ts";
-import { assertScheduleDeps, notConfigured, reverseAliases } from "./internal.ts";
+import {
+  assertScheduleDeps,
+  notConfigured,
+  reverseAliases,
+  scheduleRefusalFromGuard,
+} from "./internal.ts";
 import { formatInZone, intervalWords, isValidTimeZone } from "./time.ts";
 import { assetCodeFor } from "./view.ts";
 import type { ListUpcomingOptions, ScheduleDeps, UpcomingPayment } from "./types.ts";
@@ -61,7 +74,7 @@ export function listUpcoming(deps: ScheduleDeps): (options: unknown) => Promise<
   if (typeof deps.guard.listSchedules !== "function") {
     throw notConfigured("listUpcoming requires a guard client with listSchedules()");
   }
-  const pollSeconds = deps.pollSeconds ?? 15;
+  const pollSeconds = deps.pollSeconds ?? DEFAULT_POLL_SECONDS;
   if (typeof pollSeconds !== "number" || !Number.isFinite(pollSeconds) || pollSeconds <= 0) {
     throw new ScheduleRefusal("not_configured", "deps.pollSeconds must be a positive number");
   }
@@ -70,7 +83,12 @@ export function listUpcoming(deps: ScheduleDeps): (options: unknown) => Promise<
     const now = coerceNow(parsed.now);
     const nowSeconds = Math.floor(now.getTime() / 1000);
 
-    const schedules = await deps.guard.listSchedules(deps.ownerAddress);
+    let schedules: Schedule[];
+    try {
+      schedules = await deps.guard.listSchedules(deps.ownerAddress);
+    } catch (e) {
+      throw scheduleRefusalFromGuard(e);
+    }
     const aliases = reverseAliases(deps.aliases);
 
     return schedules

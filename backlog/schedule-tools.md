@@ -19,8 +19,9 @@
   intent text. Pre-checks run against the owner's on-chain rule, active-schedule count and the
   injected SAC-allowance reader, in the documented order.
 - All tests are offline (fake RPC, injected allowance reader/clock). No network calls.
-- **Gates green:** `check` clean; `test:schedule` **111/111**; full `test` =
-  keeper 67 + anchor 111 + payments 113 + guard 113 + schedule 111 = **515 tests, 0 failures**.
+- **Gates green (after review fixes):** `check` clean; `test:schedule` **121/121**; full `test` =
+  keeper 67 + anchor 111 + payments 113 + guard 133 + schedule 121 = **545 tests, 0 failures**
+  (guard grew to 133 after the branch was rebased onto the fixed guard client with its golden ABI test).
 
 ## Completed
 
@@ -33,11 +34,12 @@
 | `summary.ts` | `buildCreateScheduleSummary`, `buildCancelScheduleSummary` — decode the XDR and render the approval card |
 | `internal.ts` | dependency guards (`not_configured`), case-insensitive SAC lookup, guard-error → refusal mapping, own-key reverse alias map |
 | `view.ts` | `assetCodeFor`, `nextRunUtc`, `candidateFor` (shared by cancel + list) |
-| `schedulePayment.ts` | `schedulePayment(deps)(draft)`; `MAX_SCHEDULES = 25`, `DEFAULT_POLL_SECONDS = 15` |
+| `constants.ts` | `DEFAULT_POLL_SECONDS = 15` — shared by `schedulePayment` (export) and `listUpcoming` (default) |
+| `schedulePayment.ts` | `schedulePayment(deps)(draft)`; `MAX_SCHEDULES = 25` |
 | `cancelSchedule.ts` | `cancelSchedule(deps)({ id?, recipient?, which? })` |
 | `listUpcoming.ts` | `listUpcoming(deps)({ now?, timeZone })` |
 | `index.ts` | barrel for the `schedule` namespace |
-| `__tests__/` | `helpers.ts`, `time.test.ts` (24), `schedulePayment.test.ts` (47), `cancelSchedule.test.ts` (17), `listUpcoming.test.ts` (18) |
+| `__tests__/` | `helpers.ts`, `time.test.ts` (28), `schedulePayment.test.ts` (51), `cancelSchedule.test.ts` (17), `listUpcoming.test.ts` (21), `abi-golden.test.ts` (4) |
 
 ### Modified
 - `stellar/src/index.ts` — `export * as schedule from "./schedule/index.ts";` (nothing else).
@@ -52,9 +54,11 @@
 ## API table
 
 `Deps` = `{ ownerAddress, aliases, guard, assets, guardAssetContracts, networkPassphrase,
-explorerBase?, now?, txTimeoutSeconds?, pollSeconds?, getAllowance? }`. `guard` is a
+explorerBase?, now?, txTimeoutSeconds?, pollSeconds?, getAllowance }`. `guard` is a
 `createGuardClient` built with the deployed contract id (D9). `getAllowance(assetContractId)`
-is an optional injected SAC-allowance reader (the guard client itself cannot read allowances).
+is a **required** injected SAC-allowance reader (the guard client itself cannot read allowances):
+the SAC allowance is mandatory for every guard payment, so `schedulePayment` refuses
+`not_configured` when it is absent (defensive runtime check for plain-JS callers).
 
 | Tool | Chain call | Signer (tx source) | Returns |
 |---|---|---|---|
@@ -89,7 +93,7 @@ Draft → chain mapping: `repeat.every "day"` → `86400`; `"week"` → `604800`
 | `too_many_schedules` | ≥25 active (`TooManySchedules` #114) | checked via `list_schedules` (active only) |
 | `allowance_insufficient` | `available < amount × runs` | `details.neededRaw` / `availableRaw` |
 | `schedule_not_found` | no active schedule by id/recipient | |
-| `not_configured` | deps missing/null, no guard client | thrown at tool construction |
+| `not_configured` | deps missing/null, no guard client, no `getAllowance` reader | thrown at tool construction |
 
 `ScheduleAmbiguous` (`code: "schedule_ambiguous"`) is thrown with `candidates[]` when >1 active
 schedule matches a recipient and `which` was not given. Unmapped guard errors are rethrown as the
@@ -98,11 +102,25 @@ typed `GuardClientError` so the refusal-code set stays exactly the documented on
 ### Pre-check order (`schedulePayment`)
 local draft validation → time resolution → **1** rule exists → **2** asset allowed →
 **3** `amount ≤ per_tx_limit` → **4** active count `< 25` → **5** allowance `≥ amount × runs`
-→ build XDR. Each step short-circuits the later ones (covered by explicit order tests).
+(**mandatory**, XLM included; equality accepted, one raw unit less refused) → build XDR. Each
+step short-circuits the later ones (covered by explicit order tests).
 
-### Allowance / XLM note
-The allowance pre-check runs only when `deps.getAllowance` is injected; otherwise it is skipped
-(the guard client has no allowance method). For XLM the app may legitimately not inject it.
+### Allowance / XLM note (mandatory — review fix)
+The allowance pre-check runs for **every** `schedulePayment` call, XLM included. `deps.getAllowance`
+is **required** in `ScheduleDeps`; when a plain-JS caller omits it the tool refuses
+`not_configured` ("the SAC allowance is mandatory for every guard payment; inject getAllowance").
+Native XLM settles through the same SEP-41 `approve`/`transfer_from` path as any other SAC asset,
+so it is **not** exempt (design §2 normative rule, §11e). The old "skipped when not injected / XLM
+may skip" behaviour is removed.
+
+### Recurring `runs` omitted / status gap (review fix)
+- A `repeat` with `runs` omitted becomes **one** run (safe default, `interval_secs` still set).
+  The **AGENT layer** must first ask "for how many?" (design §11b) and pass an explicit `runs`; the
+  tool never assumes an open-ended/infinite repeat. (A one-shot with `runs > 1` is still refused.)
+- The design's `"failing/retrying"` UI status is **not modelled** here: the contract exposes no
+  on-chain failure signal (only `active` + `runs_left`), so a failed run cannot be distinguished
+  from a keeper that has not fired yet. `listUpcoming` grades `scheduled` / `due` / `delayed` /
+  `finished`; the UI lane (T5) should treat a long-`delayed` row as "possibly failing".
 
 ## DST behaviour table
 
@@ -131,18 +149,19 @@ Fall-back ambiguity is surfaced as a **warning** on the approval card, not a ref
 
 | File | Tests | Focus |
 |---|---|---|
-| `time.test.ts` | 24 | zone offsets, DST gap/overlap, past/lead, invalid input, `formatInZone`, `intervalWords` |
-| `schedulePayment.test.ts` | 47 | arg order + decoded summary, repeat/one-shot mapping, warnings, full refusal matrix, pre-check order, XLM, contract-id, allowance |
+| `time.test.ts` | 28 | zone offsets, DST gap/overlap, past/lead, invalid input, `formatInZone`, `intervalWords` |
+| `schedulePayment.test.ts` | 51 | arg order + decoded summary, repeat/one-shot mapping, warnings, full refusal matrix, pre-check order, XLM, contract-id, **mandatory allowance + boundary** |
 | `cancelSchedule.test.ts` | 17 | by id / recipient, ambiguity + `which`, refusals, inactive exclusion, contract-id |
-| `listUpcoming.test.ts` | 18 | view model, statuses with injected clock, poll override, sorting, validation |
-| **Total** | **111** | every XDR is decoded; no network |
+| `listUpcoming.test.ts` | 21 | view model, statuses with injected clock, poll override, **exact due/delayed boundary**, guard-error mapping, sorting, validation |
+| `abi-golden.test.ts` | 4 | `create_schedule` (one-shot, weekly 604800×8, u64/runs boundary) and `cancel_schedule` args byte-for-byte equal to `spec.funcArgsToScVals` from the committed guard fixture |
+| **Total** | **121** | every XDR is decoded; no network |
 
 ## Gates (final lines)
 
 - `npm run check -w @polaris/stellar` → clean (no `tsc` diagnostics).
-- `npm run test:schedule -w @polaris/stellar` → `Test Files 4 passed (4)` / `Tests 111 passed (111)`.
+- `npm run test:schedule -w @polaris/stellar` → `Test Files 5 passed (5)` / `Tests 121 passed (121)`.
 - `npm test -w @polaris/stellar` → keeper `tests 67 / pass 67 / fail 0`; anchor `111 passed`;
-  payments `113 passed`; guard `113 passed`; schedule `111 passed` (515 total, 0 failures).
+  payments `113 passed`; guard `133 passed`; schedule `121 passed` (545 total, 0 failures).
 
 ## Unfinished (handed off)
 - **Live run:** nothing here was submitted; the e2e "create → keeper fires → cancel" demo on
@@ -152,8 +171,9 @@ Fall-back ambiguity is surfaced as a **warning** on the approval card, not a ref
 - **UI "Upcoming payments":** `listUpcoming` provides the view models; the list + Cancel button
   are Owner A's (T5).
 - **Keeper hosting:** the "keeper online" dependency is warned about but not solved here (T6).
-- **Allowance reader wiring:** the app must inject `deps.getAllowance` (wire to
+- **Allowance reader wiring:** the app must inject the now-**required** `deps.getAllowance` (wire to
   `guard.getAllowance(rpc, { assetContractId, from: owner, spender: guard.contractId, ... })`).
+  `schedulePayment` refuses `not_configured` without it.
 
 ## Blockers
 - None for the offline scope. A live run needs a funded testnet owner/keeper and a deployed
@@ -161,8 +181,9 @@ Fall-back ambiguity is surfaced as a **warning** on the approval card, not a ref
 
 ## Review Notes
 - `ScheduleDraft` has no schema in `docs/approval-and-scheduling.md`; the shape here follows the
-  brief. **Assumption to confirm:** recurring `runs` defaults to 1 when omitted (safe: cannot
-  overspend). Monthly repeats intentionally refused (`unsupported_repeat`).
+  brief. Recurring `runs` defaults to 1 when omitted (safe: cannot overspend) — the AGENT must ask
+  "for how many?" first (design §11b); this is now documented in the tool doc comment. Monthly
+  repeats intentionally refused (`unsupported_repeat`).
 - `ScheduleAmbiguous` is a separate class (code `"schedule_ambiguous"`), not a `ScheduleRefusal`
   code, matching the brief's `(+ ScheduleAmbiguous)`.
 - `guard_client_error` was deliberately **not** added to the refusal union: unknown guard errors
@@ -176,3 +197,37 @@ Fall-back ambiguity is surfaced as a **warning** on the approval card, not a ref
 - Wire the app bootstrap (`defaultScheduleDeps`) to a real `Horizon`/guard client + allowance
   reader, then run the T6 testnet demo (create a schedule, watch the keeper fire ~15–25 s after
   due, cancel a second one by recipient). Then T5 renders `listUpcoming` with a Cancel button.
+
+## Review fixes (2026-09-19, W-T2, after `backlog/schedule-tools-review.md`)
+
+All eight items from the independent review are applied; `check` clean and the schedule suite grew
+from 111 to **121** (full `npm test -w @polaris/stellar` = **545**, 0 failures).
+
+1. **BLOCKING — mandatory allowance.** `ScheduleDeps.getAllowance` is now **required** at compile
+   time, and `schedulePayment` defensively refuses `ScheduleRefusal("not_configured")` with
+   *"the SAC allowance is mandatory for every guard payment; inject getAllowance"* when a JS caller
+   omits it. The `if (typeof deps.getAllowance === "function")` guard and the XLM exception are
+   gone; the check always runs. New tests: missing reader refused; `allowance == amount × runs`
+   accepted; `allowance == amount × runs − 1` refused (the mutation gap); XLM routed through the
+   same check (reader called with the XLM SAC and `allowance_insufficient` when short).
+2. **`DEFAULT_POLL_SECONDS` shared.** Moved to `stellar/src/schedule/constants.ts`; `listUpcoming`
+   imports and uses it (no more hard-coded `?? 15`), `index.ts` re-exports it from there.
+3. **`listUpcoming` guard-error mapping.** `listSchedules` is now wrapped in
+   `scheduleRefusalFromGuard` like the other tools; test: `Error(Contract, #100)` → `guard_rule_missing`
+   with `details.guardErrorName`.
+4. **`parseFirstRun` type-lies removed.** No `as never`; input is narrowed from `unknown` and any
+   non-string field is rejected as `invalid_time` before `resolveLocalTime` runs.
+5. **Exact delayed boundary tests.** Added exactly `2 × poll` overdue → `delayed` and
+   `2 × poll − 1` → `due` (default poll, via the shared constant).
+6. **Docs.** Tool doc comment + this report state that a `repeat` with `runs` omitted becomes
+   **one** run and the AGENT must ask "for how many?" (design §11b), and that the design's
+   `"failing/retrying"` status is not modelled (no on-chain failure signal; note for the UI lane).
+7. **Golden ABI for schedule calls.** New `stellar/src/schedule/__tests__/abi-golden.test.ts`
+   loads the guard's committed `polaris_guard.spec.json` (read-only, `fs`, test only) into
+   `contract.Spec` and asserts the `create_schedule` args from `schedulePayment` (one-shot; weekly
+   `604800`, runs 8; u64/runs boundary) and the `cancel_schedule` args from `cancelSchedule` are
+   byte-for-byte equal (base64 XDR) to `spec.funcArgsToScVals(...)`. The tool cannot reach
+   `first_run_at ≈ 2^53` (four-digit year input), so the boundary case uses the maximum accepted
+   (`9999-12-31 23:59` UTC) with `runs = 4294967295` (`U32_MAX`, accepted).
+8. **Per-file count table fixed** to the re-measured values: time 28, schedulePayment 51,
+   cancelSchedule 17, listUpcoming 21, abi-golden 4 = **121**.

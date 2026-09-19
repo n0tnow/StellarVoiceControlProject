@@ -31,6 +31,9 @@ export const ADA = PAYEE;
 
 export const NOW = new Date("2026-09-19T12:00:00.000Z");
 
+/** Generous default allowance so happy-path tests clear the mandatory check. */
+export const BIG_ALLOWANCE = 9_223_372_036_854_775_807n;
+
 export const ALIASES = {
   ada: { address: ADA, network: "testnet" as const },
 };
@@ -53,6 +56,7 @@ export function makeDeps(rpc: FakeGuardRpc, over: Partial<ScheduleDeps> = {}): S
     guardAssetContracts: { USDC: ASSET_SAC, XLM: XLM_SAC },
     networkPassphrase: TESTNET_PASSPHRASE,
     now: () => new Date(NOW),
+    getAllowance: async () => BIG_ALLOWANCE,
     ...over,
   };
 }

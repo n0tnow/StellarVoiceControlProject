@@ -41,7 +41,13 @@ export interface ScheduleDraft {
   firstRun: FirstRun;
   /** Absent = a one-shot (`interval_secs 0, runs 1`). */
   repeat?: Repeat;
-  /** Number of executions. Defaults to 1; for a one-shot it must be 1. */
+  /**
+   * Number of executions. Defaults to 1; for a one-shot it must be 1.
+   *
+   * A `repeat` with `runs` omitted becomes **one** run here; the AGENT layer
+   * must first ask "for how many?" (design §11b) — never assume an infinite or
+   * open-ended repeat.
+   */
   runs?: number;
 }
 
@@ -80,12 +86,14 @@ export interface ScheduleDeps {
   /** Keeper poll interval used to grade "due" vs "delayed" (default 15 s). */
   pollSeconds?: number;
   /**
-   * Optional SEP-41 allowance reader for the asset's SAC. When absent the
-   * allowance pre-check is skipped (the guard client itself cannot read it).
-   * The app wires this to `getAllowance(rpc, { assetContractId, from: owner,
-   * spender: guard.contractId, networkPassphrase })`.
+   * SEP-41 allowance reader for the asset's SAC. **Mandatory**: the SAC
+   * allowance (`approve(owner -> guard)`) is required for EVERY guard payment,
+   * including schedule runs and XLM (all settle through `transfer_from`), so
+   * `schedulePayment` cannot pre-check without it. The app wires this to
+   * `getAllowance(rpc, { assetContractId, from: owner, spender:
+   * guard.contractId, networkPassphrase })`.
    */
-  getAllowance?: (assetContractId: string) => Promise<bigint>;
+  getAllowance: (assetContractId: string) => Promise<bigint>;
 }
 
 /** Result of building an unsigned `create_schedule` call. */
@@ -129,6 +137,13 @@ export interface UpcomingPayment {
   nextRunLocal: string;
   runsLeft: number;
   intervalWords: string;
+  /**
+   * `scheduled` / `due` / `delayed` / `finished` only. The design's
+   * "failing/retrying" status is **not modelled**: the contract exposes no
+   * on-chain failure signal (only an active flag and `runs_left`), so a failed
+   * run is indistinguishable from a keeper that has not fired yet. The UI lane
+   * (T5) must treat a long-`delayed` row as "possibly failing" instead.
+   */
   status: "scheduled" | "due" | "delayed" | "finished";
 }
 

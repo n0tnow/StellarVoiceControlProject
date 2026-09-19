@@ -11,6 +11,7 @@ import {
   GUARD_ID_2,
   OWNER,
   RULE,
+  XLM_SAC,
   FakeGuardRpc,
   baseDraft,
   errSim,
@@ -135,11 +136,37 @@ describe("schedulePayment — happy paths and decoded XDR", () => {
     expect(invokedCall(res.unsignedXdr).name).toBe("create_schedule");
   });
 
-  it("skips the allowance pre-check when no reader is injected", async () => {
+  it("accepts an allowance exactly equal to amount × runs (boundary)", async () => {
     const rpc = new FakeGuardRpc();
     scriptCreate(rpc);
-    const res = await schedulePayment(deps(rpc))(baseDraft());
-    expect(res.unsignedXdr).toMatch(/^[A-Za-z0-9+/=]+$/);
+    const res = await schedulePayment(
+      deps(rpc, { getAllowance: async () => 4_000_000000n }),
+    )(baseDraft({ repeat: { every: "week" }, runs: 8 }));
+    expect(invokedCall(res.unsignedXdr).name).toBe("create_schedule");
+  });
+
+  it("refuses an allowance one raw unit short of amount × runs (boundary)", async () => {
+    const rpc = new FakeGuardRpc();
+    scriptCreate(rpc);
+    const err = await refusalOf(() =>
+      schedulePayment(deps(rpc, { getAllowance: async () => 3_999_999999n }))(
+        baseDraft({ repeat: { every: "week" }, runs: 8 }),
+      ),
+    );
+    expect(err.code).toBe("allowance_insufficient");
+    expect(err.details?.neededRaw).toBe(4_000_000000n);
+    expect(err.details?.availableRaw).toBe(3_999_999999n);
+  });
+
+  it("refuses with not_configured when the allowance reader is missing", () => {
+    const err = syncRefusal(() => {
+      const d = makeDeps(new FakeGuardRpc()) as unknown as { getAllowance?: unknown };
+      delete d.getAllowance;
+      schedulePayment(d as never);
+    });
+    expect(err.code).toBe("not_configured");
+    expect(err.message).toContain("SAC allowance is mandatory");
+    expect(err.message).toContain("getAllowance");
   });
 
   it("schedules XLM when its SAC id is configured and allowed", async () => {
@@ -149,6 +176,24 @@ describe("schedulePayment — happy paths and decoded XDR", () => {
     const args = invokedCall(res.unsignedXdr).args.map((a) => scValToNative(a));
     expect(args[2]).toBe(GUARD_ID_2);
     expect(res.summary.lines).toContain("Per run: 5 XLM");
+  });
+
+  it("runs the mandatory allowance check for XLM too (no exemption)", async () => {
+    const rpc = new FakeGuardRpc();
+    scriptCreate(rpc, { rule: { ...RULE, allowed_assets: [XLM_SAC] } });
+    const seen: string[] = [];
+    const err = await refusalOf(() =>
+      schedulePayment(
+        deps(rpc, {
+          getAllowance: async (sac: string) => {
+            seen.push(sac);
+            return 0n;
+          },
+        }),
+      )(baseDraft({ asset: "XLM", amount: "5" })),
+    );
+    expect(err.code).toBe("allowance_insufficient");
+    expect(seen).toEqual([XLM_SAC]);
   });
 
   it("refuses XLM when no SAC id is configured for it", async () => {

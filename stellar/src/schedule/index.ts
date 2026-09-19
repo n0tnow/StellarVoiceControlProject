@@ -10,11 +10,8 @@
  * The guard contract id is always a parameter (via the injected client), never
  * a constant here (decision D9).
  */
-export {
-  DEFAULT_POLL_SECONDS,
-  MAX_SCHEDULES,
-  schedulePayment,
-} from "./schedulePayment.ts";
+export { DEFAULT_POLL_SECONDS } from "./constants.ts";
+export { MAX_SCHEDULES, schedulePayment } from "./schedulePayment.ts";
 export { cancelSchedule } from "./cancelSchedule.ts";
 export { listUpcoming } from "./listUpcoming.ts";
 export { formatInZone, intervalWords, isValidTimeZone, resolveLocalTime } from "./time.ts";

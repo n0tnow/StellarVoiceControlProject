@@ -7,9 +7,14 @@
  *  - The recipient is resolved ONLY through the alias book; raw `G...`
  *    addresses are refused (same rule as `payments`).
  *  - Pre-checks run against the owner's on-chain rule, their active schedule
- *    count and (when an allowance reader is injected) the SAC allowance.
+ *    count and the **mandatory** SAC allowance (`deps.getAllowance` is
+ *    required; design §2 normative rule — every guard payment, schedule runs
+ *    and XLM included, settles through `transfer_from`).
  *  - Warnings never block: F-03 recipient rules, DST ambiguity, a per-run
  *    amount at/above the daily limit, and the keeper dependency.
+ *
+ * A `repeat` with `runs` omitted becomes **one** run (safe default); the AGENT
+ * layer must ask "for how many?" first (design §11b).
  */
 import type { AssetSpec } from "../payments/assets.ts";
 import { resolveAlias } from "../payments/aliases.ts";
@@ -26,8 +31,6 @@ import type { ScheduleDeps, SchedulePaymentResult, FirstRun } from "./types.ts";
 
 /** Max active schedules per owner (contract `TooManySchedules`, #114). */
 export const MAX_SCHEDULES = 25;
-/** Default keeper poll interval (seconds); drives the due/delayed grading. */
-export const DEFAULT_POLL_SECONDS = 15;
 
 /** 1-7 fraction digits, at most 12 integer digits, no sign/exponent/whitespace. */
 const AMOUNT_RE = /^\d{1,12}(\.\d{1,7})?$/;
@@ -81,11 +84,14 @@ function parseFirstRun(value: unknown): FirstRun {
     );
   }
   const first = value as Record<string, unknown>;
-  return {
-    localDate: typeof first.localDate === "string" ? first.localDate : (first.localDate as never),
-    localTime: typeof first.localTime === "string" ? first.localTime : (first.localTime as never),
-    timeZone: typeof first.timeZone === "string" ? first.timeZone : (first.timeZone as never),
-  };
+  const { localDate, localTime, timeZone } = first;
+  if (typeof localDate !== "string" || typeof localTime !== "string" || typeof timeZone !== "string") {
+    throw new ScheduleRefusal(
+      "invalid_time",
+      `firstRun must have string localDate, localTime and timeZone, got ${JSON.stringify(value)}`,
+    );
+  }
+  return { localDate, localTime, timeZone };
 }
 
 interface IntervalResolution {
@@ -224,6 +230,14 @@ export function schedulePayment(deps: ScheduleDeps): (draft: unknown) => Promise
   if (typeof deps.guard.createSchedule !== "function") {
     throw new ScheduleRefusal("not_configured", "schedulePayment requires a guard client with createSchedule()");
   }
+  // The SAC allowance is mandatory for every guard payment; this defensive
+  // runtime check covers plain-JS callers that bypass the required TS field.
+  if (typeof deps.getAllowance !== "function") {
+    throw new ScheduleRefusal(
+      "not_configured",
+      "the SAC allowance is mandatory for every guard payment; inject getAllowance",
+    );
+  }
   return async (draft: unknown): Promise<SchedulePaymentResult> => {
     const parsed = parseDraft(deps, draft);
 
@@ -279,20 +293,18 @@ export function schedulePayment(deps: ScheduleDeps): (draft: unknown) => Promise
     }
 
     const neededRaw = parsed.amountRaw * BigInt(parsed.runs);
-    if (typeof deps.getAllowance === "function") {
-      let availableRaw: bigint;
-      try {
-        availableRaw = await deps.getAllowance(parsed.assetSac);
-      } catch (e) {
-        throw scheduleRefusalFromGuard(e);
-      }
-      if (availableRaw < neededRaw) {
-        throw new ScheduleRefusal(
-          "allowance_insufficient",
-          `the SAC allowance is ${availableRaw} raw units but this schedule needs ${neededRaw}; approve a larger allowance first`,
-          { neededRaw, availableRaw, assetSac: parsed.assetSac },
-        );
-      }
+    let availableRaw: bigint;
+    try {
+      availableRaw = await deps.getAllowance(parsed.assetSac);
+    } catch (e) {
+      throw scheduleRefusalFromGuard(e);
+    }
+    if (availableRaw < neededRaw) {
+      throw new ScheduleRefusal(
+        "allowance_insufficient",
+        `the SAC allowance is ${availableRaw} raw units but this schedule needs ${neededRaw}; approve a larger allowance first`,
+        { neededRaw, availableRaw, assetSac: parsed.assetSac },
+      );
     }
 
     // -- build the unsigned invocation -------------------------------------
