@@ -3,7 +3,8 @@
   "compilerOptions": {
     "lib": ["ES2023"],
     "types": ["node"],
-    "allowImportingTsExtensions": true
+    "allowImportingTsExtensions": true,
+    "erasableSyntaxOnly": true
   },
   "include": ["src/**/*.ts"]
 }

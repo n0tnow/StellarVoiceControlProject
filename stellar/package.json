@@ -10,8 +10,9 @@
   "types": "./src/index.ts",
   "scripts": {
     "check": "tsc -p tsconfig.json",
-    "test": "vitest run",
-    "anchor:e2e": "tsx src/anchor/e2e.ts"
+    "test": "npm run test:anchor",
+    "test:anchor": "vitest run src/anchor",
+    "anchor:e2e": "node src/anchor/e2e.ts"
   },
   "dependencies": {
     "@polaris/interfaces": "*",
@@ -19,7 +20,6 @@
     "smol-toml": "^1.8.0"
   },
   "devDependencies": {
-    "tsx": "^4.23.13",
     "vitest": "^5.0.1"
   }
 }
