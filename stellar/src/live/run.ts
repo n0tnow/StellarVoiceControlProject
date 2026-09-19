@@ -479,6 +479,10 @@ function runPlan(config: LiveConfig): string {
     "  scenarios      S0 setup, S1 baseline, S2 alias, S3 direct, S4 pay_owner,",
     "                 S5 over-limit, S6 enable auto-pay, S7 auto route, S8 schedule,",
     "                 S9 cancel, S10 disable+tighten, S11 allowance boundary",
+    "",
+    "  NOT idempotent: the scenario assertions assume the fresh S0 baseline",
+    "  (empty rule/executor, untouched balances). A second `e2e:run --live`",
+    "  without a fresh `e2e:setup --reset --live` will fail mid-way by design.",
   ].join("\n");
 }
 

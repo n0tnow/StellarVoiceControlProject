@@ -4,9 +4,28 @@
  * Secrets live ONLY here, in `~/.polaris-e2e/keys.json` (dir `0700`, file
  * `0600`). Nothing else in the repo is read: not `~/.config/stellar`, not the
  * `stellar` CLI keystore, not any `.env`. Callers print public keys only.
+ *
+ * Hardening (review COR-2 + non-blocking #4/#5):
+ *   - permissions are repaired on load, but never *through* a symlink
+ *     (`lstat` guard) so a symlinked key path cannot chmod its target;
+ *   - writes are atomic: a `0600` temp file in the same directory is written,
+ *     `fsync`ed and renamed over the destination, so a crash cannot truncate
+ *     the previous `keys.json`.
  */
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import {
+  chmodSync,
+  closeSync,
+  existsSync,
+  fsyncSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  unlinkSync,
+  writeSync,
+} from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { Keypair } from "@stellar/stellar-sdk";
 
 export type KeyRole = "owner" | "executor" | "recipient" | "issuer" | "keeper";
@@ -32,13 +51,14 @@ export interface KeysFile {
   asset?: AssetRecord;
 }
 
+export interface LoadKeysOptions {
+  reset?: boolean;
+  /** Sink for permission-repair warnings (tests inject). Defaults to stderr. */
+  warn?: (message: string) => void;
+}
+
 const SECRET_RE = /^S[A-Z2-7]{55}$/;
 const PUBLIC_RE = /^G[A-Z2-7]{55}$/;
-
-/** Always mask a secret in any output. */
-export function maskSecret(): string {
-  return "S****";
-}
 
 /** Generate one fresh keypair. */
 export function generateKey(): KeyMaterial {
@@ -50,15 +70,51 @@ export function generateKey(): KeyMaterial {
  * Load the key file, or generate a complete fresh set. `reset: true` always
  * regenerates (dropping the previous asset record) so a run can start clean.
  */
-export function loadOrCreateKeys(path: string, opts: { reset?: boolean } = {}): KeysFile {
+export function loadOrCreateKeys(path: string, opts: LoadKeysOptions = {}): KeysFile {
   if (!opts.reset && existsSync(path)) {
     const parsed = JSON.parse(readFileSync(path, "utf8")) as KeysFile;
     validateKeys(parsed);
+    // Review COR-2: repair (and fail loudly on) wrong permissions on load, not
+    // just on write, so a pre-existing `keys.json` can never stay world-readable.
+    repairPermissions(path, opts.warn);
     return parsed;
   }
   const file = newKeysFile();
   writeKeys(path, file);
   return file;
+}
+
+function isSymlink(path: string): boolean {
+  try {
+    return lstatSync(path).isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+function warnToStderr(message: string): void {
+  process.stderr.write(`${message}\n`);
+}
+
+/**
+ * Enforce dir `0700` / file `0600`; throws if either cannot be repaired.
+ *
+ * A symlinked file or directory is never chmodded (review non-blocking #4):
+ * following the link would silently change the permissions of whatever it
+ * points at, so we skip with a warning instead.
+ */
+export function repairPermissions(path: string, warn: (message: string) => void = warnToStderr): void {
+  const dir = dirname(path);
+  if (isSymlink(path)) {
+    warn(`refusing to repair permissions through a symlinked keys file: ${path}`);
+    return;
+  }
+  if (isSymlink(dir)) {
+    warn(`refusing to chmod a symlinked keys directory: ${dir}`);
+  } else {
+    chmodSync(dir, 0o700);
+  }
+  chmodSync(path, 0o600);
 }
 
 export function newKeysFile(now: () => Date = () => new Date()): KeysFile {
@@ -67,12 +123,34 @@ export function newKeysFile(now: () => Date = () => new Date()): KeysFile {
   return { version: 1, network: "testnet", createdAt: now().toISOString(), keys };
 }
 
-/** Persist with the required permissions, creating the directory as needed. */
+/**
+ * Atomically persist with the required permissions, creating the directory as
+ * needed. The JSON is written to a `0600` temp file in the same directory,
+ * `fsync`ed, then renamed over the destination (review non-blocking #5).
+ */
 export function writeKeys(path: string, file: KeysFile): void {
   const dir = dirname(path);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
-  chmodSync(dir, 0o700);
-  writeFileSync(path, `${JSON.stringify(file, null, 2)}\n`, { mode: 0o600 });
+  if (!isSymlink(dir)) chmodSync(dir, 0o700);
+  const tmp = join(dir, `.${basename(path)}.${process.pid}.${Date.now()}.tmp`);
+  const fd = openSync(tmp, "w", 0o600);
+  try {
+    writeSync(fd, `${JSON.stringify(file, null, 2)}\n`);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+  chmodSync(tmp, 0o600);
+  try {
+    renameSync(tmp, path);
+  } catch (e) {
+    try {
+      unlinkSync(tmp);
+    } catch {
+      // Best effort cleanup; the original error is the one that matters.
+    }
+    throw e;
+  }
   chmodSync(path, 0o600);
 }
 

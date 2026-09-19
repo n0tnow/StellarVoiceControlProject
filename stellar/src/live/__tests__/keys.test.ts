@@ -1,13 +1,22 @@
-import { mkdtempSync, rmSync, statSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+} from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   KEY_ROLES,
   keypairOf,
   loadOrCreateKeys,
-  maskSecret,
   newKeysFile,
   publicAddresses,
+  repairPermissions,
   writeKeys,
 } from "../keys.ts";
 
@@ -56,11 +65,55 @@ describe("key store", () => {
     expect(after.asset).toBeUndefined();
   });
 
-  it("exposes only public addresses and masks secrets", () => {
+  it("exposes only public addresses", () => {
     const file = loadOrCreateKeys(path);
     const addresses = publicAddresses(file);
     expect(Object.keys(addresses).sort()).toEqual([...KEY_ROLES].sort());
     expect(Object.values(addresses).every((a) => /^G/.test(a))).toBe(true);
-    expect(maskSecret()).toBe("S****");
+  });
+
+  it("repairs wrong permissions on load (review COR-2)", () => {
+    const target = join(dir, "repair", "keys.json");
+    writeKeys(target, newKeysFile());
+    chmodSync(join(dir, "repair"), 0o777);
+    chmodSync(target, 0o644);
+    loadOrCreateKeys(target);
+    expect(statSync(join(dir, "repair")).mode & 0o777).toBe(0o700);
+    expect(statSync(target).mode & 0o777).toBe(0o600);
+  });
+
+  it("writes atomically and leaves no temp file behind (non-blocking #5)", () => {
+    const atomicDir = join(dir, "atomic");
+    const target = join(atomicDir, "keys.json");
+    writeKeys(target, newKeysFile());
+    expect(readdirSync(atomicDir)).toEqual(["keys.json"]);
+    expect(statSync(target).mode & 0o777).toBe(0o600);
+    expect((JSON.parse(readFileSync(target, "utf8")) as { version: number }).version).toBe(1);
+  });
+
+  it("refuses to chmod through a symlinked key file (non-blocking #4)", () => {
+    const realDir = join(dir, "symlink-real");
+    mkdirSync(realDir, { recursive: true });
+    const real = join(realDir, "keys.json");
+    writeKeys(real, newKeysFile());
+    chmodSync(real, 0o644);
+
+    const linkDir = join(dir, "symlink-link");
+    mkdirSync(linkDir, { recursive: true });
+    const link = join(linkDir, "keys.json");
+    symlinkSync(real, link);
+
+    const warnings: string[] = [];
+    repairPermissions(link, (message) => warnings.push(message));
+    // The symlink target keeps its (wrong) mode; nothing was chmodded through it.
+    expect(statSync(real).mode & 0o777).toBe(0o644);
+    expect(warnings.join("\n")).toMatch(/symlink/i);
+
+    // The same guard holds on the load path (`loadOrCreateKeys`).
+    const moreWarnings: string[] = [];
+    const loaded = loadOrCreateKeys(link, { warn: (message) => moreWarnings.push(message) });
+    expect(loaded.network).toBe("testnet");
+    expect(statSync(real).mode & 0o777).toBe(0o644);
+    expect(moreWarnings.join("\n")).toMatch(/symlink/i);
   });
 });
