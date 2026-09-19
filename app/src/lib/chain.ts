@@ -12,15 +12,26 @@
  * total over the current `IntentKind` union minus `raw_tx` (which has no
  * dedicated tool and therefore settles as `unsupported`).
  *
- * The approver is the clearly named A9 placeholder (auto-approve), **not** Touch
- * ID. Replacing it with the biometric gate is the only change needed to activate
- * the real approval flow; see `agent/src/execution.ts` for the seam contract.
+ * The approver is **fail-closed by default**: a deny-all gate, not Touch ID.
+ * Auto-approval is reachable only by explicitly setting
+ * `POLARIS_ALLOW_AUTO_APPROVE=1` (for the stubbed demo); otherwise no chain tool
+ * can run without a real gesture. Replacing the selection below with the
+ * biometric gate is the only change needed to activate the real approval flow;
+ * see `agent/src/execution.ts` for the seam contract and its M6 scope note
+ * (intent-level gating only, not the post-tool approval card).
  */
-import { createAutoApprovalPlaceholder, executeIntent, type ExecutionOutcome } from "@polaris/agent";
+import { executeIntent, resolveApprover, type ExecutionOutcome } from "@polaris/agent";
 import type { Intent } from "@polaris/interfaces";
 
-/** The single object to replace when Touch ID lands (separate milestone). */
-const approver = createAutoApprovalPlaceholder();
+/**
+ * The single selection to replace when Touch ID lands (separate milestone).
+ *
+ * Defaults to fail closed. `POLARIS_ALLOW_AUTO_APPROVE=1` opts into the loud
+ * auto-approval placeholder, which is safe only while the chain tools are
+ * stubs; it exists so the stubbed demo can reach the execution seam. This is a
+ * non-secret flag, exposed to the webview by the Vite `envPrefix`.
+ */
+const approver = resolveApprover(import.meta.env.POLARIS_ALLOW_AUTO_APPROVE === "1");
 
 /**
  * Executes one approved intent down the single seam.

@@ -21,7 +21,7 @@ export default defineConfig({
   // to the webview. The agent credential is never exposed to the webview: the
   // provider call runs in Rust (`agent_chat`), which reads the key itself.
   envDir: rootDir,
-  envPrefix: ["VITE_", "TAURI_ENV_", "POLARIS_AGENT_MODEL"],
+  envPrefix: ["VITE_", "TAURI_ENV_", "POLARIS_AGENT_MODEL", "POLARIS_ALLOW_AUTO_APPROVE"],
 
   resolve: {
     alias: {

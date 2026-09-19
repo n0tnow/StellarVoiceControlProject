@@ -12,8 +12,10 @@ export { createEventBus, PolarisEventBus, type PolarisEventHandler } from "./eve
 export { AgentError, isAgentError, toAgentError, type AgentErrorKind } from "./errors.ts";
 export {
   createAutoApprovalPlaceholder,
+  createDenyApprover,
   executeIntent,
   isNotImplementedError,
+  resolveApprover,
   type ApprovalDecision,
   type ChainToolSet,
   type ExecuteIntentOptions,

@@ -18,21 +18,40 @@
  * ## The approval gate
  *
  * An explicit seam sits between "intent produced" and "chain tool called"
- * ([`IntentApprover`]). The Touch ID approval flow (a separate milestone) drops
- * in here without reshaping anything: it only has to replace the placeholder
- * approver with one that presents the approval card and awaits the biometric.
- * When an approver denies, the chain tool is **never called** — that ordering is
- * pinned by a test.
+ * ([`IntentApprover`]). When an approver denies, the chain tool is **never
+ * called** — that ordering is pinned by a test.
+ *
+ * **Fail-closed by default.** The composition root must choose the approver
+ * explicitly; [`resolveApprover`] returns a deny-all gate unless auto-approval
+ * was opted into, so a real value-moving `ChainTool` can never execute by
+ * accident. [`createAutoApprovalPlaceholder`] is a loud stand-in for the stubbed
+ * demo only and is never the default.
+ *
+ * **Scope of the biometric drop-in (M6).** The approver receives only the
+ * `Intent`. That is enough for *intent-level* gating — approve or deny before
+ * any chain work — which is what this seam provides, and a Touch ID gate can
+ * implement it as-is. It is **not** enough for the card-level approval the UI
+ * ultimately wants: the confirmation card also needs post-tool material
+ * (`summary` + `payloadHash`, see `PolarisEvent::approval_request` in
+ * `@polaris/interfaces`), which does not exist until the tool has built the
+ * unsigned XDR. Card-level approval therefore needs a second, post-tool phase
+ * that this seam does not implement yet; the placeholder must not be described
+ * as a full drop-in for it.
  *
  * ## Unimplemented chain tools are an expected state, not a crash
  *
  * Owner B's `sendPayment`, `swap` and `guardPolicy` currently throw
- * `NotImplementedError`. That is the normal state today, so it is modelled
- * explicitly as [`ExecutionOutcome.status`] `"unavailable"` with a short,
- * user-safe label — the notch says plainly that the chain step is not wired yet
- * and settles, rather than showing an error or hanging. The detection is
- * structural (`name === "NotImplementedError"`) on purpose: it keeps this module
- * independent of the chain package, matching the error's own contract.
+ * `NotImplementedError`. That is the normal state for those three, so it is
+ * modelled explicitly as [`ExecutionOutcome.status`] `"unavailable"` with a
+ * short, user-safe label — the notch says plainly that the chain step is not
+ * wired yet and settles, rather than showing an error or hanging. The detection
+ * is structural (`name === "NotImplementedError"`) on purpose: it keeps this
+ * module independent of the chain package, matching the error's own contract.
+ *
+ * `depositTry` is **not** a stub (M8): with no anchor configured it throws a
+ * plain error (reported as `"failed"` / `Chain error`), and with one configured
+ * it builds the unsigned trustline or SEP-10 login XDR (reported as
+ * `"executed"`). It never submits, so nothing reaches the network from here.
  */
 import type { ChainTool, ChainToolResult, Intent, IntentKind } from "@polaris/interfaces";
 
@@ -48,24 +67,32 @@ export interface ApprovalDecision {
 }
 
 /**
- * The approval gate. Owner A's Touch ID flow implements this; today the shell
- * passes the clearly named placeholder below.
+ * The approval gate. Owner A's Touch ID flow implements this.
+ *
+ * It is an **intent-level** gate: it sees the `Intent` and nothing else, so it
+ * can approve or deny before any chain work. A card-level approval (post-tool
+ * `summary` + `payloadHash`) is a separate phase this interface does not carry;
+ * see the module header (M6).
  *
  * Implementations must not perform chain work — they only decide. The chain tool
- * is called here only after `approved: true`.
+ * is called here only after `approved: true`. Implementations **may throw** (for
+ * example a biometric error); `executeIntent` maps that to a labelled failure
+ * instead of letting it escape.
  */
 export interface IntentApprover {
   approve(intent: Intent): Promise<ApprovalDecision>;
 }
 
 /**
- * Development placeholder — **not** Touch ID.
+ * Development placeholder — **not** Touch ID. It approves unconditionally.
  *
- * This exists so the execution path is real end to end while the biometric
- * milestone is pending. It approves unconditionally and says so on the console;
- * because every `ChainTool` on `main` still throws `NotImplementedError`, no
- * value can move while it is in place. The Touch ID approver replaces this single
- * object in the composition root (`app/src/lib/chain.ts`).
+ * This exists so the execution path is real end to end for the stubbed demo, and
+ * it is **never** the default: a composition root installs it only through
+ * [`resolveApprover`] with an explicit opt-in. It was harmless while every tool
+ * threw `NotImplementedError`, but `depositTry` is already real and any of
+ * `sendPayment`, `swap` or `guardPolicy` may stop throwing at any time — at
+ * which point an auto-approver would move value without a user gesture. Keeping
+ * it opt-in is what makes that unreachable by accident.
  */
 export function createAutoApprovalPlaceholder(): IntentApprover {
   return {
@@ -77,6 +104,37 @@ export function createAutoApprovalPlaceholder(): IntentApprover {
       return { approved: true };
     },
   };
+}
+
+/**
+ * The safe default: deny everything until a real gate is installed.
+ *
+ * Used whenever auto-approval was not explicitly opted into, so a value-moving
+ * `ChainTool` cannot run without a deliberate decision (M5).
+ */
+export function createDenyApprover(
+  reason = "the approval gate is not configured",
+): IntentApprover {
+  return {
+    async approve(intent: Intent): Promise<ApprovalDecision> {
+      console.warn(
+        `[polaris] refusing to approve a "${intent.kind}" intent: ${reason} ` +
+          `(the Touch ID approver is a later milestone)`,
+      );
+      return { approved: false, reason };
+    },
+  };
+}
+
+/**
+ * Selects the approver for a composition root. **Fail-closed by default**: only
+ * an explicit `autoApprove === true` installs the auto-approving placeholder;
+ * everything else gets the deny-all gate, so the dangerous wiring cannot be
+ * reached by forgetting a flag (M5). The caller reads the flag from an explicit
+ * opt-in (see `app/src/lib/chain.ts`), never from an implicit default.
+ */
+export function resolveApprover(autoApprove: boolean): IntentApprover {
+  return autoApprove ? createAutoApprovalPlaceholder() : createDenyApprover();
 }
 
 /* ------------------------------------------------------------------ *
@@ -129,10 +187,12 @@ function detailOf(error: unknown): string {
  * - `unsupported` — no chain tool is registered for this intent kind.
  * - `rejected` — the approver denied; the tool was not called.
  * - `unavailable` — the tool exists but is not wired yet (`NotImplementedError`).
- * - `failed` — the tool threw anything else.
+ * - `failed` — the approver threw, or the tool threw anything else.
  * - `executed` — the tool returned an unsigned XDR + summary.
  *
- * Never throws: callers get a labelled outcome they can render or settle.
+ * Never throws: a throwing approver (the realistic Touch ID error/cancel shape)
+ * is caught and returned as a labelled `failed` outcome, exactly like a tool
+ * failure, so callers always get something they can render or settle.
  */
 export async function executeIntent(
   intent: Intent,
@@ -148,7 +208,20 @@ export async function executeIntent(
     };
   }
 
-  const decision = await options.approver.approve(intent);
+  let decision: ApprovalDecision;
+  try {
+    decision = await options.approver.approve(intent);
+  } catch (error) {
+    // A biometric gate may reject or error by throwing (cancel, hardware
+    // failure). That must not escape the seam: map it to a labelled outcome so
+    // the shell can settle the turn instead of hitting its generic catch.
+    return {
+      status: "failed",
+      intent,
+      label: "Approval error",
+      detail: detailOf(error),
+    };
+  }
   if (!decision.approved) {
     return {
       status: "rejected",
