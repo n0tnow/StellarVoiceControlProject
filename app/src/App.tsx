@@ -4,6 +4,7 @@ import type { AgentStage, CaptureStatus, NotchGeometry } from "@polaris/interfac
 
 import { AgentTrace } from "@/components/AgentTrace";
 import { runAgentTurn, subscribeAgentEvents, type AgentRun } from "@/lib/agent";
+import { speakTurnResult } from "@/lib/speech";
 import {
   getCaptureStatus,
   getHotkeyPermission,
@@ -122,7 +123,12 @@ export default function App() {
       setAgentRun(null);
       void runAgentTurn(transcript)
         .then((run) => {
-          if (!disposed) setAgentRun(run);
+          if (disposed) return;
+          // Show the result first, then speak: `speakTurnResult` returns
+          // immediately and the audio arrives when Fish/local is ready, so a
+          // slow TTS backend never delays the transcript or the intent.
+          setAgentRun(run);
+          if (run.ok) speakTurnResult(run.outcome);
         })
         .finally(() => {
           agentBusyRef.current = false;
