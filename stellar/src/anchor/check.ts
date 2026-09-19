@@ -37,6 +37,15 @@ import type { AnchorContext, AnchorToml, FetchLike } from "./types.ts";
 
 export const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 
+/**
+ * The mandatory closing line for the NON-TR (SDF) scenario. It must be printed
+ * on EVERY SDF outcome, including a discovery failure: the whole point of the
+ * scenario is that a deposit stops at SEP-12 KYC, so the boundary is never
+ * dependent on the network succeeding.
+ */
+export const SDF_KYC_FINAL_LINE =
+  "Deposit is not attempted: this anchor requires SEP-12 KYC fields (first_name, last_name, email_address)";
+
 export interface PlannedStep {
   name: string;
   detail: string;
@@ -139,6 +148,7 @@ export function summarizeInfoAssets(value: unknown): string {
     const i = info as Record<string, unknown>;
     const fields = [
       `enabled=${i.enabled === true}`,
+      `auth=${authFlag(i.authentication_required)}`,
       `min=${typeof i.min_amount === "number" ? i.min_amount : "absent"}`,
       `max=${typeof i.max_amount === "number" ? i.max_amount : "absent"}`,
       `fee_percent=${typeof i.fee_percent === "number" ? i.fee_percent : "absent"}`,
@@ -147,6 +157,13 @@ export function summarizeInfoAssets(value: unknown): string {
     parts.push(`${code}(${fields.join(", ")})`);
   }
   return parts.length > 0 ? parts.join("; ") : "none";
+}
+
+/** `true` / `false` when the anchor set a boolean flag, `absent` otherwise. */
+function authFlag(value: unknown): "true" | "false" | "absent" {
+  if (value === true) return "true";
+  if (value === false) return "false";
+  return "absent";
 }
 
 /** True when the failure looks like "this anchor needs the account to exist first". */
@@ -179,7 +196,9 @@ async function runScenarioLive(
     steps.push({ name: "SEP-1 discovery", status: "FAIL", detail: message(e) });
     steps.push({ name: "SEP-6 /info", status: "SKIP", detail: "skipped: no stellar.toml" });
     steps.push({ name: "SEP-10 login", status: "SKIP", detail: "skipped: no stellar.toml" });
-    return { scenario, homeDomain, steps };
+    const failed: ScenarioResult = { scenario, homeDomain, steps };
+    if (scenario.id === "sdf-test") failed.finalLine = SDF_KYC_FINAL_LINE;
+    return failed;
   }
 
   try {
@@ -188,7 +207,7 @@ async function runScenarioLive(
       name: "SEP-6 /info",
       status: "PASS",
       detail:
-        `authentication_required=${raw.authentication_required === true}; ` +
+        `authentication_required(top)=${authFlag(raw.authentication_required)}; ` +
         `deposit: ${summarizeInfoAssets(raw.deposit)}; withdraw: ${summarizeInfoAssets(raw.withdraw)}`,
     });
   } catch (e) {
@@ -226,8 +245,7 @@ async function runScenarioLive(
 
   const result: ScenarioResult = { scenario, homeDomain, steps };
   if (scenario.id === "sdf-test") {
-    result.finalLine =
-      "Deposit is not attempted: this anchor requires SEP-12 KYC fields (first_name, last_name, email_address)";
+    result.finalLine = SDF_KYC_FINAL_LINE;
   }
   return result;
 }
@@ -276,7 +294,11 @@ export async function runAnchorCheck(opts: AnchorCheckOptions = {}): Promise<Anc
       out("");
     }
     if (payoutCheck) {
-      out(`TR payout-health (planned): read https://${TR_MOCK_HOME_DOMAIN}/health and the treasury's Horizon payments, then classify.`);
+      if (scenarios.some((s) => s.id === "tr-mock")) {
+        out(`TR payout-health (planned): read https://${TR_MOCK_HOME_DOMAIN}/health and the treasury's Horizon payments, then classify.`);
+      } else {
+        out("TR payout-health (planned): payout-check applies to the TR mock only; the requested --home-domain is not the TR scenario, so no payout read is planned.");
+      }
       out("");
     }
     return { live, payoutCheck, plans, results: [], ok: true };

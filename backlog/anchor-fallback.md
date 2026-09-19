@@ -86,13 +86,13 @@ Anchor check (LIVE)
 Scenario [tr-mock]: TR path — SEP-6 only (SEP-24 prohibited in Turkey)
   home domain: tr-mock-anchor.fly.dev
   SEP-1 discovery    PASS signing key GDXY...E73M; auth=/auth; transfer=/sep6; kyc=/sep12; quote=/sep38
-  SEP-6 /info        PASS authentication_required=false; deposit: USDC(enabled=true, min=absent, max=absent, fee_percent=0.5); withdraw: USDC(enabled=true, min=absent, max=absent, fee_percent=0.5)
+  SEP-6 /info        PASS authentication_required(top)=absent; deposit: USDC(enabled=true, auth=true, min=absent, max=absent, fee_percent=0.5); withdraw: USDC(enabled=true, auth=true, min=absent, max=absent, fee_percent=0.5)
   SEP-10 login       PASS account=GBYI...W6EA; challenge validated before signing; jwt length=371; expiresAt=2026-09-20T22:29:26.000Z
 
 Scenario [sdf-test]: NON-TR test scenario (SDF test anchor) — discovery + SEP-10 login + SEP-6 info only; deposit stops at SEP-12 KYC
   home domain: testanchor.stellar.org
   SEP-1 discovery    PASS signing key GCHL...33PR; auth=/auth; transfer=/sep6; kyc=/sep12; quote=/sep38
-  SEP-6 /info        PASS authentication_required=false; deposit: SRT(enabled=true, min=1, max=10, fee_percent=absent); native(...); USDC(...); withdraw: SRT/native/USDC(...)
+  SEP-6 /info        PASS authentication_required(top)=absent; deposit: SRT(enabled=true, auth=true, min=1, max=10, fee_percent=absent); native(...); USDC(...); withdraw: SRT/native/USDC(...)
   SEP-10 login       PASS account=GD7Z...J6BF; challenge validated before signing; jwt length=451; expiresAt=2026-09-20T22:29:27.000Z
   Deposit is not attempted: this anchor requires SEP-12 KYC fields (first_name, last_name, email_address)
 
@@ -105,16 +105,16 @@ TR payout-health (read-only)
   reason         : Deposit payouts look stalled; this is advisory evidence for the anchor operators, not proof.
 ```
 
-Note: both anchors currently report `authentication_required=false`; the SDF `/info` exposes min/max 1–10 per asset, the TR mock omits min/max (as first seen on 2026-09-20). The TR SEP-10 account is a fresh throwaway each run (different `GBYI...W6EA` than the earlier check), and no JWT was printed.
+Note (updated for the N2 correction): the `/info` line now reads the **per-asset** `authentication_required` flag and prints the top-level flag separately as `authentication_required(top)`. Both anchors omit the top-level field (so it prints `absent`) while setting `deposit.*.authentication_required = true` per asset — the old line rendered that as `false`, which was misleading. The SDF `/info` exposes min/max 1–10 per asset, the TR mock omits min/max (as first seen on 2026-09-20). The TR SEP-10 account is a fresh throwaway each run, and no JWT was printed.
 
 ## Gates (all with `caffeinate -i`, from `stellar/`)
 
 ```
 npm run check -w @polaris/stellar        # tsc -p tsconfig.json -> EXIT 0
-npm run test:anchor -w @polaris/stellar  # Test Files 8 passed (8), Tests 168 passed (168)
+npm run test:anchor -w @polaris/stellar  # Test Files 8 passed (8), Tests 197 passed (197)
 npm test -w @polaris/stellar             # EXIT 0
   test:keeper   : 67 pass, 0 fail
-  test:anchor   : 168 passed (8 files)
+  test:anchor   : 197 passed (8 files)
   test:payments : 121 passed (7 files)
   test:guard    : 133 passed (7 files)
   test:approval : 112 passed (4 files)
@@ -126,9 +126,9 @@ npm test -w @polaris/stellar             # EXIT 0
 ## Tests added (offline, mocked HTTP; no network)
 
 - `scenarios.test.ts` — labels for both scenarios, custom-with-warning, unknown refused, SEP-24 never allowed, 17 attack inputs, exact-host acceptance.
-- `payout-health.test.ts` — table-driven verdicts (no payments / only incoming / only outgoing / recent / old / boundary at exactly 10 min, 10 min + 1 ms, exactly 30 min, 30 min + 1 ms), newest/oldest outgoing + incoming-since counts, Horizon parsing/direction, treasury-address extraction (issuer never mistaken), `readPayoutHealth` with `/health` exposing the treasury, not exposing it, and being unreachable.
-- `anchor-check.test.ts` — plan mode makes ZERO network calls (stub throws) for both domains and with `--payout-check`; live mode PASS table for both, SDF final line, JWT payload marker never printed; discovery failure → FAIL + SKIP rows; SDF Friendbot fallback (first `/auth` 404 → Friendbot → retry); `--payout-check` classification; `parseArgs`/`summarizeInfoAssets`/`looksLikeAccountMissing`; unapproved domain refused.
-- `sep6-sep38-sep12.test.ts` — TR hint present in narration + error for the TR domain; absent for a non-TR domain.
+- `payout-health.test.ts` — table-driven verdicts (no payments / only incoming / only outgoing / recent / old / boundary at exactly 10 min, 10 min + 1 ms, exactly 30 min, 30 min + 1 ms / **N3: future-dated newest outgoing → `unknown` with a clock-skew note, 2-min tolerance boundary**), newest/oldest outgoing + incoming-since counts, Horizon parsing/direction (**N3: `create_claimable_balance`/`account_merge` ignored**), treasury-address extraction (issuer never mistaken), `readPayoutHealth` with `/health` exposing the treasury, not exposing it, and being unreachable.
+- `anchor-check.test.ts` — plan mode makes ZERO network calls (stub throws) for both domains and with `--payout-check` (**N7: a non-TR `--home-domain` prints "payout-check applies to the TR mock only"**); live mode PASS table for both, **B1: SDF final line printed even when discovery fails**, **N1: full JWT + raw signature sentinel + decoded payload marker absent from stdout/errors/JSON**, **N2: per-asset `authentication_required` from the real TR `/info` shape**; discovery failure → FAIL + SKIP rows; SDF Friendbot fallback (first `/auth` 404 → Friendbot → retry); `--payout-check` classification; `parseArgs`/`summarizeInfoAssets`/`looksLikeAccountMissing`; unapproved domain refused.
+- `sep6-sep38-sep12.test.ts` — TR hint present in narration + error for the TR domain; absent for a non-TR domain; **N6: `ExplainLog.record` accepts only an `AnchorOwnedLink` at the type boundary**.
 
 ## Acceptance
 
@@ -137,6 +137,6 @@ npm test -w @polaris/stellar             # EXIT 0
 ## Remaining risks / open items
 
 - **Anchor payout stall is still unresolved** (anchor-side, not ours); `--payout-check` only surfaces it.
-- `--payout-check` is a **heuristic**: a quiet-but-healthy anchor can look `unknown`, and a very busy treasury could hide a stall behind unrelated activity in the 200-record window. It is advisory evidence, not proof.
+- `--payout-check` is a **heuristic**: a quiet-but-healthy anchor can look `unknown`, and a very busy treasury could hide a stall behind unrelated activity in the 200-record window. It is advisory evidence, not proof. Only `payment`/`path_payment*` outflows are counted — `create_claimable_balance` and `account_merge` outflows are ignored (the TR mock advertises `claimable_balances:true`); a newest outgoing dated in the future is reported as `unknown` (2-min clock-skew tolerance).
 - SDF's SEP-10 worked live without funding the throwaway account; the Friendbot fallback therefore exists but was not exercised live (it is unit-tested).
 - The scenario registry is a stricter, separate layer from `parseHomeDomain` (which still normalises uppercase for the session). A future refactor could unify them, but the strictness is intentional here.

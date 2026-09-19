@@ -1,6 +1,7 @@
 import { TransactionBuilder, type Transaction } from "@stellar/stellar-sdk";
 import { describe, expect, it } from "vitest";
 import { TESTNET_PASSPHRASE } from "../config.ts";
+import { ExplainLog } from "../explain.ts";
 import { AnchorHttpError } from "../http.ts";
 import { ensureCustomer, KycRequiredError } from "../sep12.ts";
 import { getPrice, QuoteError } from "../sep38.ts";
@@ -377,6 +378,17 @@ describe("SEP-6 timeout link host restriction (B1), quoting (N2) and message cap
     const toml: AnchorToml = { ...TOML, homeDomain: "anchor.example.test", webAuthEndpoint: "https://auth.example.test/auth" };
     expect(anchorOwnedLink("https://auth.example.test/session", toml)).toBe("https://auth.example.test/session");
     expect(anchorOwnedLink("https://other.example.test/session", toml)).toBeUndefined();
+  });
+
+  it("N6: ExplainLog.record only accepts an anchor-owned link at the boundary", () => {
+    const log = new ExplainLog();
+    const owned = anchorOwnedLink(`https://${HOME}/session`, TOML);
+    expect(owned).toBeDefined();
+    const rec = log.record("sep6.link", "A link was attached.", "It is on the anchor's own host.", { link: owned });
+    expect(rec.link).toBe(`https://${HOME}/session`);
+    // A plain https string is not an AnchorOwnedLink: the boundary rejects it at compile time.
+    // @ts-expect-error link must be produced by anchorOwnedLink (branded AnchorOwnedLink)
+    log.record("sep6.link", "Unchecked link.", "This must not compile.", { link: "https://evil.example/x" });
   });
 
   it("quotes and escapes an anchor message so embedded double quotes cannot break the quoting", () => {

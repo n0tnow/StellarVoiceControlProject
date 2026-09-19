@@ -23,6 +23,12 @@ export const PAYOUT_FLOWING_WITHIN_MS = 10 * 60 * 1000;
 export const PAYOUT_STALLED_AFTER_MS = 30 * 60 * 1000;
 /** Horizon page size for the treasury payment history. */
 export const PAYMENT_HISTORY_LIMIT = 200;
+/**
+ * HEURISTIC: a newest outgoing payment dated slightly in the future is clock
+ * skew between this machine and Horizon, not evidence of a healthy pipeline.
+ * Anything beyond this tolerance is treated as `unknown` rather than "flowing".
+ */
+export const CLOCK_SKEW_TOLERANCE_MS = 2 * 60 * 1000;
 
 const STELLAR_ACCOUNT = /^G[A-Z2-7]{55}$/;
 
@@ -58,8 +64,15 @@ export interface PayoutHealth {
  *  - `payouts-flowing`: the newest outgoing payment is within `PAYOUT_FLOWING_WITHIN_MS`.
  *  - `payouts-stalled`: no outgoing payment for more than `PAYOUT_STALLED_AFTER_MS`
  *    (or none at all) while incoming payments exist.
- *  - `unknown`: no payments, only old outgoing with no incoming, or the
- *    indeterminate 10-30 min gap.
+ *  - `unknown`: no payments, only old outgoing with no incoming, the
+ *    indeterminate 10-30 min gap, or a newest outgoing dated in the future
+ *    beyond `CLOCK_SKEW_TOLERANCE_MS` (a negative age is not "recent").
+ *
+ * Only `payment` / `path_payment_strict_send` / `path_payment_strict_receive`
+ * outflows are counted (`parseHorizonPayments`); `create_claimable_balance` and
+ * `account_merge` records are ignored, even though the TR mock advertises
+ * `claimable_balances:true`. If the anchor ever starts paying out through those
+ * op types, this heuristic would miss it.
  */
 export function classifyPayoutHealth(input: {
   payments: PayoutPayment[];
@@ -108,6 +121,17 @@ export function classifyPayoutHealth(input: {
 
   if (totalPayments === 0) {
     return { verdict: "unknown", ...base, reasons: ["Horizon returned no payments for the treasury, so there is nothing to judge."] };
+  }
+  if (ageOfNewestOutgoingMs !== undefined && ageOfNewestOutgoingMs < -CLOCK_SKEW_TOLERANCE_MS) {
+    const minutesAhead = Math.round(-ageOfNewestOutgoingMs / 60000);
+    return {
+      verdict: "unknown",
+      ...base,
+      reasons: [
+        `The newest outgoing payment is dated about ${minutesAhead} min in the future (> ${CLOCK_SKEW_TOLERANCE_MS / 60000} min clock-skew tolerance), ` +
+          "so its age cannot be trusted; not treating it as evidence that payouts are flowing.",
+      ],
+    };
   }
   if (ageOfNewestOutgoingMs !== undefined && ageOfNewestOutgoingMs <= PAYOUT_FLOWING_WITHIN_MS) {
     const minutes = Math.round(ageOfNewestOutgoingMs / 60000);

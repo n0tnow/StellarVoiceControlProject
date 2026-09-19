@@ -226,7 +226,12 @@ prove a TRY on/off-ramp, a bank leg, or MASAK compliance. The live check signs
 nothing that can move funds: SEP-10 challenges have sequence number 0, the
 keypair is throwaway and in-memory, and the JWT is never printed (only its
 length and expiry). `--payout-check` is a **heuristic** over the TR treasury's
-public Horizon history (thresholds in `payoutHealth.ts`, advisory only).
+public Horizon history (thresholds in `payoutHealth.ts`, advisory only). It counts
+only `payment` / `path_payment_strict_send` / `path_payment_strict_receive`
+outflows: `create_claimable_balance` and `account_merge` records are ignored even
+though the TR mock advertises `claimable_balances:true`, so a payout made through
+those op types would be missed. A newest outgoing dated in the future (beyond a
+2-minute clock-skew tolerance) is reported as `unknown`, not `payouts-flowing`.
 
 ## Mock vs mainnet
 

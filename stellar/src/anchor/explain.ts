@@ -7,7 +7,7 @@
  * each tool call can hand `{ data, explain }` back to the agent.
  */
 
-import { safeHttpsUrl, sanitizeAnchorText } from "./text.ts";
+import { safeHttpsUrl, sanitizeAnchorText, type AnchorOwnedLink } from "./text.ts";
 
 export interface ExplainRecord {
   /** Short machine-friendly label, e.g. "sep10.sign". */
@@ -61,7 +61,7 @@ export class ExplainLog {
   }
 
   /** Append a record and notify listeners (e.g. the TTS narrator). */
-  record(step: string, what: string, why: string, opts: { anchorSaid?: unknown; link?: unknown } = {}): ExplainRecord {
+  record(step: string, what: string, why: string, opts: { anchorSaid?: unknown; link?: AnchorOwnedLink } = {}): ExplainRecord {
     const rec: ExplainRecord = { step, what, why, at: this.clock().toISOString() };
     const said = sanitizeAnchorText(opts.anchorSaid);
     if (said) rec.anchorSaid = said;

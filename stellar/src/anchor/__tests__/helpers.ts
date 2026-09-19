@@ -120,10 +120,14 @@ export function makeChallenge(opts: { client?: string; homeDomain?: string; webA
   );
 }
 
-/** Builds a JWT-shaped string with the given claims (unsigned; the client never verifies it). */
-export function fakeJwt(claims: Record<string, unknown>): string {
+/**
+ * Builds a JWT-shaped string with the given claims (unsigned; the client never
+ * verifies it). The signature segment is a raw, human-readable sentinel by
+ * default so leak tests can scan rendered output for it directly.
+ */
+export function fakeJwt(claims: Record<string, unknown>, signature = "sig"): string {
   const b = (o: unknown): string => Buffer.from(JSON.stringify(o)).toString("base64url");
-  return `${b({ alg: "HS256" })}.${b(claims)}.sig`;
+  return `${b({ alg: "HS256" })}.${b(claims)}.${signature}`;
 }
 
 /** Stateful fake Horizon + Friendbot for the preflight/session tests. */

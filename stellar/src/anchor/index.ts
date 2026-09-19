@@ -3,7 +3,7 @@ export * from "./config.ts";
 export * from "./explain.ts";
 export * from "./types.ts";
 export { assertAmount, toStroops } from "./amount.ts";
-export { safeHttpsUrl, safeId, sanitizeAnchorText } from "./text.ts";
+export { safeHttpsUrl, safeId, sanitizeAnchorText, type AnchorOwnedLink } from "./text.ts";
 export { assertSafeEndpoint, parseHomeDomain, UnsafeAnchorError, type NetPolicy } from "./net.ts";
 export { AnchorHttpError, MAX_JSON_BYTES, MAX_TOML_BYTES, readCapped } from "./http.ts";
 export { discoverAnchor, findAsset, parseStellarToml, TomlError } from "./sep1.ts";

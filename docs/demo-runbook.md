@@ -182,7 +182,7 @@ exactly this and send it (no secrets, no keys):
 | Item | Where to get it |
 |---|---|
 | Order id | `sep6.deposit` narration / the order's `more_info_url` |
-| Order timestamps | `started_at` and `updated_at` from `GET /sep6/tx/<id>` (frozen `updated_at` = stuck) |
+| Order timestamps | `started_at` and `updated_at` from `GET /sep6/transaction?id=<id>` (frozen `updated_at` = stuck) |
 | Order status + message | `status` (`pending_anchor`) and the anchor's own `message` |
 | Treasury account | `/health` → `treasury.address` (documented: `GCLCZEQZ2THTEDAOFI66LACNPLY4OBKN7VKLEZFMBIHYKYQOW2W7T3Z6`) |
 | Last outgoing payment | `--payout-check` output: newest outgoing time + incoming-since count, or Horizon `GET /accounts/<treasury>/payments?order=desc` |

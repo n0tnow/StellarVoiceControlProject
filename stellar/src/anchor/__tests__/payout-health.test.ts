@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   classifyPayoutHealth,
+  CLOCK_SKEW_TOLERANCE_MS,
   findTreasuryAddress,
   parseHorizonPayments,
   PAYOUT_FLOWING_WITHIN_MS,
@@ -37,8 +38,21 @@ describe("payout-health classification (heuristic, table-driven)", () => {
     ["boundary: outgoing exactly 30 min old", [out(30), inc(1)], "unknown"],
     ["boundary: outgoing 30 min + 1ms old with incoming", [out(30.0001), inc(1)], "payouts-stalled"],
     ["old outgoing with only earlier incoming still counts incoming", [inc(120), out(60)], "payouts-stalled"],
+    ["N3: future-dated newest outgoing (30 min ahead) is not 'flowing'", [out(-30), inc(1)], "unknown"],
+    ["N3: future-dated newest outgoing beyond skew tolerance (no incoming)", [out(-30)], "unknown"],
+    ["N3: future-dated newest outgoing within the 2 min skew tolerance", [out(-1), inc(1)], "payouts-flowing"],
+    ["N3: boundary: outgoing exactly at the skew tolerance (2 min ahead)", [out(-2)], "payouts-flowing"],
+    ["N3: boundary: outgoing just beyond the skew tolerance", [out(-2.0001)], "unknown"],
   ])("%s -> %s", (_name, payments, expected) => {
     expect(classify(payments).verdict).toBe(expected);
+  });
+
+  it("N3: explains a future-dated newest outgoing as clock skew, not a healthy pipeline", () => {
+    const h = classify([out(-30), inc(1)]);
+    expect(h.verdict).toBe("unknown");
+    expect(h.reasons.join(" ")).toMatch(/future/i);
+    expect(h.reasons.join(" ")).toMatch(/clock-skew|clock skew/i);
+    expect(CLOCK_SKEW_TOLERANCE_MS).toBe(2 * 60 * 1000);
   });
 
   it("reports the newest/oldest outgoing, incoming count and incoming since the newest outgoing", () => {
@@ -73,6 +87,8 @@ describe("Horizon payment parsing", () => {
           { type: "payment", from: TREASURY, to: "GOTHER", created_at: at(1), amount: "1.0", asset_code: "USDC" },
           { type: "payment", from: "GOTHER", to: TREASURY, created_at: at(2), amount: "2.0" },
           { type: "create_account", account: "GNEW", funder: TREASURY, created_at: at(3) },
+          { type: "create_claimable_balance", source_account: TREASURY, created_at: at(3.5), amount: "5.0" },
+          { type: "account_merge", account: TREASURY, into: "GOTHER", created_at: at(3.6) },
           { type: "payment", from: "GA", to: "GB", created_at: at(4) },
           { type: "payment", from: TREASURY, to: "GOTHER", created_at: "bad" },
         ],

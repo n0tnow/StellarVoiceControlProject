@@ -16,7 +16,7 @@ import { DEFAULT_HOME_DOMAIN } from "./config.ts";
 import { AnchorHttpError, requestJson } from "./http.ts";
 import { shortKey } from "./explain.ts";
 import { getCustomer, KycRequiredError } from "./sep12.ts";
-import { safeHttpsUrl, safeId, sanitizeAnchorText } from "./text.ts";
+import { safeHttpsUrl, safeId, sanitizeAnchorText, type AnchorOwnedLink } from "./text.ts";
 import type {
   AnchorAsset,
   AnchorContext,
@@ -559,7 +559,7 @@ function anchorDeclaredHosts(toml: AnchorToml): Set<string> {
  * anchor itself declares (its home domain or a `TRANSFER_SERVER` /
  * `WEB_AUTH_ENDPOINT` host). Everything else is dropped. Never auto-fetched.
  */
-export function anchorOwnedLink(value: unknown, toml: AnchorToml, max = 300): string | undefined {
+export function anchorOwnedLink(value: unknown, toml: AnchorToml, max = 300): AnchorOwnedLink | undefined {
   if (typeof value !== "string" || value.length === 0 || value.length > max) return undefined;
   if (/[\u0000-\u001f\u007f]/.test(value)) return undefined;
   let u: URL;
@@ -571,7 +571,7 @@ export function anchorOwnedLink(value: unknown, toml: AnchorToml, max = 300): st
   if (u.protocol !== "https:" || u.username || u.password || u.port) return undefined;
   if (looksLikeIpLiteral(u.hostname)) return undefined;
   if (!anchorDeclaredHosts(toml).has(u.hostname.toLowerCase())) return undefined;
-  return u.toString();
+  return u.toString() as AnchorOwnedLink;
 }
 
 /** Wraps an untrusted anchor message in quotes, escaping backslashes and embedded double quotes. */

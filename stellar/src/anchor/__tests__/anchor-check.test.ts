@@ -16,6 +16,8 @@ import { fakeFetch, fakeJwt, jsonResponse, SERVER, USDC_ISSUER } from "./helpers
 
 const TR = TR_MOCK_HOME_DOMAIN;
 const SDF = SDF_TEST_ANCHOR_HOME_DOMAIN;
+const JWT_MARKER = "TOPSECRETJWT";
+const JWT_SIGNATURE = "RAWSIGNATURE_SENTINEL";
 
 function tomlFor(host: string): string {
   return `
@@ -47,11 +49,13 @@ function challengeHandler(host: string) {
   };
 }
 
-function tokenHandler(host: string) {
+function tokenHandler(host: string, onIssued?: (jwt: string) => void) {
   return (_url: URL, init: RequestInit): unknown => {
     const body = JSON.parse(String(init.body)) as { transaction: string };
     const account = WebAuth.readChallengeTx(body.transaction, SERVER.publicKey(), TESTNET_PASSPHRASE, host, host).clientAccountID;
-    return { token: fakeJwt({ sub: account, exp: Math.floor(Date.now() / 1000) + 900, marker: "TOPSECRETJWT" }) };
+    const jwt = fakeJwt({ sub: account, exp: Math.floor(Date.now() / 1000) + 900, marker: JWT_MARKER }, JWT_SIGNATURE);
+    onIssued?.(jwt);
+    return { token: jwt };
   };
 }
 
@@ -103,6 +107,21 @@ describe("anchor:check plan mode", () => {
     expect(lines.join("\n")).toContain("TR payout-health (planned)");
   });
 
+  it("N7: with a non-TR --home-domain, --payout-check says it applies to the TR mock only", async () => {
+    const calls: string[] = [];
+    const spy: FetchLike = async (input) => {
+      calls.push(String(input));
+      throw new Error("network must not be used in plan mode");
+    };
+    const { lines, out } = collect();
+    const report = await runAnchorCheck({ homeDomains: [SDF], payoutCheck: true, out, fetch: spy });
+    expect(calls).toHaveLength(0);
+    expect(report.payout).toBeUndefined();
+    const text = lines.join("\n");
+    expect(text).toContain("payout-check applies to the TR mock only");
+    expect(text).not.toContain("read https://tr-mock-anchor.fly.dev/health");
+  });
+
   it("builds the three planned steps per scenario", () => {
     const plan = buildScenarioPlan({ id: "tr-mock", label: "x", sepScope: "SEP-6 only", allowed: [], notes: "" }, TR);
     expect(plan.steps.map((s) => s.name)).toEqual(["SEP-1 discovery", "SEP-6 /info", "SEP-10 login"]);
@@ -143,6 +162,42 @@ describe("anchor:check live mode", () => {
     expect(lines.join("\n")).toContain("FAIL");
   });
 
+  it("B1: always prints the SDF KYC final line, even when discovery fails", async () => {
+    const { fetch } = fakeFetch({ [`GET ${SDF}/.well-known/stellar.toml`]: jsonResponse({ error: "nope" }, 500) });
+    const { lines, out } = collect();
+    const report = await runAnchorCheck({ homeDomains: [SDF], live: true, fetch, out });
+    expect(report.ok).toBe(false);
+    const sdf = report.results[0]!;
+    expect(statusOf(sdf.steps, "SEP-1 discovery")).toBe("FAIL");
+    expect(sdf.finalLine).toContain("Deposit is not attempted");
+    expect(sdf.finalLine).toContain("first_name, last_name, email_address");
+    expect(lines.join("\n")).toContain("Deposit is not attempted");
+  });
+
+  it("N1: never leaks the JWT — raw signature sentinel and decoded payload marker absent from stdout, errors and JSON", async () => {
+    let issued = "";
+    const routes: Record<string, unknown> = { ...routesFor(TR) };
+    routes[`POST ${TR}/auth`] = tokenHandler(TR, (jwt) => {
+      issued = jwt;
+    });
+    const { fetch } = fakeFetch(routes);
+    const { lines, out } = collect();
+    const report = await runAnchorCheck({ homeDomains: [TR], live: true, fetch, out });
+    expect(report.ok).toBe(true);
+    expect(issued).toContain(JWT_SIGNATURE);
+    const decodedPayload = JSON.parse(Buffer.from(issued.split(".")[1] as string, "base64url").toString()) as { marker?: string };
+    expect(decodedPayload.marker).toBe(JWT_MARKER);
+    const rendered = [
+      ...lines,
+      JSON.stringify(report),
+      JSON.stringify(report.results),
+      ...report.results.flatMap((r) => r.steps.map((s) => s.detail)),
+    ].join("\n");
+    expect(rendered).not.toContain(issued);
+    expect(rendered).not.toContain(JWT_SIGNATURE);
+    expect(rendered).not.toContain(JWT_MARKER);
+  });
+
   it("funds the SDF throwaway account via Friendbot when the anchor needs an existing account", async () => {
     let authCalls = 0;
     const routes: Record<string, unknown> = {
@@ -160,6 +215,22 @@ describe("anchor:check live mode", () => {
     expect(report.ok).toBe(true);
     expect(authCalls).toBe(2);
     expect(lines.join("\n")).toContain("Friendbot");
+  });
+
+  it("N2: reports the per-asset authentication_required flag from SEP-6 /info (real TR shape)", async () => {
+    const { fetch } = fakeFetch({
+      ...routesFor(TR),
+      [`GET ${TR}/sep6/info`]: {
+        deposit: { USDC: { enabled: true, authentication_required: true, min_amount: 1, max_amount: 10 } },
+        withdraw: { USDC: { enabled: true } },
+      },
+    });
+    const { out } = collect();
+    const report = await runAnchorCheck({ homeDomains: [TR], live: true, fetch, out });
+    const info = report.results[0]!.steps.find((s) => s.name === "SEP-6 /info")!;
+    expect(info.detail).toContain("authentication_required(top)=absent");
+    expect(info.detail).toContain("deposit: USDC(enabled=true, auth=true, min=1, max=10, fee_percent=absent)");
+    expect(info.detail).toContain("withdraw: USDC(enabled=true, auth=absent, min=absent, max=absent, fee_percent=absent)");
   });
 
   it("classifies TR payout-health when --payout-check is set", async () => {
@@ -203,9 +274,15 @@ describe("anchor:check helpers", () => {
     expect(parseArgs([])).toEqual({ homeDomains: [], live: false, payoutCheck: false });
   });
 
-  it("summarises which SEP-6 /info fields are present", () => {
+  it("summarises which SEP-6 /info fields are present, including per-asset auth", () => {
     expect(summarizeInfoAssets({ USDC: { enabled: true, min_amount: 1, fee_percent: 0.5 } })).toBe(
-      "USDC(enabled=true, min=1, max=absent, fee_percent=0.5)",
+      "USDC(enabled=true, auth=absent, min=1, max=absent, fee_percent=0.5)",
+    );
+    expect(summarizeInfoAssets({ USDC: { enabled: true, authentication_required: true } })).toBe(
+      "USDC(enabled=true, auth=true, min=absent, max=absent, fee_percent=absent)",
+    );
+    expect(summarizeInfoAssets({ USDC: { enabled: true, authentication_required: false } })).toBe(
+      "USDC(enabled=true, auth=false, min=absent, max=absent, fee_percent=absent)",
     );
     expect(summarizeInfoAssets(undefined)).toBe("none");
     expect(summarizeInfoAssets({ "bad code!": { enabled: true } })).toBe("none");
