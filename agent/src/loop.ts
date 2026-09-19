@@ -1,7 +1,8 @@
 import type { Intent } from "@polaris/interfaces";
 import { AgentError, isAgentError } from "./errors.ts";
 import type { PolarisEventBus } from "./events.ts";
-import { POLARIS_SYSTEM_PROMPT } from "./prompt.ts";
+import { resolveTurnLanguage } from "./language.ts";
+import { POLARIS_SYSTEM_PROMPT, withDetectedLanguage } from "./prompt.ts";
 import type { AgentTool, ToolContext, ToolRegistry } from "./tools/registry.ts";
 
 /** A single tool invocation requested by the model. */
@@ -51,6 +52,13 @@ export interface AgentTurnOptions {
   system?: string;
   /** Overrides the transcript handed to tools (used by tests). */
   toolContext?: Partial<ToolContext>;
+  /**
+   * The STT-detected language of the audio (step A12), as a BCP-47 tag. It is
+   * pinned into the prompt so the model answers in it, and it is the
+   * authoritative language for the reply and the TTS voice — the model's own
+   * report is only the fallback (`resolveTurnLanguage`).
+   */
+  transcriptLanguage?: string;
 }
 
 export interface AgentTurnResult {
@@ -60,8 +68,10 @@ export interface AgentTurnResult {
   intent?: Intent;
   /** Registry name of the tool that produced `intent`. */
   intentTool?: string;
-  /** The model-reported language of the turn, forwarded to speech (step A11). */
+  /** The reconciled turn language, forwarded to speech (steps A11/A12). */
   language?: string;
+  /** Which side decided `language`: the audio detector or the model. */
+  languageSource?: "stt" | "model";
 }
 
 /** Short human summary of an intent; the UI's single-line intent display. */
@@ -93,11 +103,24 @@ export async function runTurn(options: AgentTurnOptions): Promise<AgentTurnResul
     transcript,
     ...options.toolContext,
   };
-  const system = options.system ?? POLARIS_SYSTEM_PROMPT;
+  const system = withDetectedLanguage(
+    options.system ?? POLARIS_SYSTEM_PROMPT,
+    options.transcriptLanguage,
+  );
 
   try {
     bus.emit({ type: "agent_status", stage: "thinking" });
     const first = await llm.turn({ transcript, system, tools: registry.definitions() });
+
+    // A12: the audio-detected language is authoritative; the model's own report
+    // is only the fallback. Say which won when the two disagree.
+    const language = resolveTurnLanguage(options.transcriptLanguage, first.language);
+    if (language.disagreed) {
+      console.warn(
+        `language disagreement: STT detected "${language.detected}" but the model reported ` +
+          `"${language.reported}" — using the detected language (measured from the audio)`,
+      );
+    }
 
     const executedTools: string[] = [];
     const toolResults: string[] = [];
@@ -157,15 +180,22 @@ export async function runTurn(options: AgentTurnOptions): Promise<AgentTurnResul
     }
 
     if (toolResults.length > 0) {
-      bus.emit({ type: "transcript", text: answer, final: true });
+      bus.emit({
+        type: "transcript",
+        text: answer,
+        final: true,
+        language: language.language ?? null,
+      });
     }
     return {
       answer,
       executedTools,
       ...(resolved ? { intent: resolved.intent, intentTool: resolved.tool } : {}),
-      // The model reported the language; the shell hands it to TTS so the voice
-      // matches the words (step A11). Absent means "unknown" — never guessed here.
-      ...(first.language ? { language: first.language } : {}),
+      // The reconciled language is handed to the shell so the voice matches the
+      // words (steps A11/A12). Absent means "unknown" — never guessed here.
+      ...(language.language && language.source !== "none"
+        ? { language: language.language, languageSource: language.source }
+        : {}),
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

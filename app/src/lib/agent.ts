@@ -83,8 +83,10 @@ export interface AgentOutcome {
   answer: string;
   intent?: Intent;
   executedTools: string[];
-  /** Model-reported BCP-47 language of the turn (step A11); drives the voice. */
+  /** Reconciled BCP-47 language of the turn (steps A11/A12); drives the voice. */
   language?: string;
+  /** Which side decided `language`: the audio detector or the model. */
+  languageSource?: "stt" | "model";
   /** Measured end-to-end around `runTurn`, mirroring A1's latency line. */
   latencyMs: number;
 }
@@ -139,12 +141,17 @@ export interface AgentTurnHooks {
  * back as a labelled failure so the UI can stay one line while the console keeps
  * the full detail. An intent is logged with its latency, like A1's transcript.
  *
+ * `transcriptLanguage` is the STT-detected language of the audio (step A12). It
+ * is pinned into the prompt and is the authoritative reply/voice language; the
+ * agent core reconciles it against the model's own report.
+ *
  * The optional `hooks` only observe; they never change the turn's outcome. The
  * subscription is removed in `finally`, so a hook cannot leak across turns.
  */
 export async function runAgentTurn(
   transcript: string,
   hooks?: AgentTurnHooks,
+  transcriptLanguage?: string,
 ): Promise<AgentRun> {
   const unsubscribe = hooks?.onAgentStage
     ? bus.subscribe((event) => {
@@ -155,7 +162,13 @@ export async function runAgentTurn(
     : undefined;
   const started = performance.now();
   try {
-    const result = await runTurn({ transcript, registry, llm, bus });
+    const result = await runTurn({
+      transcript,
+      registry,
+      llm,
+      bus,
+      ...(transcriptLanguage ? { transcriptLanguage } : {}),
+    });
     // A11: the provider response has been parsed into a turn result by now.
     markTurnPhase("intent parsed");
     const latencyMs = Math.round(performance.now() - started);
@@ -171,6 +184,7 @@ export async function runAgentTurn(
         answer: result.answer,
         ...(result.intent ? { intent: result.intent } : {}),
         ...(result.language ? { language: result.language } : {}),
+        ...(result.languageSource ? { languageSource: result.languageSource } : {}),
         executedTools: result.executedTools,
         latencyMs,
       },

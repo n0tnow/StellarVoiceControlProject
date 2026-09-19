@@ -159,6 +159,49 @@ test("no reported language leaves the field absent rather than guessing", async 
   assert.equal(result.language, undefined);
 });
 
+/** Records the system prompt the loop built, so the A12 pin can be asserted. */
+class CapturingLlm implements AgentLlm {
+  readonly model = "capturing";
+  system?: string;
+  readonly #turn: LlmTurn;
+
+  constructor(turn: LlmTurn) {
+    this.#turn = turn;
+  }
+
+  async turn(input: { system: string }): Promise<LlmTurn> {
+    this.system = input.system;
+    return this.#turn;
+  }
+}
+
+test("the STT-detected language wins over the model's report (step A12)", async () => {
+  const llm = new CapturingLlm({ text: "Tamam.", toolCalls: [], language: "en" });
+  const result = await runTurn({
+    transcript: "merhaba",
+    registry: createDefaultRegistry(),
+    llm,
+    bus: createEventBus(),
+    transcriptLanguage: "tr-TR",
+  });
+  // The audio was Turkish; the model's own "en" is discarded.
+  assert.equal(result.language, "tr-tr");
+  assert.equal(result.languageSource, "stt");
+  // The detected language is pinned into the prompt handed to the provider.
+  assert.match(llm.system ?? "", /detected the user's spoken language as "tr-TR"/);
+});
+
+test("the model's report is used only when STT detected nothing", async () => {
+  const result = await runTurn({
+    transcript: "hello",
+    registry: createDefaultRegistry(),
+    llm: new ScriptedLlm({ text: "Hi.", toolCalls: [], language: "en" }),
+    bus: createEventBus(),
+  });
+  assert.equal(result.language, "en");
+  assert.equal(result.languageSource, "model");
+});
+
 test("a provider failure propagates and emits an error event", async () => {
   const bus = createEventBus();
   const events: PolarisEvent[] = [];

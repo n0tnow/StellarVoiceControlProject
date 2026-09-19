@@ -2,15 +2,20 @@
 //!
 //! Groq exposes an OpenAI-compatible transcription endpoint
 //! (`POST https://api.groq.com/openai/v1/audio/transcriptions`) that takes a
-//! multipart upload and returns, for `response_format=json`, simply
-//! `{"text": "..."}`. The exact request shape implemented here was re-read from
-//! <https://console.groq.com/docs/speech-to-text> while writing this module:
+//! multipart upload. With `response_format=verbose_json` it also reports the
+//! **detected language** of the audio, which is the whole point of this backend
+//! (step A12): the on-device recognizer is pinned to one locale, so it cannot
+//! tell English from Turkish, and the reply language and TTS voice would be
+//! poisoned by a wrong guess. The request shape implemented here was re-read
+//! from <https://console.groq.com/docs/speech-to-text> while writing this module:
 //!
 //! * `file` — the audio bytes; 16-bit PCM WAV is supported.
 //! * `model` — required; `whisper-large-v3-turbo` is the fast/cheap default.
 //! * `language` — optional ISO-639-1 hint. Omitted by default so mixed
-//!   Turkish/English commands can be auto-detected (see the A1 report).
-//! * `response_format` — `json` (the default) returns `{ "text": ... }`.
+//!   Turkish/English commands can be auto-detected (see the A1 report). The
+//!   detected language is still returned when a hint is supplied.
+//! * `response_format` — `verbose_json`, the only format that carries the
+//!   `language` field alongside `text` (a plain `json` response does not).
 //!
 //! The multipart body is built by hand rather than through a library so the
 //! exact bytes are unit-testable and the request never depends on a client's
@@ -28,6 +33,9 @@ use crate::stt::{SttError, Transcriber, Transcription};
 
 /// Default model; override with `POLARIS_STT_MODEL`.
 pub const DEFAULT_MODEL: &str = "whisper-large-v3-turbo";
+
+/// The only response format that returns the detected `language` field.
+pub const RESPONSE_FORMAT: &str = "verbose_json";
 
 /// The OpenAI-compatible transcription endpoint.
 pub const ENDPOINT: &str = "https://api.groq.com/openai/v1/audio/transcriptions";
@@ -86,6 +94,11 @@ impl GroqTranscriber {
         self.api_key.is_some()
     }
 
+    /// The model id, for the startup line only. Not secret.
+    pub fn model(&self) -> &str {
+        &self.model
+    }
+
     fn transcribe_with_key(&self, wav: &Path, key: &str) -> Result<Transcription, SttError> {
         let bytes = std::fs::read(wav)
             .map_err(|error| SttError::Wav(format!("could not read {}: {error}", wav.display())))?;
@@ -96,7 +109,7 @@ impl GroqTranscriber {
 
         let mut fields: Vec<(&str, String)> = vec![
             ("model", self.model.clone()),
-            ("response_format", "json".to_string()),
+            ("response_format", RESPONSE_FORMAT.to_string()),
         ];
         if let Some(language) = &self.language {
             fields.push(("language", language.clone()));
@@ -183,19 +196,25 @@ fn boundary() -> String {
     format!("polaris-{nanos:032x}{count:08x}")
 }
 
-/// The documented `json` response shape. Extra fields (Groq returns `x_groq`
-/// metadata) are ignored on purpose.
+/// The documented `verbose_json` response shape. Extra fields (Groq returns
+/// `duration`, `segments`, `x_groq` metadata) are ignored on purpose.
 #[derive(Debug, Deserialize)]
 struct GroqResponse {
     #[serde(default)]
     text: Option<String>,
+    /// Present only for `response_format=verbose_json`; a full language name
+    /// such as `"Turkish"` or `"English"`.
+    #[serde(default)]
+    language: Option<String>,
 }
 
-/// Parses the provider's `json` response.
+/// Parses the provider's `verbose_json` response.
 ///
 /// A 2xx with no `text`, or with blank text, is not a usable transcript: the
 /// former is a contract drift ([`SttError::Malformed`]), the latter is the
-/// provider telling us it heard nothing ([`SttError::Silent`]).
+/// provider telling us it heard nothing ([`SttError::Silent`]). The detected
+/// language is normalised to a BCP-47 tag; a missing or unrecognised language
+/// is `None` (unknown), never a guess.
 pub fn parse_response(body: &str) -> Result<Transcription, SttError> {
     let parsed: GroqResponse = serde_json::from_str(body).map_err(|error| {
         SttError::Malformed(format!("the body was not valid JSON: {error}"))
@@ -208,7 +227,11 @@ pub fn parse_response(body: &str) -> Result<Transcription, SttError> {
     if text.is_empty() {
         return Err(SttError::Silent);
     }
-    Ok(Transcription { text })
+    let language = parsed
+        .language
+        .as_deref()
+        .and_then(crate::stt::normalize_detected_language);
+    Ok(Transcription { text, language })
 }
 
 /// Truncates a string to at most `max` characters, appending an ellipsis marker.
@@ -232,7 +255,7 @@ mod tests {
             "BOUNDARY",
             &[
                 ("model", "whisper-large-v3-turbo".to_string()),
-                ("response_format", "json".to_string()),
+                ("response_format", RESPONSE_FORMAT.to_string()),
             ],
             MultipartFile {
                 field: "file",
@@ -249,7 +272,7 @@ mod tests {
              whisper-large-v3-turbo\r\n\
              --BOUNDARY\r\n\
              Content-Disposition: form-data; name=\"response_format\"\r\n\r\n\
-             json\r\n\
+             verbose_json\r\n\
              --BOUNDARY\r\n\
              Content-Disposition: form-data; name=\"file\"; filename=\"polaris-1.wav\"\r\n\
              Content-Type: audio/wav\r\n\r\n\
@@ -290,10 +313,34 @@ mod tests {
 
     #[test]
     fn parses_the_documented_response() {
-        // A recorded sample payload, `response_format=json`.
-        let transcription =
-            parse_response(r#"{"text":"send 10 USDC to ada"}"#).unwrap();
+        // A recorded sample payload, `response_format=verbose_json`. The
+        // `language` field is the A12 addition and is what makes the downstream
+        // reply/voice follow the audio instead of a guess.
+        let transcription = parse_response(
+            r#"{"text":"send 10 USDC to ada","language":"English","duration":2.4}"#,
+        )
+        .unwrap();
         assert_eq!(transcription.text, "send 10 USDC to ada");
+        assert_eq!(transcription.language.as_deref(), Some("en"));
+    }
+
+    #[test]
+    fn the_detected_language_name_is_normalized_to_a_tag() {
+        for (reported, expected) in [("Turkish", "tr"), ("English", "en"), ("en-US", "en-us")] {
+            let body = format!(r#"{{"text":"merhaba","language":"{reported}"}}"#);
+            assert_eq!(
+                parse_response(&body).unwrap().language.as_deref(),
+                Some(expected),
+                "{reported}"
+            );
+        }
+        // An unmapped name is unknown rather than a wrong voice selection.
+        assert_eq!(
+            parse_response(r#"{"text":"hello","language":"Klingon"}"#)
+                .unwrap()
+                .language,
+            None
+        );
     }
 
     #[test]
@@ -301,6 +348,8 @@ mod tests {
         let transcription =
             parse_response(r#"{"text":"  ADA'ya 10 USDC gönder  "}"#).unwrap();
         assert_eq!(transcription.text, "ADA'ya 10 USDC gönder");
+        // A plain (non-verbose) body has no language: unknown, not guessed.
+        assert_eq!(transcription.language, None);
     }
 
     #[test]

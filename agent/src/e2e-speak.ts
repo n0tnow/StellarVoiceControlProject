@@ -1,13 +1,18 @@
 /**
- * Opt-in end-to-end check (steps A4/A5) — a real turn spoken through the real TTS.
+ * Opt-in end-to-end check (steps A4/A5/A12) — a real turn spoken through the real TTS.
  *
  *   npm run e2e:speak -w @polaris/agent -- "Ahmete 5 USDC gönder"   # intent
  *   npm run e2e:speak -w @polaris/agent -- "hello can you hear me"  # answer
+ *   POLARIS_E2E_WAV=/path/clip.wav npm run e2e:speak -w @polaris/agent
  *
  * It chains the actual halves the app runs, with no stubs:
  *
- *   1. the real agent runtime (OpenCode Zen Go) turns the transcript into an
- *      `Intent`, or into a plain conversational answer;
+ *   0. (A12, optional) when `POLARIS_E2E_WAV` is set, the real Groq STT backend
+ *      transcribes the audio and reports the detected language, so the whole
+ *      audio → transcript → language path is exercised without a microphone;
+ *   1. the real agent runtime turns the transcript into an `Intent`, or into a
+ *      plain conversational answer, with the detected language pinned into the
+ *      prompt and reconciled against the model's own report;
  *   2. `spokenText` turns that result into the sentence the app would say — the
  *      confirmation sentence for an intent, the trimmed answer otherwise
  *      (`@polaris/agent` `speech.ts`);
@@ -36,11 +41,79 @@ import { AnthropicLlm } from "./llm/anthropic.ts";
 import { anthropicOptionsFromEnv, openAiOptionsFromEnv, resolveProvider } from "./llm/config.ts";
 import { OpenAiCompatibleLlm } from "./llm/openai.ts";
 
-const transcript = process.argv.slice(2).join(" ").trim();
-if (!transcript) {
-  console.error('usage: npm run e2e:speak -w @polaris/agent -- "Ahmete 5 USDC gönder"');
+const tauriDir = path.resolve(fileURLToPath(new URL("../../app/src-tauri", import.meta.url)));
+
+/** The Rust tests this driver runs (kept in one place). */
+const STT_TEST = "manual_live_groq_transcribes_a_wav";
+const TTS_TEST = "manual_live_fish_synthesises_mpeg_and_speaks";
+
+/**
+ * Runs the real Groq STT backend over an audio file by spawning the Rust test,
+ * and parses its single machine-readable `polaris: e2e-stt {…}` JSON line.
+ */
+async function transcribeAudio(wav: string): Promise<{ text: string; language?: string; ms: number }> {
+  const output = await new Promise<string>((resolve, reject) => {
+    const child = spawn(
+      "caffeinate",
+      ["-i", "cargo", "test", STT_TEST, "--", "--ignored", "--nocapture"],
+      {
+        cwd: tauriDir,
+        env: { ...process.env, POLARIS_E2E_WAV: wav },
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    let buffer = "";
+    child.stdout?.on("data", (chunk: Buffer) => (buffer += chunk.toString()));
+    child.stderr?.on("data", (chunk: Buffer) => (buffer += chunk.toString()));
+    child.on("error", reject);
+    child.on("close", (code) =>
+      code === 0 ? resolve(buffer) : reject(new Error(`the Rust STT run exited ${String(code)}\n${buffer}`)),
+    );
+  });
+  process.stderr.write(output);
+  const marker = "polaris: e2e-stt ";
+  const line = output
+    .split("\n")
+    .reverse()
+    .find((candidate) => candidate.includes(marker));
+  if (!line) {
+    throw new Error("the Rust STT run printed no e2e-stt result");
+  }
+  const parsed = JSON.parse(line.slice(line.indexOf(marker) + marker.length)) as {
+    text: string;
+    language: string | null;
+    ms: number;
+  };
+  return {
+    text: parsed.text,
+    ...(parsed.language ? { language: parsed.language } : {}),
+    ms: parsed.ms,
+  };
+}
+
+const wavPath = process.env.POLARIS_E2E_WAV?.trim();
+const argumentTranscript = process.argv.slice(2).join(" ").trim();
+if (!wavPath && !argumentTranscript) {
+  console.error(
+    'usage: npm run e2e:speak -w @polaris/agent -- "Ahmete 5 USDC gönder"\n' +
+      "   or: POLARIS_E2E_WAV=/path/clip.wav npm run e2e:speak -w @polaris/agent",
+  );
   process.exit(2);
 }
+
+// Step A12: when an audio file is given, the real STT half runs first, so the
+// transcript AND its detected language come from the audio rather than argv.
+let transcript = argumentTranscript;
+let detectedLanguage: string | undefined;
+if (wavPath) {
+  console.error(`transcribing ${wavPath} through the real Groq STT backend…`);
+  const stt = await transcribeAudio(wavPath);
+  transcript = stt.text;
+  detectedLanguage = stt.language;
+  console.log(`stt: ${stt.ms} ms, detected language=${stt.language ?? "(unknown)"}`);
+  console.log(`transcript: ${JSON.stringify(stt.text)}`);
+}
+
 
 const bus = createEventBus();
 bus.subscribe((event) => {
@@ -92,7 +165,13 @@ console.error(
 );
 
 mark("agent request built");
-const result = await runTurn({ transcript, registry, llm, bus });
+const result = await runTurn({
+  transcript,
+  registry,
+  llm,
+  bus,
+  ...(detectedLanguage ? { transcriptLanguage: detectedLanguage } : {}),
+});
 mark("intent parsed");
 const intentMs = Math.round(performance.now() - began);
 
@@ -115,9 +194,12 @@ if (result.intent) {
   console.log(`no intent in ${intentMs} ms — speaking the conversational answer`);
 }
 console.log(`spoken sentence: ${sentence}`);
-// Step A11: the model reports the language of the turn; the shell hands it to
-// TTS so the voice matches the words. The driver forwards it to the Rust test.
-console.log(`language: ${result.language ?? "(not reported)"}`);
+// Step A11/A12: the reconciled language of the turn; the shell hands it to TTS
+// so the voice matches the words. `source` says whether the audio detector or
+// the model decided it.
+console.log(
+  `language: ${result.language ?? "(not reported)"} (source ${result.languageSource ?? "none"})`,
+);
 
 // The agent-half phase table. The TTS half is printed by the Rust subprocess
 // below as its own `turn timing` block.
@@ -125,7 +207,6 @@ console.log("agent phases: " + timeline.map(({ phase, at }) => `${phase}=${at}ms
 
 // The Rust side owns Fish Audio; the driver only feeds it the finished sentence.
 // Spawning the ignored test keeps the provider client in one place.
-const tauriDir = path.resolve(fileURLToPath(new URL("../../app/src-tauri", import.meta.url)));
 console.error(`speaking through the real Rust path (cwd ${tauriDir})…`);
 
 const speakStarted = Date.now();
@@ -133,15 +214,7 @@ let rustOutput = "";
 const exitCode = await new Promise<number | null>((resolve) => {
   const child = spawn(
     "caffeinate",
-    [
-      "-i",
-      "cargo",
-      "test",
-      "manual_live_fish_synthesises_mpeg_and_speaks",
-      "--",
-      "--ignored",
-      "--nocapture",
-    ],
+    ["-i", "cargo", "test", TTS_TEST, "--", "--ignored", "--nocapture"],
     {
       cwd: tauriDir,
       env: {

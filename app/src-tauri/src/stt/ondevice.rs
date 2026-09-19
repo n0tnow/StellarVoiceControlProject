@@ -85,12 +85,21 @@ pub fn resolve_locale(value: Option<String>) -> String {
 /// Turns a framework transcript into the shared [`Transcription`] shape, applying
 /// the same "blank means silence" rule the Groq backend uses so both backends
 /// speak one language to the overlay.
-pub fn finish_transcript(text: &str) -> Result<Transcription, SttError> {
+///
+/// `language` is the locale the recognizer was pinned to (step A12). It is
+/// normalised to a BCP-47 tag; the on-device backend is single-locale, so this
+/// value is the *input* locale rather than a language identification. It keeps
+/// the reply and the TTS voice consistent with the recognizer, and is what makes
+/// the one-locale limitation visible downstream.
+pub fn finish_transcript(text: &str, language: Option<&str>) -> Result<Transcription, SttError> {
     let text = text.trim().to_string();
     if text.is_empty() {
         return Err(SttError::Silent);
     }
-    Ok(Transcription { text })
+    Ok(Transcription {
+        text,
+        language: language.and_then(crate::stt::normalize_detected_language),
+    })
 }
 
 /// Maps the framework's authorization status to our error. Split out so the
@@ -226,6 +235,10 @@ impl OnDeviceTranscriber {
             request.setContextualStrings(&NSArray::from_retained_slice(&words));
 
             let (tx, rx) = mpsc::channel();
+            // The recognizer's locale is the only language signal this backend
+            // has (step A12); it travels with the transcript so the reply and the
+            // TTS voice match what was actually recognized.
+            let locale = self.locale.clone();
             let handler = StackBlock::new(
                 move |result: *mut SFSpeechRecognitionResult, error: *mut NSError| {
                     if !error.is_null() {
@@ -250,7 +263,7 @@ impl OnDeviceTranscriber {
                     let result = &*result;
                     if result.isFinal() {
                         let text = result.bestTranscription().formattedString();
-                        let _ = tx.send(finish_transcript(&text.to_string()));
+                        let _ = tx.send(finish_transcript(&text.to_string(), Some(&locale)));
                     }
                 },
             );
@@ -311,16 +324,19 @@ mod tests {
 
     #[test]
     fn blank_transcripts_are_silence() {
-        assert_eq!(finish_transcript("   "), Err(SttError::Silent));
-        assert_eq!(finish_transcript("").unwrap_err(), SttError::Silent);
+        assert_eq!(finish_transcript("   ", None), Err(SttError::Silent));
+        assert_eq!(finish_transcript("", None).unwrap_err(), SttError::Silent);
     }
 
     #[test]
-    fn transcripts_are_trimmed() {
-        assert_eq!(
-            finish_transcript("  send 10 USDC  ").unwrap().text,
-            "send 10 USDC"
-        );
+    fn transcripts_are_trimmed_and_carry_the_recognizer_locale() {
+        let transcription = finish_transcript("  send 10 USDC  ", Some("en-US")).unwrap();
+        assert_eq!(transcription.text, "send 10 USDC");
+        // The on-device backend can only report the locale it was pinned to; it
+        // is normalized to a BCP-47 tag so the TTS voice lookup sees one shape.
+        assert_eq!(transcription.language.as_deref(), Some("en-us"));
+        // No locale (a direct call in a test) stays unknown, never guessed.
+        assert_eq!(finish_transcript("hi", None).unwrap().language, None);
     }
 
     #[test]
@@ -337,5 +353,113 @@ mod tests {
         let transcriber = OnDeviceTranscriber::new("tr-TR".to_string());
         assert_eq!(transcriber.name(), "ondevice");
         assert_eq!(transcriber.locale, "tr-TR");
+    }
+
+    /// Runs one audio file through one locale and returns the transcript plus
+    /// the mean per-segment confidence. Test-only; used by the A12 probe below.
+    fn probe_confidence(wav: &Path, locale: &str) -> Result<(String, f32), SttError> {
+        use objc2_speech::{SFTranscription, SFTranscriptionSegment};
+        // SAFETY: every Speech object is created and dropped inside this
+        // function; only the finished `(String, f32)` crosses the channel.
+        unsafe {
+            let identifier = NSString::from_str(locale);
+            let ns_locale = NSLocale::localeWithLocaleIdentifier(&identifier);
+            let recognizer =
+                SFSpeechRecognizer::initWithLocale(SFSpeechRecognizer::alloc(), &ns_locale)
+                    .ok_or_else(|| SttError::Unavailable {
+                        locale: locale.to_string(),
+                    })?;
+            if !recognizer.supportsOnDeviceRecognition() || !recognizer.isAvailable() {
+                return Err(SttError::Unavailable {
+                    locale: locale.to_string(),
+                });
+            }
+            let path = NSString::from_str(&wav.to_string_lossy());
+            let url = NSURL::fileURLWithPath(&path);
+            let request = SFSpeechURLRecognitionRequest::initWithURL(
+                SFSpeechURLRecognitionRequest::alloc(),
+                &url,
+            );
+            request.setShouldReportPartialResults(false);
+            request.setRequiresOnDeviceRecognition(true);
+            request.setTaskHint(SFSpeechRecognitionTaskHint::Dictation);
+
+            let (tx, rx) = mpsc::channel();
+            let handler = StackBlock::new(
+                move |result: *mut SFSpeechRecognitionResult, error: *mut NSError| {
+                    if !error.is_null() {
+                        let error = &*error;
+                        let _ = tx.send(Err(SttError::Speech(format!(
+                            "{} ({}, code {})",
+                            error.localizedDescription(),
+                            error.domain(),
+                            error.code(),
+                        ))));
+                        return;
+                    }
+                    if result.is_null() {
+                        let _ = tx.send(Err(SttError::Speech("no result".to_string())));
+                        return;
+                    }
+                    let result = &*result;
+                    if result.isFinal() {
+                        let best: Retained<SFTranscription> = result.bestTranscription();
+                        let text = best.formattedString().to_string();
+                        let segments: Retained<NSArray<SFTranscriptionSegment>> = best.segments();
+                        let mut sum = 0.0f32;
+                        let mut count = 0usize;
+                        for segment in segments.iter() {
+                            sum += segment.confidence();
+                            count += 1;
+                        }
+                        let mean = if count == 0 { 0.0 } else { sum / count as f32 };
+                        let _ = tx.send(Ok((text, mean)));
+                    }
+                },
+            );
+            let task = recognizer.recognitionTaskWithRequest_resultHandler(&request, &handler);
+            match rx.recv_timeout(ON_DEVICE_RECOGNITION_TIMEOUT) {
+                Ok(outcome) => outcome,
+                Err(_) => {
+                    task.cancel();
+                    Err(SttError::Timeout)
+                }
+            }
+        }
+    }
+
+    /// Empirical half of the "two on-device recognizers in parallel" question
+    /// (step A12): runs the same audio through `tr-TR` and `en-US` and prints
+    /// each transcript with its mean per-segment confidence, so it can be seen
+    /// whether the confidence is a usable cross-locale discriminator or a coin
+    /// flip. Ignored by default: it needs Speech permission and real audio.
+    ///
+    /// ```text
+    /// POLARIS_E2E_WAV=/path/to/clip.wav caffeinate -i cargo test \
+    ///   manual_parallel_recognisers_report_confidence -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "runs the real on-device recognizers; needs Speech permission and POLARIS_E2E_WAV"]
+    fn manual_parallel_recognisers_report_confidence() {
+        let Some(path) = crate::env::var("POLARIS_E2E_WAV") else {
+            eprintln!("polaris: set POLARIS_E2E_WAV to a 16-bit PCM WAV to run the probe");
+            return;
+        };
+        if let Err(error) = ensure_authorized() {
+            println!("polaris: probe aborted: {} ({})", error.label(), error.detail());
+            return;
+        }
+        for locale in ["tr-TR", "en-US"] {
+            match probe_confidence(Path::new(&path), locale) {
+                Ok((text, confidence)) => {
+                    println!("polaris: probe {locale}: confidence={confidence:.4} text={text:?}")
+                }
+                Err(error) => println!(
+                    "polaris: probe {locale}: {} ({})",
+                    error.label(),
+                    error.detail()
+                ),
+            }
+        }
     }
 }

@@ -137,7 +137,7 @@ export default function App() {
       });
     };
 
-    const runFromTranscript = (raw: string): void => {
+    const runFromTranscript = (raw: string, language?: string): void => {
       const admission = flowRef.current.offer(raw);
       if (admission.kind === "ignore") return;
       const { ticket } = admission;
@@ -146,11 +146,19 @@ export default function App() {
       // takes the transcript; that event — not this call — enters the thinking
       // stage. Nothing here may jump ahead to "speaking": that is raised only by
       // the backend's real playback-start event.
-      void runAgentTurn(ticket.transcript, {
-        onAgentStage: (stage) => {
-          if (stage === "thinking" && current()) dispatchTurn({ type: "transcribed" });
+      //
+      // Step A12: the STT-detected language rides the transcript event and is
+      // handed to the agent, which pins it into the prompt and reconciles it
+      // against the model's own report for the reply/voice.
+      void runAgentTurn(
+        ticket.transcript,
+        {
+          onAgentStage: (stage) => {
+            if (stage === "thinking" && current()) dispatchTurn({ type: "transcribed" });
+          },
         },
-      })
+        language,
+      )
         .then((run) => {
           if (disposed || !current()) return;
           if (!run.ok) {
@@ -220,7 +228,7 @@ export default function App() {
               event.state === "speaking" ? { type: "speech_started" } : { type: "speech_finished" },
             );
           } else if (event.type === "transcript" && event.final) {
-            runFromTranscript(event.text);
+            runFromTranscript(event.text, event.language ?? undefined);
           }
         });
         if (disposed) {

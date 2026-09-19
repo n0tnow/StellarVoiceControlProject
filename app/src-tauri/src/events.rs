@@ -74,6 +74,11 @@ pub enum PolarisEvent {
         text: String,
         /// `final` is a Rust keyword; serde strips the `r#` and emits "final".
         r#final: bool,
+        /// The language the audio was recognized as, as a BCP-47 tag (step A12),
+        /// or `null` when the backend could not report it. It is measured from
+        /// the audio and is the authoritative signal for the reply language and
+        /// the TTS voice — never the model's own guess.
+        language: Option<String>,
     },
     AgentStatus {
         stage: AgentStage,
@@ -143,9 +148,27 @@ mod tests {
         let json = serde_json::to_string(&PolarisEvent::Transcript {
             text: "hi".into(),
             r#final: true,
+            language: Some("en".into()),
         })
         .unwrap();
-        assert_eq!(json, r#"{"type":"transcript","text":"hi","final":true}"#);
+        // Step A12: the detected language rides the transcript event. The
+        // webview relies on the exact key, so it is pinned here.
+        assert_eq!(
+            json,
+            r#"{"type":"transcript","text":"hi","final":true,"language":"en"}"#
+        );
+
+        // Unknown language is explicit `null`, never a missing/ambiguous field.
+        let json = serde_json::to_string(&PolarisEvent::Transcript {
+            text: "hi".into(),
+            r#final: true,
+            language: None,
+        })
+        .unwrap();
+        assert_eq!(
+            json,
+            r#"{"type":"transcript","text":"hi","final":true,"language":null}"#
+        );
 
         let json = serde_json::to_string(&PolarisEvent::TxSubmitted {
             hash: "abc".into(),

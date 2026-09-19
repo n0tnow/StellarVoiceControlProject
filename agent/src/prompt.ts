@@ -30,6 +30,11 @@ export const POLARIS_SYSTEM_PROMPT = [
   "- Never invent an amount, asset or recipient the user did not say, and never",
   "  mention that you are an AI model.",
   "",
+  "Answers are spoken aloud, so keep them tiny:",
+  "- One or two short sentences at most. A confirmation is about 40 characters.",
+  "- Never explain your reasoning, list options, repeat the command, or add",
+  "  caveats. Anything longer is cut off before it is spoken.",
+  "",
   "Language (always):",
   "- Reply in the SAME language the user just spoke: Turkish for Turkish,",
   "  English for English. Never switch language.",
@@ -39,3 +44,24 @@ export const POLARIS_SYSTEM_PROMPT = [
   '  for example "[en] Sure, what should I send?" or "[tr] Tamam, kime',
   '  gönderelim?". The tag is metadata; keep the rest natural.',
 ].join("\n");
+
+/**
+ * Pins the recogniser-detected language into the system prompt (step A12).
+ *
+ * Once STT tells us what the user spoke, the model should not have to guess: the
+ * A11 bug was exactly a bad guess poisoning the reply. This appends one explicit
+ * instruction naming the detected language. It is a no-op when detection is
+ * unavailable, so a backend that cannot report a language still gets the
+ * original prompt and the model's own report remains the fallback.
+ */
+export function withDetectedLanguage(system: string, language?: string): string {
+  if (!language) {
+    return system;
+  }
+  return [
+    system,
+    "",
+    `The recogniser detected the user's spoken language as "${language}".`,
+    `Reply in exactly that language and set the language field/tag to it.`,
+  ].join("\n");
+}

@@ -150,7 +150,13 @@ export type PolarisEvent =
   | { type: "hotkey_permission"; trusted: boolean }
   | { type: "capture_status"; status: CaptureStatus }
   | { type: "audio_captured"; path: string; durationMs: number }
-  | { type: "transcript"; text: string; final: boolean }
+  /**
+   * A final transcript, plus the language the STT backend recognized the audio
+   * as — a BCP-47 tag such as `"en"`/`"tr-TR"`, or `null` when the backend could
+   * not report one (step A12). The detected language is measured from the audio
+   * and is what the reply language and the TTS voice follow.
+   */
+  | { type: "transcript"; text: string; final: boolean; language: string | null }
   | { type: "agent_status"; stage: AgentStage }
   /**
    * Audible-playback lifecycle. `speaking` is emitted when the sentence is handed
