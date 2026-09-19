@@ -51,19 +51,15 @@ pub fn run() {
             // transitions without blocking the hotkey driver.
             let (ready_tx, ready_rx) = std::sync::mpsc::channel();
             let capture = capture::Capture::new(recordings_dir.clone(), ready_tx);
-            let backend = stt::groq::GroqTranscriber::from_env();
-            if !backend.has_key() {
-                println!(
-                    "polaris: GROQ_API_KEY is not set — capture still works, but the overlay \
-                     will show \"No STT key\" instead of a transcript. Set it in the environment \
-                     or a gitignored .env at the repo root (see .env.example)."
-                );
-            }
+            // Backend selection lives in `stt`: on-device by default, Groq only
+            // when explicitly requested or as a configured fallback. It logs the
+            // choice (and any missing key) itself.
+            let backend = stt::build_backend();
             stt::start(
                 app.handle().clone(),
                 recordings_dir,
                 ready_rx,
-                std::sync::Arc::new(backend),
+                backend,
                 capture.clone(),
             );
             app.manage(capture);

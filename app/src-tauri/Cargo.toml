@@ -44,6 +44,13 @@ objc2-app-kit = { version = "0.3", features = ["NSScreen", "NSWindow"] }
 # `NSGeometry` carries NSPoint/NSRect/NSSize/NSEdgeInsets; `NSEnumerator`
 # unlocks NSArray::iter, used to scan screens for the notched display.
 objc2-foundation = { version = "0.3", features = ["NSEnumerator", "NSGeometry"] }
+# Step A1 on-device backend: the macOS Speech framework (`SFSpeechRecognizer`).
+# Same objc2 0.6.x generation as the app-kit/foundation crates above (see
+# `cargo tree -i objc2`); the default features are left on so the generated
+# classes the backend uses are all present, and `objc2-avf-audio` /
+# `objc2-core-media` come along as harmless same-generation transitives.
+# `block2` provides the result-handler block.
+objc2-speech = "0.3"
 # Modifier-only Control+Option hold: an `NSEvent` flagsChanged monitor pair
 # needs the Objective-C block runtime (`block2`, already a default feature of
 # objc2-app-kit for NSEvent) and a CoreFoundation dictionary for the
