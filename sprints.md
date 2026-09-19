@@ -27,7 +27,7 @@
 > Goal: voice → agent → one real testnet transaction. Deadline: today (hackathon crunch, ~6h blocks).
 - [ ] docs/interfaces.md agreed by both owners (types: Intent, ChainTool, SigningService, PolarisEvent)
 - [ ] Tauri spike: global hotkey + mic capture + Touch ID + Keychain read (Tauri vs Electron decision lands here)
-- [ ] Repository skeleton: app/, agent/, stellar/, contracts/ + CI-less build scripts
+- [x] Repository skeleton: app/, agent/, stellar/, contracts/ + CI-less build scripts (2026-09-19, `feat/monorepo-skeleton`)
 - [ ] Voice pipeline: hotkey press/release → STT → agent loop → spoken/displayed answer
 - [ ] Chain tool: "send 10 USDC to <alias>" returns unsigned XDR + decoded summary
 - [ ] Touch ID approval card → signed XDR → testnet tx confirmed (SLICE COMPLETE)
