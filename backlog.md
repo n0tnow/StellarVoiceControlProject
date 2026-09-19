@@ -63,7 +63,7 @@
 | 2026-09-19 | **T3 — suggestions engine**: pure `suggest()` + fixtures + tests (`stellar/src/suggest/`, PLANNED) | Owner B | planned | [`docs/approval-and-scheduling.md`](docs/approval-and-scheduling.md) §6, §9 | P2 |
 | 2026-09-19 | **T4 — history readers**: local encrypted history store + Horizon/`Paid` events reader | Owner B | planned | [`docs/approval-and-scheduling.md`](docs/approval-and-scheduling.md) §6, §9 | P2 |
 | 2026-09-19 | **T5 — UI**: Settings "Security" profiles, "Upcoming payments" list with Cancel, suggestions panel with Accept/Dismiss, auto-pay enable card | Owner A | planned | [`docs/approval-and-scheduling.md`](docs/approval-and-scheduling.md) §3–§5, §9 | P1 |
-| 2026-09-19 | **T6 — demo runbook**: keeper start/rehearse/verify, scheduled-payment demo, approval-profile demo | docs worker (W-docs) | skeleton in this PR; complete after T1/T2/T5 | [`docs/demo-runbook.md`](docs/demo-runbook.md) | P1 |
+| 2026-09-19 | **T6 — demo runbook**: keeper start/rehearse/verify, scheduled-payment demo, approval-profile demo | Owner B | skeleton in this PR; complete after T1/T2/T5 | [`docs/demo-runbook.md`](docs/demo-runbook.md) | P1 |
 
 ## Completed Tasks (Archive)
 

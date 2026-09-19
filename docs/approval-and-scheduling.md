@@ -43,7 +43,7 @@ hosting explained plainly, and the work items T1–T6.
 | **Executor** | The agent's registered key in `polaris_guard`. When registered, the agent may call `pay_executor` within the published rule. |
 | **Auto-approve limit** | The rule's `auto_approve_limit`: **a per-transaction ceiling** on an unattended `pay_executor` payment. It is *not* the daily mandate. |
 | **Daily limit** | The rule's `daily_limit`: the **agent's real spending mandate** per UTC day (shared counter across owner/executor paths). App copy must present this as the mandate. |
-| **Allowance** | The SAC `approve(from=owner, spender=guard, amount, live_until_ledger)`: the money ceiling and the user's off-chain kill switch. |
+| **Allowance** | The SAC `approve(from=owner, spender=guard, amount, live_until_ledger)`: the money ceiling and the user's off-chain kill switch. Mandatory for every guard payment (`pay_owner`, `pay_executor`, schedules — all settle through `transfer_from`). |
 | **Keeper** | An untrusted off-chain program that calls `execute_schedule(id)` when a schedule is due (the chain has no timers). |
 | **Draft** | A speech/settings-derived, unsigned description of a change (`RuleDraft`, `ScheduleDraft`) that is read back and then signed. Never applied silently. |
 
@@ -56,11 +56,19 @@ For the full guard ABI, rule fields and error codes, see `contracts/DEPLOYED.md`
 Three profiles are exposed in the UI and selected by voice/settings. All three share the same chain
 contract; only what is registered on-chain and which call path is used differ.
 
-| Profile | What the user sees | On-chain state (executor? / `auto_approve_limit` / `daily_limit` / allowance) | Call path | Who signs | Card shown? |
-|---|---|---|---|---|---|
-| **Always ask** [DEFAULT] | Every money-out shows an approval card + Touch ID. Nothing is auto-approved. | **No executor** registered. `auto_approve_limit` unused (0). `daily_limit` may still be published as the owner-path hard cap. Allowance only needed if schedules are used. | `pay_owner` | Owner (Touch ID) | **Yes**, every payment |
-| **Auto-pay under threshold** | Payments **≤ threshold** complete without a card; payments **above** show a card. | **Executor registered.** `auto_approve_limit` = threshold. `daily_limit` = the real mandate (shown prominently). Allowance ≥ largest schedule total, default `daily_limit * 7` (**PROPOSED**). | `pay_executor` for ≤ threshold (agent-signed); `pay_owner` for > threshold | Agent key for `pay_executor`; owner (Touch ID) for `pay_owner` | **No** for ≤ threshold; **Yes** for > threshold |
-| **Custom** | Explicit values entered by the user (per-tx, daily, asset, contacts-only, allowance). Behaviour is the same as auto-pay. | **Executor registered.** `auto_approve_limit`, `per_tx_limit`, `daily_limit`, `allowed_assets` (currently at most ONE), `known_recipients_only` set explicitly. Allowance set explicitly. | `pay_executor` for ≤ `auto_approve_limit`; `pay_owner` otherwise | Agent key for `pay_executor`; owner (Touch ID) for `pay_owner` | Same as auto-pay under threshold |
+| Profile | What the user sees | On-chain state (executor? / `auto_approve_limit` / `daily_limit` / allowance) | Allowance required? | Call path | Who signs | Card shown? |
+|---|---|---|---|---|---|---|
+| **Always ask** [DEFAULT] | Every money-out shows an approval card + Touch ID. Nothing is auto-approved. | **No executor** registered. `auto_approve_limit` unused (0). `daily_limit` may still be published as the owner-path hard cap. SAC allowance **mandatory** (see normative rule). | **Yes** (mandatory) | `pay_owner` | Owner (Touch ID) | **Yes**, every payment |
+| **Auto-pay under threshold** | Payments **≤ threshold** complete without a card; payments **above** show a card. | **Executor registered.** `auto_approve_limit` = threshold. `daily_limit` = the real mandate (shown prominently). Allowance **mandatory**; ≥ largest schedule total, default `daily_limit * 7` (**PROPOSED**). | **Yes** (mandatory) | `pay_executor` for ≤ threshold (agent-signed); `pay_owner` for > threshold | Agent key for `pay_executor`; owner (Touch ID) for `pay_owner` | **No** for ≤ threshold; **Yes** for > threshold |
+| **Custom** | Explicit values entered by the user (per-tx, daily, asset, contacts-only, allowance). Behaviour is the same as auto-pay. | **Executor registered.** `auto_approve_limit`, `per_tx_limit`, `daily_limit`, `allowed_assets` (currently at most ONE), `known_recipients_only` set explicitly. Allowance **mandatory**, set explicitly. | **Yes** (mandatory) | `pay_executor` for ≤ `auto_approve_limit`; `pay_owner` otherwise | Agent key for `pay_executor`; owner (Touch ID) for `pay_owner` | Same as auto-pay under threshold |
+
+**Normative rule — the allowance is mandatory.** The SAC allowance (`approve(owner -> guard)`) is
+MANDATORY for every guard payment (`pay_owner`, `pay_executor` and schedule runs all settle through
+`transfer_from`, `contracts/polaris_guard/src/lib.rs` `settle()`); size it to cover the intended
+mandate plus all schedules; revoking it disables ALL guard payments. The first-time setup therefore
+creates the allowance (SAC `approve`) even before auto-pay is enabled — this is part of the "Always
+ask" baseline state. Enabling auto-pay then **adds** `set_executor` + `set_rule` (and **raises** the
+allowance if the intended mandate needs more).
 
 **Normative rule — the app preference can only be stricter than the chain, never looser.** The stored
 app preference may refuse or ask for more than the chain allows (e.g. an app-side lower threshold), but
@@ -81,6 +89,11 @@ auto-pay profile (see §10, open question).
 ---
 
 ## 3. Enabling auto-pay (voice and settings)
+
+Auto-pay is enabled **on top of the "Always ask" baseline state** from §2, which already contains the
+mandatory SAC allowance. Enabling auto-pay **adds** `set_executor` + `set_rule` to that baseline and
+**raises the allowance** if the intended mandate (plus schedules) exceeds the current allowance. The
+allowance is never optional: without it even `pay_owner` cannot settle.
 
 ### 3.1 Voice/settings flow
 
@@ -126,7 +139,7 @@ them in order.
 
 ### 3.4 Disabling auto-pay
 
-- `revoke_executor(owner)` — one owner call. Optional allowance revoke: SAC `approve` with amount 0.
+- `revoke_executor(owner)` — one owner call. Revoking the allowance is optional: SAC `approve` with amount 0.
 - Disabling is a **tightening** (see §3.5): voice with read-back + lighter confirmation is allowed.
 - Note: revoking the executor does **not** stop existing schedules (F-01); each schedule must be
   cancelled separately, or the allowance revoked (which also disables `pay_owner`).
@@ -174,25 +187,54 @@ voice with read-back and the lighter confirmation.
 }
 ```
 
-### 4.2 `RuleDraft` for auto-pay
+### 4.2 `RuleDraft` (seam) → `RulePayload` (chain-client internal)
+
+`RuleDraft` is **exactly** the flat camelCase seam shape (`docs/interfaces.md` §6.1, mirroring PR #8
+`docs/rule-types-and-decisions` §6.2); it is speech-derived and never signed directly. The chain client
+maps it to `RulePayload`, the snake_case payload that mirrors the contract `Rule` struct and is
+**internal to the chain client** (not part of the seam). The agent emits an `Intent` of kind `set_rule`
+carrying this `RuleDraft`; `kind` is not part of the draft.
+
+`RuleDraft` (seam shape; decimal strings in **display units**):
 
 ```json
 {
-  "kind": "set_rule",
-  "source": "don't ask me for payments under 25 USDC",
-  "rule": {
-    "auto_approve_limit": "250000000",
-    "per_tx_limit": "500000000",
-    "daily_limit": "1000000000",
-    "allowed_assets": ["CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA"],
-    "known_recipients_only": true
-  },
-  "readBack": "Allow automatic payments up to 25 USDC, max 100 USDC per day, to saved contacts only, for 30 days?"
+  "autoApproveLimit": "25",
+  "perTxLimit": "50",
+  "dailyLimit": "100",
+  "assets": ["USDC"],
+  "knownRecipientsOnly": true,
+  "source": "don't ask me for payments under 25 USDC"
 }
 ```
 
-*(Raw token units, 7 decimals for USDC. The client resolves `asset` locally and never passes through
-an agent-supplied address — `contracts/DEPLOYED.md` limitation F-06.)*
+Mapping `RuleDraft` (camelCase, decimal display units) → `RulePayload` (snake_case, raw i128 token
+units, 7 decimals for USDC):
+
+| `RuleDraft` field | `RulePayload` field | Conversion |
+|---|---|---|
+| `autoApproveLimit` | `auto_approve_limit` | decimal → raw units (`25` → `"250000000"`) |
+| `perTxLimit` | `per_tx_limit` | decimal → raw units |
+| `dailyLimit` | `daily_limit` | decimal → raw units |
+| `assets` | `allowed_assets` | alias/asset → SAC contract address |
+| `knownRecipientsOnly` | `known_recipients_only` | passthrough |
+| `source` | — | draft provenance only; never on-chain |
+
+Resulting `RulePayload` (chain-client internal, sent to `set_rule`):
+
+```json
+{
+  "auto_approve_limit": "250000000",
+  "per_tx_limit": "500000000",
+  "daily_limit": "1000000000",
+  "allowed_assets": ["CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA"],
+  "known_recipients_only": true
+}
+```
+
+*(The chain client resolves `assets` locally and never passes through an agent-supplied address —
+`contracts/DEPLOYED.md` limitation F-06. `readBack` is not a field of `RuleDraft`; the client composes
+the read-back sentence from the draft — exact example in §3.1.)*
 
 ### 4.3 Combined approval-card summary (three actions)
 
@@ -343,15 +385,18 @@ a regular cadence).
 **Minimum-data rule (PROPOSED):** at least **8 payments over at least 7 days**; otherwise the app says
 "not enough history yet" and produces no suggestions.
 
-### 6.3 Suggestion kinds
+### 6.3 Suggestion kinds (PROPOSED)
 
 | Kind | Trigger rule | Proposed change | Evidence shown |
 |---|---|---|---|
-| `auto_pay_threshold` | Payments to known contacts cluster under a p90 | `RuleDraft` setting `auto_approve_limit` = round-up of p90 | count, median, p90, max, window |
-| `daily_limit` | Daily totals have a stable p95 | `RuleDraft` setting `daily_limit` = p95 daily total × 1.5, rounded | median/p95/max daily totals |
+| `auto_pay_threshold` | Payments to known contacts cluster under a p90 | `RuleDraft` setting `auto_approve_limit` = p90 rounded **UP** to the nearest multiple of 5 display units (**PROPOSED**) | count, median, p90, max, window |
+| `daily_limit` | Daily totals have a stable p95 | `RuleDraft` setting `daily_limit` = p95 daily total × 1.5, rounded **UP** to the nearest multiple of 5 display units (**PROPOSED**) | median/p95/max daily totals |
 | `schedule_from_recurrence` | Same recipient + similar amount at a regular cadence | `ScheduleDraft` | detected cadence, occurrences |
 | `tighten_dormant` | Auto-pay enabled but unused > 30 days | `DisableAutoPay` | last-used date, unused days |
 | `unusual_payment_alert` | A payment amount > 3× p90 | Ask for extra confirmation next time | amount, p90, ratio |
+
+**Rounding (PROPOSED):** suggestion thresholds and daily limits are rounded **UP** to the nearest
+multiple of 5 in display units (never down, never to the nearest).
 
 ### 6.4 `Suggestion` type (PROPOSED)
 
@@ -408,8 +453,8 @@ max 22.0 USDC; p95 daily total = 38 USDC.
 
 | Suggestion | Computation | Proposed change |
 |---|---|---|
-| `auto_pay_threshold` | round-up(p90 = 18.4) | threshold = **20 USDC** |
-| `daily_limit` | round(38 × 1.5) = 57 | daily limit = **60 USDC** |
+| `auto_pay_threshold` | p90 = 18.4 → round **UP** to nearest 5 = 20 | threshold = **20 USDC** |
+| `daily_limit` | 38 × 1.5 = 57 → round **UP** to nearest 5 = 60 | daily limit = **60 USDC** |
 
 Card text: *"Over the last 30 days you sent 14 payments to saved contacts, all under 20 USDC; allow
 automatic payments up to 20 USDC with a 60 USDC daily limit?"*
@@ -474,7 +519,7 @@ keepers**.
 
 ## 8. Interaction with other docs
 
-### 8.1 Privacy modes (`docs/confidential-payments.md`, D1–D9)
+### 8.1 Privacy modes (`docs/confidential-payments.md`, D1–D8)
 
 - `polaris_guard` enforces per-tx/daily limits on **plaintext** amounts, so confidential amounts are
   **invisible to the guard**; the guard cannot enforce limits on the confidential leg.
@@ -496,12 +541,12 @@ keepers**.
 
 | ID | Task | Owner | Files/dirs | Depends on | Acceptance criteria (measurable) | Effort |
 |---|---|---|---|---|---|---|
-| **T1** | Approval policy + profiles: `approvalPolicy` routing (`always_ask` \| `auto_under_limit`), profile→on-chain mapping, `enableAutoPay(draft)` producing the three unsigned calls + ONE combined summary, `disableAutoPay()` | B | `stellar/src/guard/` (PLANNED) | Guard client (in progress) | Offline unit tests: `enableAutoPay` yields exactly 3 ordered unsigned calls and one summary; `disableAutoPay` yields `revoke_executor` (+ optional approve 0); routing sends > threshold to `pay_owner` | M |
+| **T1** | Approval policy + profiles: `approvalPolicy` routing (`always_ask` \| `auto_under_limit`), profile→on-chain mapping, `enableAutoPay(draft)` producing the three unsigned calls + ONE combined summary, `disableAutoPay()` | B | `stellar/src/guard/` (PLANNED) | Guard client (in progress) | Offline unit tests: `enableAutoPay` yields exactly 3 ordered unsigned calls (`set_executor`, `set_rule`, `approve`) and one summary; the third (`approve`) is the mandatory allowance; `disableAutoPay` yields `revoke_executor` (+ optional approve 0); routing sends > threshold to `pay_owner` | M |
 | **T2** | Schedule tools: `schedulePayment`, `cancelSchedule`, `listSchedules` ChainTools (unsigned XDR + summary) + explicit-timezone local→UTC helper | B | `stellar/src/payments/` or `stellar/src/guard/` (PLANNED) | Guard client | Offline tests: "every Friday for 8 weeks" → `interval_secs 604800, runs 8`; one-shot → `0,1`; ambiguous cancel → agent asks; local+UTC both in summary | M |
 | **T3** | Suggestions engine: pure `suggest()` + fixtures + tests | B | `stellar/src/suggest/` (PLANNED) | — (offline) | Fixture with 14 payments yields `auto_pay_threshold` 20 and `daily_limit` 60; `< 8` payments yields none | S |
 | **T4** | History readers: local encrypted history store (design `docs/confidential-payments.md` §6) + Horizon/`Paid` events reader | B | PLANNED (history store + chain reader) | T3 (shape), network for live runs | Offline: fixture history parses; live: reader returns public payments for the owner account (network run needs approval) | M |
 | **T5** | UI: Settings "Security" (three profiles, threshold + daily-limit inputs), "Upcoming payments" list with Cancel, suggestions panel with Accept/Dismiss, auto-pay enable card listing the 3 actions | A | `app/` (PLANNED components) | T1, T2, T3 | Manual: enable auto-pay by voice → card lists 3 actions → small payment has no card → large payment asks; Upcoming list cancels a schedule | L |
-| **T6** | Demo runbook `docs/demo-runbook.md`: keeper start/rehearse/verify, scheduled-payment demo, approval-profile demo | A | `docs/demo-runbook.md` (skeleton in this docs PR) | T1, T2, T5 | A reader can run the keeper and reproduce both demo scripts on testnet | S |
+| **T6** | Demo runbook `docs/demo-runbook.md`: keeper start/rehearse/verify, scheduled-payment demo, approval-profile demo | B | `docs/demo-runbook.md` (skeleton in this docs PR) | T1, T2, T5 | A reader can run the keeper and reproduce both demo scripts on testnet | S |
 
 **Sequence:** T1/T2 follow the guard client; T4 after T3; T5 after T1–T3; T6 completes after T5.
 This mirrors the source notes' ordering (after the headless slice).
@@ -520,7 +565,24 @@ This mirrors the source notes' ordering (after the headless slice).
 
 ---
 
-*Cross-references: `docs/confidential-payments.md` (privacy modes, D1–D9), `docs/interfaces.md`
+## 11. Design decisions to confirm (PROPOSED defaults)
+
+> These are the gaps found in independent review. Everything here is **PROPOSED** and awaits
+> confirmation; no contract behaviour is assumed beyond `contracts/DEPLOYED.md` and
+> `contracts/polaris_guard/src/lib.rs`.
+
+| # | Question | PROPOSED default | Why | Confirmed by |
+|---|---|---|---|---|
+| a | Deriving `daily_limit` / `per_tx_limit` from a voice request like "don't ask under 25" | The agent must **not** invent them: it asks one question for the daily limit; the card offers `per_tx_limit = threshold`, `daily_limit = 4 × threshold` as **editable fields**; nothing is applied until the user confirms the read-back (**PROPOSED**). | Avoid inventing a daily mandate from an ambiguous utterance; keep the user in control. | Owner A + Owner B |
+| b | Natural-language time ("tomorrow 15:00", "every Friday 10:00") | The **agent** resolves the phrase into explicit local date + time + **IANA timezone** before calling the chain tool; timezone source = the **device timezone**, shown on the card and editable; default `runs` when omitted for "every X" = **ask** ("for how many weeks?"), **never infinite**; one-shot when no repeat is given (**PROPOSED**). | The chain takes UTC epoch seconds; ambiguity must be resolved and shown before signing. | Owner B (helper) + Owner A (card) |
+| c | `DisableAutoPay` result shape | `{ steps: [ {kind:"revoke_executor", unsignedXdr, payloadHash}, optional {kind:"approve", amount:"0", ...} ], summary, confirmation:"light" }` (mirrors the enable builder) (**PROPOSED**). | The disable flow needs a fixed type for T1/T5. | Owner B |
+| d | Acceptance criteria for "app preference is never looser than the chain" | Property test: for random rules/amounts the app policy never routes to `pay_executor` when `chooseGuardedRoute` (chain-based) would not; and the combined enable card lists **exactly three** actions in the order `set_executor`, `set_rule`, `approve` (allowance last) (**PROPOSED**). | Makes the invariant and the card order testable. | Owner B |
+| e | First-time setup flow (allowance before anything else) | Setup wizard = `approve` allowance → `set_rule` (default profile **Always ask**: executor not registered) → aliases; this is the "Always ask" baseline state (**PROPOSED**). | The allowance is mandatory for every guard payment including `pay_owner` (§2). | Owner A + Owner B |
+| f | Keeper hosting (D12) | Stays **PROPOSED**: same Mac for the demo. | Awaiting user confirmation; no decision recorded. | User |
+
+---
+
+*Cross-references: `docs/confidential-payments.md` (privacy modes, D1–D8), `docs/interfaces.md`
 (reserved seam), `contracts/DEPLOYED.md` (ABI, rule semantics, F-01/F-03/F-06/F-12),
 `stellar/src/keeper/README.md` (keeper config/behaviour), `docs/demo-runbook.md` (demo steps),
 `notes.md` (D10/D10b/D10c/D11/D12), `sprints.md` (M2b/M3c), `backlog.md` (T1–T6).*

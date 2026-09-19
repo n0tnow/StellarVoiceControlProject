@@ -43,6 +43,13 @@ stellar contract invoke --id "$GUARD_CONTRACT_ID" --network testnet --source-acc
   --address GARXWVNCJ22U2OR23LAB5Z5RWI2XFIJZA2R3TRPFUKKY65JQZZOEWWCO
 ```
 
+**SAC allowance (mandatory, before the first payment).** Every guard payment — `pay_owner`,
+`pay_executor` and every schedule run — settles through SEP-41 `transfer_from`, so the owner must first
+`approve(owner → guard)` on the asset SAC with an amount covering the intended mandate **plus all
+schedules**. This step is required even for the "Always ask" profile, before the first payment demo.
+Revoking the allowance disables **ALL** guard payments. *(requires T1 for app-driven setup; raw
+commands are in `contracts/DEPLOYED.md`.)*
+
 **Demo asset.** `PGUSD` (`PGUSD:GB7YX7…F2EE`), SAC `CC2V2R6JLMVGXQOXMZLATCNOVNS2QEOKSNZYO7DATCWJNJTUPCI5QX3E`,
 7 decimals — a throwaway issuer because the Circle USDC faucet is captcha-gated.
 (`requires T1/T2` for app-driven setup; the raw commands are in `contracts/DEPLOYED.md`.)
@@ -110,8 +117,9 @@ total of all schedules.
 
 ## 4. Approval-profile demo
 
-**4.1 Always ask [DEFAULT].** Start with no executor registered. A payment shows an approval card and
-requires Touch ID. Nothing is auto-approved. *(base slice; no T1 needed.)*
+**4.1 Always ask [DEFAULT].** Baseline state = no executor registered, `set_rule` with the Always ask
+default, aliases set, and the mandatory SAC allowance already in place (§1). A payment shows an
+approval card and requires Touch ID. Nothing is auto-approved. *(base slice; no T1 needed.)*
 
 **4.2 Enable auto-pay by voice.** Say "don't ask me for payments under 25 USDC". The app builds a
 `RuleDraft`, reads it back, then shows **ONE approval card** listing the three owner calls

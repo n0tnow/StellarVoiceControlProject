@@ -135,9 +135,22 @@ export interface ApprovalProfile {
   allowance?: { amount: string; liveUntilLedger: number };
 }
 
+// RESERVED. Speech-derived rule draft, read back then signed. EXACTLY the shape agreed in
+// PR #8 (`docs/rule-types-and-decisions` §6.2); flat camelCase, decimal strings.
+export interface RuleDraft {
+  autoApproveLimit: string;
+  perTxLimit?: string;
+  dailyLimit?: string;
+  assets?: string[];
+  knownRecipientsOnly?: boolean;
+  source?: string; // transcript excerpt
+}
+
 // RESERVED. Combined multi-action approval summary (provisional). The auto-pay enable card
 // lists three owner calls (set_executor, set_rule, SAC approve) behind ONE card + Touch ID.
-// This is a PROVISIONAL extension of TxSummary — field name and shape to be confirmed with Owner A.
+// `actions[]` is NEW to `interfaces/src` only — the base `TxSummary` already exists in the Rust
+// mirror (`app/src-tauri/src/types.rs`). This is a PROVISIONAL extension — field name and shape
+// to be confirmed with Owner A.
 export interface TxSummary {
   // ...existing fields (title, lines, explorerUrl, estimatedFee, privacy)...
   actions?: Array<{
@@ -164,13 +177,16 @@ export interface Suggestion {
 //   "set_rule" | "schedule" | "cancel_schedule"
 // Draft shapes `RuleDraft` / `ScheduleDraft` (speech-derived, read back, then signed) are
 // owned by that work; see docs/approval-and-scheduling.md §3-§5.
+// `RulePayload` (the snake_case, raw-i128-unit payload the chain client builds from `RuleDraft`,
+// mirroring the contract `Rule` struct) is **chain-client-internal** and is NOT part of this seam.
 ```
 
 **Semantics:** `profile` absent = `"always_ask"` (D10 default). The app-side preference may only be
 **stricter** than the on-chain rule, never looser. `TxSummary.actions` (provisional) renders the
-combined auto-pay enable card; `TxSummary` already exists as the Rust mirror
-`app/src-tauri/src/types.rs`. Intent kinds `set_rule` / `schedule` / `cancel_schedule` are reserved by
-PR #8 and are not on `main` yet.
+combined auto-pay enable card; `actions[]` is new to `interfaces/src` only — the base `TxSummary`
+already exists as the Rust mirror `app/src-tauri/src/types.rs`. `RuleDraft` here is the seam shape;
+`RulePayload` (snake_case, raw units) is chain-client-internal. Intent kinds `set_rule` / `schedule` /
+`cancel_schedule` are reserved by PR #8 and are not on `main` yet.
 
 ## 7. Known drift
 
