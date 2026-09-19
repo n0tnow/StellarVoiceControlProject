@@ -17,7 +17,7 @@ import {
   runTurn,
   toAgentError,
 } from "@polaris/agent";
-import type { Intent, PolarisEvent } from "@polaris/interfaces";
+import type { Intent } from "@polaris/interfaces";
 
 /**
  * Logical transport label, only ever used in error copy. The real provider root
@@ -85,11 +85,6 @@ const llm = new OpenAiCompatibleLlm({
   apiKey: "",
   fetchImpl: tauriAgentFetch,
 });
-
-/** Subscribes to the agent's local event stream (status stages for the UI). */
-export function subscribeAgentEvents(handler: (event: PolarisEvent) => void): () => void {
-  return bus.subscribe(handler);
-}
 
 /**
  * Runs one transcript through the agent. Never throws: a provider failure comes
