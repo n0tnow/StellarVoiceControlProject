@@ -15,9 +15,28 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2.6.3", features = [] }
 
 [dependencies]
-tauri = { version = "2.11.5", features = [] }
+# `macos-private-api` is required for the transparent notch overlay
+# (`app.macOSPrivateApi` in tauri.conf.json is only a declaration; the runtime
+# transparency call is compiled out without this cargo feature).
+tauri = { version = "2.11.5", features = ["macos-private-api"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
-# Step A0 will add: cpal (audio capture), tauri-plugin-global-shortcut (hotkey).
+# Step A0: microphone capture (cpal) written to 16-bit PCM WAV (hound), and the
+# global push-to-talk shortcut. The plugin is desktop-only by design.
+cpal = "0.18"
+hound = "3.5"
+tauri-plugin-global-shortcut = "2.3"
+
+# The overlay's window level / collection behaviour come from AppKit directly,
+# because Tauri's window API does not expose them. Versions are pinned to the
+# objc2 generation tauri 2.11 already links (see `cargo tree -i objc2`); a
+# mismatched major would link two incompatible objc2 crates.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", features = ["NSScreen", "NSWindow"] }
+# `NSGeometry` carries NSPoint/NSRect/NSSize/NSEdgeInsets; `NSEnumerator`
+# unlocks NSArray::iter, used to scan screens for the notched display.
+objc2-foundation = { version = "0.3", features = ["NSEnumerator", "NSGeometry"] }
+
 # Step A5 will add: security-framework (Keychain) + objc2-local-authentication (Touch ID).

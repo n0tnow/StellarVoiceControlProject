@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Tauri merges this file into the generated bundle Info.plist. Without the
+	     microphone usage description, macOS terminates the process the first
+	     time cpal opens the input device. -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Polaris records your voice while you hold the push-to-talk shortcut so it can transcribe your request.</string>
+</dict>
+</plist>
