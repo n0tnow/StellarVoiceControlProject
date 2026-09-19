@@ -259,6 +259,39 @@
      one step.
   4. **No TS seam change.** Failures reuse the existing `error` event with a short
      label; a dedicated `speech_status` event is left to A2 if the UI wants one.
-- **Status:** implemented on `feat/a3-tts` (96 tests, clippy clean); the **live
-  Fish call is unverified** pending a provisioned `FISH_AUDIO_API_KEY` — see
-  `backlog/2026-09-19-a3-tts.md`.
+- **Status:** implemented on `feat/a3-tts` (96 tests, clippy clean). Correction:
+  the live Fish call **was** verified in the A3b follow-up — the `.env` did hold a
+  real key, and `manual_live_fish_synthesises_mpeg_and_speaks` produced non-empty
+  MPEG audio and played it (`polaris: tts in 8743 ms via fish`) — see
+  `backlog/2026-09-19-a3-tts.md` §A3b.
+
+## 2026-09-19 — A4: the agent answers out loud (intent/clarification → speech)
+- **Idea:** A2 produced an `Intent` and A3 could `speak`, but they never touched.
+  Close the loop: whatever the agent says back to the user is spoken.
+- **Decisions:**
+  1. **The sentence is built in TypeScript, not Rust.** `agent/src/speech.ts` owns
+     `confirmationSentence(intent)` and `spokenText(result)`; the shell passes the
+     finished string to the existing `speak` command. An `Intent` is therefore
+     formatted in exactly one place, and Rust stays a dumb player.
+  2. **What is spoken.** A produced intent → a short confirmation
+     (`Sending 5 USDC to Ahmet. Do you confirm?`). A turn with no intent → the
+     answer text (the clarification). An internal error → **nothing** (it is
+     already a short UI label). Blank text is dropped.
+  3. **Non-blocking.** The visible result is set before speech is queued, and
+     `speakTurnResult` returns immediately; a slow (~3–9 s) Fish call never delays
+     the transcript or the intent, and a TTS failure is swallowed into a console
+     warning, never the UI.
+  4. **Overlap: never overlap; one in flight + one pending; latest-wins.** A newer
+     pending utterance replaces an older one; in-flight audio is not interrupted
+     (no cancellation seam in the Rust player). This is the `SpeechQueue` policy in
+     `agent/src/speech.ts`, unit-tested.
+  5. **No seam change.** No new `PolarisEvent`; only a new TS module, its export, a
+     webview helper and one call in `App.tsx`.
+- **Verification:** an opt-in E2E (`npm run e2e:speak -w @polaris/agent -- "…"`)
+  ran the **real** LLM → intent → `spokenText` → real Rust Fish path with the pinned
+  voice `933563129e564b19a115bedd57b7406a` (`polaris: tts in 8743 ms via fish (40
+  chars)`). An earlier attempt with `--exact` matched no test and falsely passed;
+  the driver now fails unless the output contains `via fish`. The in-app
+  mic→speech path still needs a human — `backlog/2026-09-19-a4-speak-intent.md`.
+- **Status:** implemented on `feat/a4-speak-intent` (agent 38 tests, TS typecheck +
+  build green, Rust 96 passed / 2 ignored, clippy clean).
