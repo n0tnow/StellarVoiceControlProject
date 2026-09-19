@@ -17,12 +17,12 @@ import {
 const FALLBACK_GEOMETRY: NotchGeometry = {
   idleWidth: 216,
   idleHeight: 34,
-  expandedWidth: 216 * 1.7,
+  expandedWidth: 216 + 2 * 160,
   expandedHeight: 34,
   pillTopRadius: 4.25,
   pillBottomRadius: 8.5,
   shellEarRadius: 6.12,
-  shellBottomRadius: 8.5,
+  shellBottomRadius: 15.3,
 };
 
 const IDLE_STATUS: CaptureStatus = { state: "idle", recording: null, error: null };
@@ -176,11 +176,11 @@ export default function App() {
     : connectionError
       ? "Reconnecting…"
       : state === "error"
-        ? "Hold ⌃⌥ to retry, or ⌃⌥ Space"
+        ? "⌃⌥ to retry"
         : state === "ready"
-          ? `${(durationMs / 1000).toFixed(1)}s · Hold ⌃⌥ to re-record`
+          ? `${(durationMs / 1000).toFixed(1)}s · hold ⌃⌥ again`
           : state === "recording"
-            ? "Release ⌃ or ⌥ when you are done"
+            ? "Release to finish"
             : "Starting up…";
 
   const style = {
@@ -218,6 +218,8 @@ export default function App() {
               <p className="notch-detail">{detail}</p>
             )}
           </div>
+          {/* The camera housing: no pixels exist here, so it stays empty. */}
+          <span className="notch-gap" aria-hidden="true" />
           <div className="notch-indicator" aria-hidden="true">
             <span />
             <span />

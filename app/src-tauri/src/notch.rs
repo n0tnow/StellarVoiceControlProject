@@ -82,9 +82,11 @@ const fn radii_for(idle_height: f64, expanded_height: f64) -> Radii {
         pill_top: clamp(idle_height * 0.125, 3.0, 5.0),
         pill_bottom: clamp(idle_height * 0.25, 7.0, 10.0),
         // The expanded shell is the same height as the pill, so its corners are
-        // derived from the same scale rather than from a taller shell.
+        // derived from the same scale rather than from a taller shell. The
+        // bottom is deliberately much rounder than the pill's: it is the edge
+        // that reads as "this grew out of the notch".
         shell_ear: clamp(expanded_height * 0.18, 4.0, 8.0),
-        shell_bottom: clamp(expanded_height * 0.25, 7.0, 12.0),
+        shell_bottom: clamp(expanded_height * 0.45, 10.0, 18.0),
     }
 }
 
@@ -96,7 +98,7 @@ const fn radii_for(idle_height: f64, expanded_height: f64) -> Radii {
 /// twice against earlier revisions. Only the width changes, by
 /// [`EXPANDED_WIDTH_RATIO`], capped so the shell always fits the overlay window.
 fn expanded_size(idle_width: f64, idle_height: f64, outer_width: f64) -> (f64, f64) {
-    let width = (idle_width * EXPANDED_WIDTH_RATIO).min(outer_width - 40.0);
+    let width = (idle_width + 2.0 * EAR_WIDTH).min(outer_width - 40.0);
     (width.max(idle_width), idle_height)
 }
 
@@ -109,11 +111,14 @@ fn idle_cutout_size(housing: f64, safe_top: f64) -> (f64, f64) {
     (housing.max(0.0), safe_top)
 }
 
-/// How much wider the expanded shell is than the resting pill.
+/// Width of ONE ear — the strip of shell beside the physical cutout.
 ///
-/// From the design reference (2x screenshots): the resting shell is 360 px wide
-/// and the expanded one 610 px, both 66 px tall. 610 / 360 = 1.69.
-const EXPANDED_WIDTH_RATIO: f64 = 1.7;
+/// There are no pixels behind the camera housing, so anything drawn over the
+/// cutout is simply not displayed. All content therefore lives in the two ears,
+/// and the shell has to be wide enough to hold it: the label plus its truncated
+/// hint on the left, the indicator on the right. 160 pt fits both at the 13 pt /
+/// 9 pt type scale with room to spare.
+const EAR_WIDTH: f64 = 160.0;
 
 /// Centred-pill fallback for displays without a camera housing.
 pub const FALLBACK: NotchGeometry = {
@@ -121,7 +126,7 @@ pub const FALLBACK: NotchGeometry = {
     NotchGeometry {
         idle_width: 216.0,
         idle_height: 34.0,
-        expanded_width: 216.0 * EXPANDED_WIDTH_RATIO,
+        expanded_width: 216.0 + 2.0 * EAR_WIDTH,
         expanded_height: 34.0,
         pill_top_radius: radii.pill_top,
         pill_bottom_radius: radii.pill_bottom,
@@ -297,7 +302,7 @@ mod tests {
         assert!((radii.pill_top - 4.0).abs() < f64::EPSILON);
         assert!((radii.pill_bottom - 8.0).abs() < f64::EPSILON);
         assert!((radii.shell_ear - 5.76).abs() < 0.01);
-        assert!((radii.shell_bottom - 8.0).abs() < 0.01);
+        assert!((radii.shell_bottom - 14.4).abs() < 0.01);
     }
 
     #[test]
@@ -316,11 +321,13 @@ mod tests {
     }
 
     #[test]
-    fn the_shell_widens_by_the_measured_ratio_and_stays_inside_the_window() {
-        // 179 pt cutout on this machine -> 1.7x = 304.3 pt.
+    fn the_shell_widens_by_two_ears_and_stays_inside_the_window() {
+        // 179 pt cutout on this machine + two 160 pt ears = 499 pt.
         let (width, _) = expanded_size(179.0, 32.0, 780.0);
-        assert!((width - 304.3).abs() < 0.01, "got {width}");
-        assert!(width > 179.0);
+        assert!((width - 499.0).abs() < 0.01, "got {width}");
+        // Each ear must really be EAR_WIDTH, or content lands over the cutout
+        // where the display has no pixels.
+        assert!(((width - 179.0) / 2.0 - EAR_WIDTH).abs() < 0.01);
 
         // A narrow overlay window clamps the shell instead of overflowing it,
         // and the shell never ends up narrower than the resting pill.
