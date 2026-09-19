@@ -680,6 +680,42 @@
   app (only the flags are verified, not the pixels), and the in-app mic run.
 - **Status:** implemented on `feat/a12-language-detection`; pushed, no PR.
   `backlog/2026-09-20-a14-language-precedence-and-fullscreen.md`.
+## 2026-09-20 — A15: the notch floats over fullscreen only as an accessory app
+- **Idea:** A14's fix (window level `NSPopUpMenuWindowLevel` + `CanJoinAllSpaces
+  | FullScreenAuxiliary | Stationary | IgnoresCycle`) was verified at the flag
+  level and the owner still could not see the overlay over another app's
+  fullscreen Space. The coordinator's strong hypothesis: Polaris is a *regular*
+  app, and macOS does not layer a regular app's windows into another app's
+  fullscreen Space at any window level.
+- **Discussion:** The hypothesis was tested before changing anything.
+  `lsappinfo` reported a running Polaris of `type="Foreground"` (the
+  WindowServer's label for a regular app), and `tao` hardcodes
+  `ActivationPolicy::Regular` at delegate construction — nothing in the app ever
+  changed it, and there is no `LSUIElement` key. Apple's documented mechanism for
+  HUD overlays over other apps' fullscreen Spaces is the accessory (agent)
+  policy; `FullScreenAuxiliary` alone mainly governs floating over *your own*
+  fullscreen window. A placement subtlety decided the implementation: Tauri
+  builds the config window **before** the `setup` closure runs, so setting the
+  policy in `setup` (the Tauri docs' example) is too late; the correct sequence is
+  policy → window → flags, achieved by calling `App::set_activation_policy`
+  before `run()` (tao applies it at `applicationDidFinishLaunching`, before any
+  window exists).
+- **Decision:** Make Polaris an accessory app (`tauri::ActivationPolicy::Accessory`)
+  before the run loop, keep the A14 level/collection flags, and keep the overlay
+  click-through and non-focusable. Accepted product cost: **no Dock icon and no
+  app menu bar**; no menu-bar status item yet (flagged as follow-up). Expose the
+  live policy in `notch_window_flags` and the startup log so the state is
+  inspectable, and warn loudly if it is not `Accessory`.
+- **Verification:** app 19, agent 109, cargo 121/5 → **123/5** (policy-mapping
+  test incl. unknown raw value + camelCase serialization), typecheck/build/clippy
+  clean. Running the built binary: startup line now reads
+  `activation_policy: Accessory`; `lsappinfo` for that pid reads
+  `type="UIElement"` where the unmodified binary read `type="Foreground"`.
+  Geometry unchanged (`179x32` pill, `399x32` shell).
+- **Still open:** the owner's **visual** check over a real fullscreen app — the
+  process-level evidence is complete but no pixels were observed by this worker.
+- **Status:** implemented on `fix/a15-fullscreen-overlay`; pushed, no PR.
+  `backlog/2026-09-20-a15-fullscreen-overlay.md`.
 ## 2026-09-19 — Round-3 Decisions: Contracts Frozen, Privacy Modes, Work Order
 - **Decision (D8):** `polaris_guard` is **frozen for the slice**. The v0.1 audit findings go into
   `contracts/DEPLOYED.md` ("Known limitations (v0.1)") + demo talking points, and the fixes are batched
