@@ -24,6 +24,15 @@
  * * **Haiku 4.5** takes no `thinking` field at all (omitting it means no
  *   thinking) and errors on `output_config.effort`, which is never sent.
  *
+ * Sampling parameters are never sent (step A13). `temperature`, `top_p` and
+ * `top_k` were removed on the current Claude models (Sonnet 5, Opus 5, Opus
+ * 4.8/4.7, Fable 5); sending one returns `HTTP 400: temperature is deprecated
+ * for this model`. They are still accepted on older models such as Haiku 4.5,
+ * but the deterministic-ish intent extraction the product wants does not need
+ * them — the model defaults are fine — so the option was deleted rather than
+ * left as a trap that only some models reject. The OpenAI-compatible client
+ * (`openai.ts`) is unaffected and still sends `temperature`.
+ *
  * The client is written against the global `fetch` with the implementation
  * injectable, so it runs unchanged in Node and (through the Rust transport) in
  * the webview.
@@ -61,8 +70,6 @@ export interface AnthropicOptions {
   fetchImpl?: typeof fetch;
   /** Hard cap on one model round trip. */
   timeoutMs?: number;
-  /** Anthropic accepts 0..1; intent extraction wants determinism. */
-  temperature?: number;
   /** Response cap; a confirmation is short, so the default is deliberately low. */
   maxTokens?: number;
   /** Extra top-level request fields (tuning / tests). */
@@ -120,7 +127,6 @@ export class AnthropicLlm implements AgentLlm {
   readonly #headers: Record<string, string>;
   readonly #fetch: typeof fetch;
   readonly #timeoutMs: number;
-  readonly #temperature: number;
   readonly #maxTokens: number;
   readonly #extra: Record<string, unknown>;
 
@@ -134,7 +140,6 @@ export class AnthropicLlm implements AgentLlm {
     const fetchImpl = options.fetchImpl ?? globalThis.fetch;
     this.#fetch = (input, init) => fetchImpl(input, init);
     this.#timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-    this.#temperature = options.temperature ?? 0;
     this.#maxTokens = options.maxTokens ?? DEFAULT_MAX_TOKENS;
     this.#extra = { ...(options.extra ?? {}) };
   }
@@ -157,7 +162,8 @@ export class AnthropicLlm implements AgentLlm {
       })),
       // `auto` keeps an off-topic command free to call no tool.
       tool_choice: { type: "auto" },
-      temperature: this.#temperature,
+      // No sampling parameters (temperature/top_p/top_k): the current models
+      // reject them with HTTP 400. See the header note.
       ...(thinking ? { thinking } : {}),
       ...this.#extra,
     };

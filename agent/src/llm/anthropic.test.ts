@@ -141,6 +141,31 @@ test("Haiku omits thinking entirely and never sends output_config.effort", async
   assert.equal("output_config" in (calls[0]!.body ?? {}), false);
 });
 
+test("never sends a sampling parameter, for any model (step A13)", async () => {
+  // The current Claude models (Sonnet 5, Opus 5, Opus 4.8/4.7, Fable 5) reject
+  // `temperature`/`top_p`/`top_k` with HTTP 400. Haiku 4.5 would accept them,
+  // but the client must not send them anywhere — checked on the serialised body.
+  for (const model of ["claude-sonnet-5", "claude-haiku-4-5"]) {
+    const { impl, calls } = capturing(jsonResponse({ content: [{ type: "text", text: "ok" }] }));
+    const llm = new AnthropicLlm({
+      baseUrl: "https://api.anthropic.com",
+      model,
+      fetchImpl: impl,
+    });
+
+    await llm.turn({ transcript: "hi", system: "s", tools });
+
+    const body = calls[0]!.body ?? {};
+    for (const key of ["temperature", "top_p", "top_k"]) {
+      assert.equal(key in body, false, `${model} must not send ${key}`);
+    }
+    const serialised = JSON.stringify(body);
+    for (const key of ["temperature", "top_p", "top_k"]) {
+      assert.equal(serialised.includes(`"${key}"`), false, `${model} serialised body must not contain ${key}`);
+    }
+  }
+});
+
 test("maps the response blocks: text is joined and a [xx] tag is stripped", async () => {
   const { impl } = capturing(
     jsonResponse({

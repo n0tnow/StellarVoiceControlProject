@@ -130,7 +130,8 @@ async function runAnthropic(
       messages: [{ role: "user", content: input.transcript }],
       tools: anthropicTools,
       tool_choice: { type: "auto" },
-      temperature: 0,
+      // No sampling parameters: the current Claude models (Sonnet 5, Opus 5,
+      // …) reject `temperature` with HTTP 400. Same rule as the shipped client.
       // Sonnet 5 disables thinking explicitly; Haiku 4.5 must not receive the
       // field at all (and never `output_config.effort`, which it rejects).
       ...(/haiku/i.test(model) ? {} : { thinking: { type: "disabled" as const } }),
