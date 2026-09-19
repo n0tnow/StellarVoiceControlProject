@@ -106,7 +106,7 @@ Result: `Test Files 1 passed (1)` / `Tests 3 passed (3)`. Every produced XDR was
 
 | Check | Result |
 |---|---|
-| `git grep -n "Fatih" -- '*.md' '*.ts'` excluding `CLAUDE.md`/`AGENTS.md` | ✅ empty |
+| `git grep -n "<collaborator name>" -- '*.md' '*.ts'` excluding `CLAUDE.md`/`AGENTS.md` | ✅ empty |
 | Secret-like `S[A-Z2-7]{55}` | ✅ none |
 | Merge markers (`<<<<<<<` / `>>>>>>>` / `=======`) | ✅ none |
 | `stellar/package.json` valid JSON | ✅ `JSON.parse` OK |
