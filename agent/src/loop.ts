@@ -149,7 +149,6 @@ export async function runTurn(options: AgentTurnOptions): Promise<AgentTurnResul
     if (toolResults.length > 0) {
       bus.emit({ type: "transcript", text: answer, final: true });
     }
-    bus.emit({ type: "agent_status", stage: "done" });
     return {
       answer,
       executedTools,
@@ -159,6 +158,11 @@ export async function runTurn(options: AgentTurnOptions): Promise<AgentTurnResul
     const message = error instanceof Error ? error.message : String(error);
     bus.emit({ type: "error", message });
     throw error;
+  } finally {
+    // A turn always settles its stage — success *or* failure. Without this the
+    // notch/trace stayed on the last stage ("thinking") after a provider error,
+    // which is exactly the stuck state step A6 fixes.
+    bus.emit({ type: "agent_status", stage: "done" });
   }
 }
 

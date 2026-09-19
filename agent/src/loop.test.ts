@@ -140,4 +140,10 @@ test("a provider failure propagates and emits an error event", async () => {
     (error: unknown) => error instanceof AgentError && error.kind === "network",
   );
   assert.ok(events.some((event) => event.type === "error"));
+  // Step A6: a failed turn must still settle its stage, or the notch/trace is
+  // left stuck on "thinking".
+  const stages = events.flatMap((event) =>
+    event.type === "agent_status" ? [event.stage] : [],
+  );
+  assert.deepEqual(stages, ["thinking", "done"]);
 });
