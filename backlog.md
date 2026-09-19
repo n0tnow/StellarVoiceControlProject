@@ -20,6 +20,7 @@
 | Date | Task | Worker/Agent | Closed By | Report |
 |---|---|---|---|---|
 | 2026-09-19 | Monorepo skeleton: `interfaces/`, `agent/`, `app/` (Tauri v2 + React), `stellar/`, `contracts/` (Soroban), tooling (`Makefile`, `scripts/`, `VERSION`, `CHANGELOG.md`) | coordinating agent (no workers, per user instruction) | pending PR review | `backlog/2026-09-19-monorepo-skeleton.md` |
+| 2026-09-19 | Modifier-only hotkey research (Control+Option flagsChanged via objc2) | research worker (modifier-research) | done, awaiting review | `backlog/2026-09-19-modifier-only-hotkey-research.md` |
 
 ---
 
