@@ -40,13 +40,16 @@ describe("sendPayment — happy paths", () => {
     expect(op.asset.issuer).toBe(TESTNET_USDC_ISSUER);
   });
 
-  it("sets a 300s time bound from the injected clock", async () => {
+  // Regression: `minTime` used to be the client's wall clock, which made the
+  // payment fail with `tx_too_early` on testnet whenever the ledger close time
+  // lagged the client. The lower bound must stay 0.
+  it("sets a 300s upper time bound from the injected clock and no lower bound", async () => {
     const res = await runPayment(makeDeps(), baseIntent);
     const { tx } = paymentOp(res.unsignedXdr);
     const tb = tx.timeBounds;
     expect(tb).toBeDefined();
-    expect(Number(tb?.maxTime) - Number(tb?.minTime)).toBe(300);
-    expect(new Date(Number(tb?.minTime) * 1000).toISOString()).toBe("2026-09-19T12:00:00.000Z");
+    expect(Number(tb?.minTime)).toBe(0);
+    expect(new Date(Number(tb?.maxTime) * 1000).toISOString()).toBe("2026-09-19T12:05:00.000Z");
   });
 
   it("builds an XLM payment with the native asset", async () => {
