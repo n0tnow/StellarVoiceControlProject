@@ -23,7 +23,7 @@ test("reads the three provider variables and trims them", () => {
   assert.equal(options.apiKey, "secret");
 });
 
-test("a same-origin path is allowed so the webview can use its dev proxy", () => {
+test("a same-origin path is allowed for callers that front the provider", () => {
   assert.equal(openAiOptionsFromEnv({ POLARIS_AGENT_BASE_URL: "/agent-api" }).baseUrl, "/agent-api");
 });
 

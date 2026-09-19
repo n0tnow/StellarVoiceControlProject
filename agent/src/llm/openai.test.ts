@@ -100,7 +100,7 @@ test("sends the OpenAI tool request with the session, bearer and user-agent head
   assert.equal(turn.text, undefined);
 });
 
-test("omits Authorization when no key is configured (proxy injects it)", async () => {
+test("omits Authorization when no key is configured (a transport injects it)", async () => {
   const { impl, calls } = capturing(jsonResponse({ choices: [{ message: { content: "ok" } }] }));
   const llm = new OpenAiCompatibleLlm({ baseUrl: "/agent-api", model: "m", fetchImpl: impl });
 
@@ -155,6 +155,26 @@ test("maps a thrown fetch to a network failure", async () => {
     (error: unknown) =>
       error instanceof AgentError && error.kind === "network" && /ECONNREFUSED/.test(error.detail),
   );
+});
+
+test("the provider fetch is invoked without the client as its receiver (WKWebView)", async () => {
+  // Regression for the Polaris A6 bug: storing `globalThis.fetch` in a field and
+  // calling `this.#fetch(...)` made the client instance the receiver. WebKit
+  // (the Tauri WKWebView) enforces the WebIDL receiver for `Window.fetch` and
+  // rejected the call with `TypeError: Can only call Window.fetch on instances
+  // of Window` before any request went out. The transport must be a plain call.
+  const receivers: unknown[] = [];
+  const impl = function (this: unknown) {
+    receivers.push(this);
+    return Promise.resolve(jsonResponse({ choices: [{ message: { content: "ok" } }] }));
+  } as unknown as typeof fetch;
+  const llm = new OpenAiCompatibleLlm({ baseUrl: "/agent-api", model: "m", fetchImpl: impl });
+
+  await llm.turn({ transcript: "x", system: "s", tools });
+
+  assert.equal(receivers.length, 1, "the transport must be called exactly once");
+  assert.notEqual(receivers[0], llm, "the client must not be the receiver");
+  assert.equal(receivers[0], undefined, "the transport is a plain call, not a method");
 });
 
 test("tool_call arguments that are not JSON are malformed", async () => {

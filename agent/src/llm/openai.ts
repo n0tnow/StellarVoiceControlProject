@@ -15,7 +15,7 @@
  *   generated once per client instance and reused for every turn.
  * * It wants a descriptive `User-Agent` rather than a generic SDK default. The
  *   header is only set when the caller supplies one, because browsers silently
- *   drop `User-Agent` (the app's dev proxy adds it server-side).
+ *   drop `User-Agent` (a transport can add it server-side).
  *
  * The client is intentionally written against the global `fetch`, with the
  * implementation injectable (`fetchImpl`) so tests exercise the exact request
@@ -26,13 +26,14 @@ import type { AgentTool } from "../tools/registry.ts";
 import { AgentError } from "../errors.ts";
 
 export interface OpenAiCompatibleOptions {
-  /** Provider root, e.g. `https://opencode.ai/zen/go/v1` or the app proxy `/agent-api`. */
+  /** Provider root, e.g. `https://opencode.ai/zen/go/v1`, or a logical label when a transport ignores it. */
   baseUrl: string;
   /** Model id, e.g. `deepseek-v4.1-flash`. */
   model: string;
   /**
-   * Bearer credential. Optional because the desktop webview talks to a local
-   * proxy that injects it, so the secret never enters the webview bundle.
+   * Bearer credential. Optional because the credential may be injected by a
+   * transport the caller supplies instead (the desktop app's Rust command adds
+   * it), so the secret never enters the webview bundle.
    */
   apiKey?: string;
   /** Stable per-conversation id; generated if omitted. */
@@ -103,7 +104,14 @@ export class OpenAiCompatibleLlm implements AgentLlm {
     this.sessionId = options.sessionId ?? newSessionId();
     this.#apiKey = options.apiKey?.trim() ?? "";
     this.#headers = { ...(options.headers ?? {}) };
-    this.#fetch = options.fetchImpl ?? globalThis.fetch;
+    // Never store a raw `globalThis.fetch` and invoke it as `this.#fetch(...)`:
+    // that makes the client instance the receiver, and WebKit (the Tauri
+    // WKWebView) enforces the WebIDL receiver for `Window.fetch`, rejecting the
+    // call with `TypeError: Can only call Window.fetch on instances of Window`
+    // before any request is made. A plain-call wrapper keeps the receiver off
+    // the client and works identically in Node, browsers and the webview.
+    const fetchImpl = options.fetchImpl ?? globalThis.fetch;
+    this.#fetch = (input, init) => fetchImpl(input, init);
     this.#timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.#temperature = options.temperature ?? 0;
   }
