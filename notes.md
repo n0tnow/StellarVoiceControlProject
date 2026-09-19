@@ -407,3 +407,51 @@
 - **Status:** implemented on `feat/a4-speak-intent`. **The visual animation was not
   observed** (no screen) — the state machine is proven by tests; the on-screen
   smoothness still needs a human eye. `backlog/2026-09-19-a8-notch-session.md`.
+
+## 2026-09-19 — A9: honest stages, the intent execution seam, read-only MCP
+- **Owner-observed bug:** the notch showed **"Speaking" before any audio started**.
+- **Root cause:** `commands.rs::speak` emitted `speech_status: speaking` the moment
+  it dispatched the blocking synthesis, so the whole Fish synthesis wait (~2–3 s)
+  read as speaking. Two more impostors in the A8 turn session: `transcribed`
+  jumped straight to `checking`, so the entire model call wore a "Checking" label,
+  and the "Speaking" transition was effectively request-driven.
+- **Decisions:**
+  1. **The Rust backend owns the real start event.** The `Speaker` seam gained a
+     one-shot `PlaybackStart` callback; Fish/ffplay fires it after the first
+     decoded chunk reaches the player, afplay/`say` after a successful spawn, and
+     `FallbackSpeaker` latches it so the primary→fallback handoff cannot
+     double-announce. A synthesis failure emits only `idle` — never `Speaking`.
+  2. **`thinking` is the honest home for every wait.** The stage holds from
+     capture release through the model call and the TTS synthesis wait; it is
+     entered by the agent's real `agent_status: thinking` event (forwarded per
+     turn), not a shell guess. "Speaking" is reachable only via the real
+     playback-start event.
+  3. **`checking` is removed.** The `awaiting_approval` phase is a synchronous,
+     I/O-free validation (`parseSendPayment`) measured at **~0.00008 ms/call**;
+     the task says leave out a stage nobody can read. The union is now
+     `listening | thinking | speaking | failed`.
+  4. **One execution path, injected, never throwing.** `executeIntent(intent,
+     { approver, chainTools })` resolves the tool → asks the gate → calls the
+     tool, returning `executed | rejected | unsupported | unavailable | failed`.
+     `NotImplementedError` is matched by name → `unavailable`/`Chain not wired`,
+     the expected state today, so the notch says so and settles. The chain tools
+     are injected, so the agent core imports none of Owner B's package.
+  5. **Approval gate seam, not Touch ID.** `IntentApprover.approve(intent)` sits
+     between "intent produced" and "chain tool called"; the shell passes a loud
+     `createAutoApprovalPlaceholder()` that is the single object the biometric
+     milestone replaces. Approval-gated tools still never run during the turn.
+  6. **MCP scaffolding is read-only by construction.** A config-driven client
+     (`POLARIS_MCP_SERVER_URL`; absent = off, no error) speaks JSON-RPC over
+     Streamable HTTP (JSON + SSE), and `registerReadOnlyMcpTools` exposes only
+     tools that pass a tokenised write-verb denylist **and** do not declare
+     `readOnlyHint: false` **and** carry `readOnlyHint: true` or an operator
+     allowlist — re-checked at call time. Tests use a loopback fake server. The
+     webview wiring is deliberately left out (CORS/packaging) and said so.
+- **Verification:** app 9→12 tests, agent 40→56, cargo 104→107 passed / 2 ignored,
+  clippy + typecheck + build clean, stellar 178 pass untouched. Live runs pasted
+  in the report: real LLM → intent → placeholder gate → `sendPayment` stub →
+  `Chain not wired` (stage order `listening → thinking ×4 → failed`), and real
+  Fish `tts in 5713 ms via fish` with the playback-start assertion. The initial
+  JS bundle stayed small (819→241 kB) because `@polaris/stellar` is a lazy import.
+- **Status:** implemented on `feat/a4-speak-intent`; the on-screen animation still
+  needs a human eye. `backlog/2026-09-19-a9-execution-seam.md`.
