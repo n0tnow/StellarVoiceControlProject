@@ -295,3 +295,48 @@
   mic→speech path still needs a human — `backlog/2026-09-19-a4-speak-intent.md`.
 - **Status:** implemented on `feat/a4-speak-intent` (agent 38 tests, TS typecheck +
   build green, Rust 96 passed / 2 ignored, clippy clean).
+
+## 2026-09-19 — A5: the conversational turn speaks, "Speaking" notch, faster audio
+- **Owner-observed bugs (real run):** saying "hello can you hear me" produced no
+  answer and no speech — the model answered fine, downstream dropped it — and a
+  full run took 14.9 s to audio (`intent 4538 + speak 10336 ms`).
+- **Root cause of bug 1:** nothing was dropped in the app; the failure was that
+  **all three consumers of a turn treated "no intent" as "nothing to say."**
+  `agent/src/e2e-speak.ts` exited non-zero before ever reaching TTS on a valid
+  conversational turn, and the app had no `speak` call on that path. `spokenText()`
+  already handled the no-intent case correctly (A4 had tested it in isolation), so
+  the bug was in the *decision*, not the formatter. The fix makes the predicate
+  explicit (`isSpeakable`) so "no intent" can never again mean "silent", and the
+  conversational path is now exercised live.
+- **Decisions:**
+  1. **A `speech_status` event, emitted by the Rust `speak` command.** `speaking`
+     is emitted as the sentence is handed to the backend; `idle` is emitted on
+     **both** the success and failure paths, and the overlay additionally clears on
+     a new recording. The notch therefore tracks real playback, not the request,
+     and cannot get stuck.
+  2. **"Speaking" reuses the Thinking animation verbatim** (`.state-speaking` shares
+     the `listen` keyframes) — the owner asked for the same treatment, not a second
+     style. It is only shown while capture is idle, so a live recording/ready/error
+     state always wins.
+  3. **Fish audio is streamed, not buffered.** The body is piped into `ffplay`'s
+     stdin (`-autoexit -nodisp … -f mp3 -i pipe:0`), so playback starts at roughly
+     the provider TTFB. `ffplay` is resolved from PATH + the two Homebrew prefixes
+     (a GUI launch does not inherit the shell PATH); when it is absent the pre-A5
+     `afplay` + temp-file path is used, so nothing regressed on a machine without
+     ffmpeg. `afplay` was tested with a FIFO and rejected: it needs a seekable file.
+  4. **Model default → `glm-5.3-flash`** (owner benchmark: median 1857 ms vs 2085 ms,
+     both always correct, 0 reasoning tokens). Still env-driven; no bare literal in
+     product logic — only the last-resort default constant moved.
+  5. **The prompt and tool payload were trimmed for tokens, not latency.** `noop`
+     (the demo round-trip probe) left the default registry — it was serialised into
+     *every* request — and the system prompt was shortened. Estimated request
+     payload ~466 → ~366 tokens. The median model latency did **not** move beyond
+     noise (it is network-bound); no false speed-up is claimed.
+- **Verification:** both live E2E paths pass with the real LLM + real Fish +
+  pinned voice `933563129e564b19a115bedd57b7406a` — conversational
+  ("yes, I can hear you" → spoken), intent (`Ahmete 5 USDC gönder` → confirmation).
+  Rust test count rose 96 → 100 (new player/event tests). The in-app
+  mic→notch→speech path still needs a human with a microphone.
+- **Status:** implemented on `feat/a4-speak-intent` (agent 39 tests, TS typecheck +
+  build green, Rust 100 passed / 2 ignored, clippy clean) —
+  `backlog/2026-09-19-a5-latency-and-speaking.md`.
