@@ -24,8 +24,15 @@ echo "== Rust: cargo check (Tauri shell)"
 caffeinate -i cargo check --manifest-path app/src-tauri/Cargo.toml
 
 if [[ "$WITH_CHAIN" == "1" ]]; then
-  echo "== Rust: cargo test (Soroban contracts)"
+  echo "== Rust: cargo test (Soroban contracts, host)"
   caffeinate -i cargo test --manifest-path contracts/Cargo.toml
+
+  if command -v stellar >/dev/null 2>&1; then
+    echo "== Rust: stellar contract build (Soroban wasm; needs stellar-cli >= 25.2.0)"
+    caffeinate -i stellar contract build --manifest-path contracts/Cargo.toml
+  else
+    echo "!! stellar-cli not found — skipping the wasm build (install it before deploying)"
+  fi
 fi
 
 echo "== all checks passed"

@@ -3,8 +3,11 @@
 # Separate Cargo workspace from the Tauri app so a contract build never pulls the
 # desktop dependency tree (and vice versa).
 #
-# Build:  cargo build --target wasm32v1-none --release -p polaris_guard
-# Test:   cargo test -p polaris_guard
+# Build:  stellar contract build --manifest-path contracts/Cargo.toml
+#         (stellar-cli >= v25.2.0 is REQUIRED: as of soroban-sdk v28 a plain
+#          `cargo build --target wasm32v1-none` is refused on purpose — the SDK
+#          needs the CLI's build system. Use `make build-contracts`.)
+# Test:   cargo test --manifest-path contracts/Cargo.toml   (host tests still work)
 # Deploy: stellar contract deploy ... (contract IDs are documented in the README)
 [workspace]
 resolver = "2"
@@ -20,9 +23,12 @@ publish = false
 soroban-sdk = "28.0.0"
 
 # Soroban wasm builds: small, deterministic, no unwinding.
+# `overflow-checks` is REQUIRED by stellar-cli (silent integer overflow is worse
+# than a larger module) — do not remove it.
 [profile.release]
 opt-level = "z"
 lto = true
 codegen-units = 1
 panic = "abort"
 strip = "symbols"
+overflow-checks = true

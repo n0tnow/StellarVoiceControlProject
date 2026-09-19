@@ -17,7 +17,7 @@ for each other.
 | `agent/` | Tool registry, `noop` tool, typed event bus, agent loop with `AgentLlm` interface + `MockLlm` stand-in, runnable smoke test. | `tsc` + `npm run start -w @polaris/agent` |
 | `app/` | Tauri v2 shell: React 19 + Vite 8 + Tailwind 4 panel with a typed event log pane, `app_info` + `dev_self_test` commands, global `polaris-event` stream, generated icon set, shadcn-ready (`components.json`, `cn`, vendored `Button`). | `tsc`, `vite build`, `cargo check` |
 | `stellar/` | Owner B's placeholder module: testnet constants, `sendPayment`/`depositTry`/`swap`/`guardPolicy` stubs throwing `NotImplementedError`, `submitSignedTx` stub. | `tsc` |
-| `contracts/` | Separate Cargo workspace + `polaris_guard` crate skeleton (owner auth, per-tx limit, alias book, `check_amount`) with unit tests. | `cargo test -p polaris_guard` |
+| `contracts/` | Separate Cargo workspace + `polaris_guard` crate skeleton (owner auth, per-tx limit, alias book, `check_amount`) with unit tests. | `cargo test` (3 tests) + `stellar contract build` (2.9 KB wasm) |
 | root | `VERSION` 0.1.0, `CHANGELOG.md`, npm workspaces, `tsconfig.base.json`, `.env.example`, `.nvmrc`, `Makefile`, `scripts/` (`setup.sh`, `check.sh`, `dev.sh`, `generate-icons.py`). | `make check` |
 | docs | `README.md` (layout + quickstart), `sprints.md` (skeleton ticked, M2 progress log), `notes.md` (decision record incl. the Vite 8/esbuild gotcha), `backlog.md`. | review |
 

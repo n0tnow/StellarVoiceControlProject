@@ -42,8 +42,10 @@ without agreeing in PR review.
 
 ## Quickstart
 
-Requirements: macOS (Apple silicon), Node >= 22, Rust stable + the `wasm32v1-none` target,
-`cargo-tauri` (`cargo install tauri-cli --version ^2`) or the local `@tauri-apps/cli`.
+Requirements: macOS (Apple silicon), Node >= 22, Rust stable, `cargo-tauri`
+(`cargo install tauri-cli --version ^2`) or the local `@tauri-apps/cli`, and
+**stellar-cli >= 25.2.0** (`brew install stellar-cli`) for contract builds — soroban-sdk v28
+refuses a plain `cargo build --target wasm32v1-none`.
 
 ```bash
 make setup        # npm install + generate app icons + create .env from .env.example

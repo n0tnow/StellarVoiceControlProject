@@ -37,8 +37,8 @@ agent: ## Run the agent skeleton smoke test
 build: ## Bundle the macOS app (release)
 	cd app && caffeinate -i cargo tauri build
 
-build-contracts: ## Build polaris_guard to wasm (release)
-	caffeinate -i cargo build --manifest-path $(CHAIN_MANIFEST) --target wasm32v1-none --release -p polaris_guard
+build-contracts: ## Build polaris_guard to wasm (requires stellar-cli >= 25.2.0)
+	caffeinate -i stellar contract build --manifest-path $(CHAIN_MANIFEST)
 
 contracts-test: ## Alias for check-contracts
 	$(MAKE) check-contracts

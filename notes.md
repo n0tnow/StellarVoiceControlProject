@@ -80,6 +80,7 @@
   8. **No CI yet** (hackathon): `make check` / `scripts/check.sh` is the gate (typecheck all workspaces → vite build → agent smoke test → `cargo check`), with `caffeinate -i` for the long parts per AGENTS.md §4.
   9. **Icons are generator-produced** (`scripts/generate-icons.py`, stdlib only): the PNG set + `.icns` are committed because Tauri needs them at compile time, but the script is the source of truth — never hand-edit the binaries (`--check` verifies presence).
 - **Gotcha found (worth remembering):** Vite 8 is rolldown/Oxc-based and **no longer bundles esbuild** — an explicit `build.minify: "esbuild"` fails with `Cannot find package 'esbuild'`. Leave the minifier at its default (Oxc) or install esbuild deliberately.
+- **Gotcha found (worth remembering):** as of soroban-sdk v28 a plain `cargo build --target wasm32v1-none` is **refused on purpose** ("soroban-sdk requires stellar-cli v25.2.0+ to build a contract"). Contract builds must go through `stellar contract build` (stellar-cli v28.0.0 is installed on the dev machine; it sets `SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2=1`). Two follow-on requirements: `[profile.release]` must set **`overflow-checks = true`** (stellar-cli rejects the profile otherwise) and host-side `cargo test` is unaffected.
 - **Status:** decided
 - **Idea:** Make the version-control usage explicit for agents: commit/push intervals, when to update `main`, and when real-time coordination between the two collaborators is needed.
 - **Decision:** Documented as §9 in AGENTS.md/CLAUDE.md:
