@@ -6,43 +6,72 @@
  * ONE approval card listing all three enable steps and asks for ONE Touch ID,
  * then submits them in order.
  *
- * SAFE ORDERING (enable) — the allowance (the money) is ALWAYS LAST:
+ * ARMED ORDER (enable) — the executor registration is ALWAYS LAST:
  *
- *   1. set_executor  — register the agent as executor.
+ *   1. approve       — SAC allowance to the guard (the money).
  *   2. set_rule      — publish the limits (auto_approve_limit, per_tx, daily,
  *                      allowed assets, known-recipients-only).
- *   3. approve       — SAC allowance to the guard; this is what actually funds
- *                      the unattended path.
+ *   3. set_executor  — register the agent as executor; this is the step that
+ *                      actually arms unattended payments.
  *
- * Failure states:
- *   • step 1 fails: nothing changed. No executor, no rule change, no allowance.
- *   • step 1 ok, step 2 fails: the executor is registered but the policy is
- *     whatever it was. From the expected `always_ask` starting state (no rule,
- *     or `auto_approve_limit == 0`) no unattended payment is possible. Caveat:
- *     if a previous positive-threshold rule and an unexpired allowance already
- *     existed, the freshly registered executor could act under the OLD rule —
- *     this flow is meant to start from `always_ask` (see report).
- *   • step 2 ok, step 3 fails: executor + rule are armed but the guard has no
- *     allowance, so `transfer_from` reverts with `InsufficientAllowance` and no
- *     money can move. Retry only the approve step.
+ * Why this order (coordinator decision, overriding the design doc's
+ * "allowance last"): the SAC allowance is mandatory for every guard payment, so
+ * the Always-ask baseline already has one. What arms unattended payments is the
+ * executor registration together with a positive `auto_approve_limit`, so the
+ * executor is the final arming step. Any prefix of the sequence therefore fails
+ * closed:
+ *
+ *   • after 1 (approve): only the allowance changed. There is still no executor
+ *     and the baseline rule's `auto_approve_limit` is 0, so no `pay_executor`.
+ *   • after 2 (set_rule): the new positive rule is live but no executor is
+ *     registered, so nobody can auto-pay.
+ *   • after 3 (set_executor): armed — executor + positive rule + allowance.
+ *
+ * Disable reverses the arming first: `revoke_executor` (disarm), then the
+ * optional `approve(0)` kill switch.
  *
  * Browser-safe: no `Buffer`, no `node:` imports.
  */
 import { nativeToScVal } from "@stellar/stellar-sdk";
-import { ALLOWANCE_WINDOW_DAYS, allowanceExpiryLedger, buildApproveAllowance } from "../guard/allowance.ts";
+import {
+  ALLOWANCE_WINDOW_DAYS,
+  allowanceExpiryLedger,
+  buildApproveAllowance,
+  formatAllowance,
+} from "../guard/allowance.ts";
 import { buildGuardCallSummary, decodeInvocation, shortKey } from "../guard/describe.ts";
 import { buildUnsignedInvoke } from "../guard/invoke.ts";
 import type { GuardClient, GuardRpcLike, Rule } from "../guard/types.ts";
 import {
+  assertTightening,
   classifyChange,
   confirmationLevel,
   type ChangeKind,
   type ConfirmationLevel,
 } from "./classify.ts";
-import { ApprovalError, ruleFromDraft, validateAutoPayDraft, type AutoPayDraft } from "./types.ts";
+import {
+  ApprovalError,
+  ruleFromDraft,
+  validateAutoPayDraft,
+  validateBaselineSetup,
+  type AutoPayDraft,
+  type BaselineSetupInput,
+} from "./types.ts";
 
 /** Each protocol ledger is ~5s (USDC guard demo window), used for card dates. */
 export const LEDGER_SECONDS = 5;
+
+/** Card copy: the allowance must cover every active schedule's total. */
+const SCHEDULE_ALLOWANCE_NOTE =
+  "Schedules need the allowance to cover their total: an active schedule whose total exceeds the allowance will fail.";
+/** Card copy: revoking the executor does not touch already-created schedules. */
+const REVOKE_EXECUTOR_SCHEDULE_CAVEAT =
+  "Revoking the executor does not stop schedules that already exist (cancel them separately).";
+/** Card copy: the allowance kill switch is global. */
+const REVOKE_ALLOWANCE_KILL_SWITCH_CAVEAT =
+  "Revoking the allowance disables ALL guard payments, including ones you approve yourself.";
+/** Card copy: the baseline state leaves the executor unregistered. */
+const ALWAYS_ASK_NOTE = "Always ask: every payment will need your approval.";
 
 export type ApprovalStepKind = "set_executor" | "set_rule" | "approve" | "revoke_executor";
 
@@ -75,13 +104,15 @@ export interface ApprovalCardSummary {
   title: string;
   actions: ApprovalActionSummary[];
   exposure?: ApprovalExposure;
+  /** Extra card copy: caveats, warnings and allowance deltas (never signed). */
+  notes: string[];
   confirmation: ConfirmationLevel;
 }
 
 export interface EnableAutoPayResult {
   steps: [BuiltApprovalStep, BuiltApprovalStep, BuiltApprovalStep];
   summary: ApprovalCardSummary;
-  order: ["set_executor", "set_rule", "approve"];
+  order: ["approve", "set_rule", "set_executor"];
 }
 
 export interface EnableAutoPayDeps {
@@ -89,12 +120,25 @@ export interface EnableAutoPayDeps {
   guard: GuardClient;
   rpc: GuardRpcLike;
   networkPassphrase: string;
+  /**
+   * The allowance currently approved on the SAC, when known. Drives the
+   * "Allowance: old -> new" line and the lower-allowance WARNING; it is never
+   * used to build the XDR (the caller reads it read-only).
+   */
+  currentAllowanceRaw?: bigint;
   /** Injected clock for the exposure dates. */
   now?: () => Date;
   /** IANA zone for `allowanceExpiresLocal` (default UTC). */
   timeZone?: string;
   txTimeoutSeconds?: number;
   explorerBase?: string;
+}
+
+/** Result of the Always-ask baseline setup: allowance + rule, no executor. */
+export interface BaselineSetupResult {
+  steps: [BuiltApprovalStep, BuiltApprovalStep];
+  summary: ApprovalCardSummary;
+  order: ["approve", "set_rule"];
 }
 
 export interface DisableAutoPayDeps {
@@ -129,13 +173,30 @@ export interface RuleChangeDeps {
   current?: Rule | undefined;
 }
 
+export interface TightenRuleOptions {
+  /**
+   * Opt out of the default refusal of loosening/mixed/new-rule changes. When
+   * `true`, the loosening step is still built and returned with the full
+   * `card_and_touch_id` confirmation (it must not be submitted under the light
+   * label). Defaults to `false`: loosening is refused with `use_enable_flow`.
+   */
+  allowLoosening?: boolean;
+}
+
 export interface TightenRuleResult {
   step: BuiltApprovalStep;
   classification: ChangeKind;
   confirmation: ConfirmationLevel;
 }
 
-/** Render a decoded argument for a one-line card summary. */
+/**
+ * TODO(T1-fix): this duplicates `guard/describe.ts`'s private `describeValue`.
+ * The guard module does not export it, and `stellar/src/guard/**` is outside
+ * this task's scope, so it cannot be imported here. Export it from the guard
+ * module (and delete this copy) when that module is next changed.
+ *
+ * Render a decoded argument for a one-line card summary.
+ */
 function describeValue(value: unknown): string {
   if (typeof value === "bigint") return value.toString();
   if (typeof value === "string") return value;
@@ -176,6 +237,20 @@ function formatInTimeZone(date: Date, timeZone: string): string {
 }
 
 /**
+ * Card lines for a change to the SAC allowance: always the old -> new delta
+ * when the current value is known, plus a WARNING when the allowance shrinks
+ * (a smaller allowance can starve already-created schedules).
+ */
+function allowanceChangeNotes(currentAllowanceRaw: bigint | undefined, nextAllowanceRaw: bigint): string[] {
+  if (currentAllowanceRaw === undefined) return [];
+  const notes = [`Allowance: ${formatAllowance(currentAllowanceRaw)} -> ${formatAllowance(nextAllowanceRaw)}`];
+  if (nextAllowanceRaw < currentAllowanceRaw) {
+    notes.push("WARNING: the new allowance is lower than the current one and may break scheduled payments.");
+  }
+  return notes;
+}
+
+/**
  * Build the three-step enable flow. Validates the draft first; any failure is a
  * typed `ApprovalError` and nothing is built.
  */
@@ -190,8 +265,7 @@ export async function buildEnableAutoPay(
   const { owner, guard, networkPassphrase } = deps;
   const rule = ruleFromDraft(draft);
 
-  const setExecutorCall = await guard.setExecutor(owner, draft.executor);
-  const setRuleCall = await guard.setRule(owner, rule);
+  // Built and submitted in arming order: allowance, rule, then executor last.
   const approveCall = await buildApproveAllowance(deps.rpc, {
     assetContractId,
     from: owner,
@@ -202,11 +276,13 @@ export async function buildEnableAutoPay(
     ...(deps.txTimeoutSeconds !== undefined ? { txTimeoutSeconds: deps.txTimeoutSeconds } : {}),
     ...(deps.explorerBase ? { explorerBase: deps.explorerBase } : {}),
   });
+  const setRuleCall = await guard.setRule(owner, rule);
+  const setExecutorCall = await guard.setExecutor(owner, draft.executor);
 
   const steps: [BuiltApprovalStep, BuiltApprovalStep, BuiltApprovalStep] = [
-    { kind: "set_executor", unsignedXdr: setExecutorCall.unsignedXdr, payloadHash: setExecutorCall.payloadHash },
-    { kind: "set_rule", unsignedXdr: setRuleCall.unsignedXdr, payloadHash: setRuleCall.payloadHash },
     { kind: "approve", unsignedXdr: approveCall.unsignedXdr, payloadHash: approveCall.payloadHash },
+    { kind: "set_rule", unsignedXdr: setRuleCall.unsignedXdr, payloadHash: setRuleCall.payloadHash },
+    { kind: "set_executor", unsignedXdr: setExecutorCall.unsignedXdr, payloadHash: setExecutorCall.payloadHash },
   ];
 
   const now = deps.now ? deps.now() : new Date();
@@ -215,7 +291,7 @@ export async function buildEnableAutoPay(
 
   return {
     steps,
-    order: ["set_executor", "set_rule", "approve"],
+    order: ["approve", "set_rule", "set_executor"],
     summary: {
       title: "Enable automatic payments (3 owner signatures, 1 approval)",
       actions: steps.map((step) => ({ kind: step.kind, lines: decodedLines(step.unsignedXdr, networkPassphrase) })),
@@ -226,6 +302,66 @@ export async function buildEnableAutoPay(
         allowanceExpiresLocal: formatInTimeZone(expiresAt, deps.timeZone ?? "UTC"),
         allowanceExpiresUtc: expiresAt.toISOString(),
       },
+      notes: [SCHEDULE_ALLOWANCE_NOTE, ...allowanceChangeNotes(deps.currentAllowanceRaw, draft.allowanceRaw)],
+      confirmation: "card_and_touch_id",
+    },
+  };
+}
+
+/**
+ * Build the **Always-ask baseline setup**: the mandatory SAC allowance plus the
+ * default rule, with **no executor**. This is the state every owner needs even
+ * for owner-signed payments; enabling auto-pay later adds `set_executor` on top.
+ *
+ * Steps: `[approve, set_rule]`. Both are decoded back into the card summary,
+ * and the card states that every payment will still need approval.
+ */
+export async function buildBaselineSetup(
+  deps: EnableAutoPayDeps,
+  input: BaselineSetupInput,
+): Promise<BaselineSetupResult> {
+  validateBaselineSetup(input);
+
+  const { owner, guard, networkPassphrase } = deps;
+  const approveCall = await buildApproveAllowance(deps.rpc, {
+    assetContractId: input.assetContractId,
+    from: owner,
+    spender: guard.contractId,
+    amount: input.allowanceRaw,
+    networkPassphrase,
+    days: input.allowanceDays,
+    ...(deps.txTimeoutSeconds !== undefined ? { txTimeoutSeconds: deps.txTimeoutSeconds } : {}),
+    ...(deps.explorerBase ? { explorerBase: deps.explorerBase } : {}),
+  });
+  const setRuleCall = await guard.setRule(owner, input.rule);
+
+  const steps: [BuiltApprovalStep, BuiltApprovalStep] = [
+    { kind: "approve", unsignedXdr: approveCall.unsignedXdr, payloadHash: approveCall.payloadHash },
+    { kind: "set_rule", unsignedXdr: setRuleCall.unsignedXdr, payloadHash: setRuleCall.payloadHash },
+  ];
+
+  const now = deps.now ? deps.now() : new Date();
+  const ledgersRemaining = approveCall.liveUntilLedger - approveCall.currentLedger;
+  const expiresAt = new Date(now.getTime() + ledgersRemaining * LEDGER_SECONDS * 1000);
+
+  return {
+    steps,
+    order: ["approve", "set_rule"],
+    summary: {
+      title: "Set up the Always-ask baseline (allowance + rule, no executor)",
+      actions: steps.map((step) => ({ kind: step.kind, lines: decodedLines(step.unsignedXdr, networkPassphrase) })),
+      exposure: {
+        thresholdRaw: input.rule.auto_approve_limit,
+        dailyLimitRaw: input.rule.daily_limit,
+        allowanceRaw: input.allowanceRaw,
+        allowanceExpiresLocal: formatInTimeZone(expiresAt, deps.timeZone ?? "UTC"),
+        allowanceExpiresUtc: expiresAt.toISOString(),
+      },
+      notes: [
+        ALWAYS_ASK_NOTE,
+        SCHEDULE_ALLOWANCE_NOTE,
+        ...allowanceChangeNotes(deps.currentAllowanceRaw, input.allowanceRaw),
+      ],
       confirmation: "card_and_touch_id",
     },
   };
@@ -300,21 +436,29 @@ export async function buildDisableAutoPay(
     summary: {
       title: "Disable automatic payments",
       actions,
+      notes: input.revokeAllowance
+        ? [REVOKE_EXECUTOR_SCHEDULE_CAVEAT, REVOKE_ALLOWANCE_KILL_SWITCH_CAVEAT]
+        : [REVOKE_EXECUTOR_SCHEDULE_CAVEAT],
       confirmation: "light",
     },
   };
 }
 
 /**
- * Tighten a rule: one `set_rule` step. The classification is returned so the
- * shell can decide; callers that must not loosen should guard with
- * `assertTightening(classification)`.
+ * Tighten a rule: one `set_rule` step. By default this calls
+ * `assertTightening` and refuses loosening/mixed/new-rule changes with a typed
+ * `ApprovalError("use_enable_flow")` — a careless shell must not submit a
+ * loosening under the light label. Pass `{ allowLoosening: true }` to build the
+ * loosening step explicitly; it still returns the full `card_and_touch_id`
+ * confirmation so it can only be submitted after a real approval.
  */
 export async function buildTightenRule(
   deps: RuleChangeDeps,
   nextRule: Rule,
+  options: TightenRuleOptions = {},
 ): Promise<TightenRuleResult> {
   const classification = classifyChange(deps.current, nextRule);
+  if (!options.allowLoosening) assertTightening(classification);
   const call = await deps.guard.setRule(deps.owner, nextRule);
   return {
     step: { kind: "set_rule", unsignedXdr: call.unsignedXdr, payloadHash: call.payloadHash },

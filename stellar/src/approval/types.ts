@@ -62,6 +62,7 @@ export type ApprovalErrorCode =
   | "limit_order"
   | "too_many_assets"
   | "no_assets"
+  | "invalid_asset"
   | "allowance_too_small"
   | "invalid_allowance_days"
   | "missing_asset"
@@ -158,75 +159,124 @@ function assertAtMostI128(label: string, value: bigint): void {
 }
 
 /**
+ * Validate a rule payload plus the allowance that funds it. Shared by the
+ * auto-pay enable draft and the Always-ask baseline setup so both mirror the
+ * contract's real `validate_rule` exactly and add the same app-side rules.
+ * Every failure is a typed `ApprovalError`; the order of checks is documented
+ * by the tests.
+ */
+export function validateRuleAndAllowance(rule: Rule, allowanceRaw: bigint, allowanceDays: number): void {
+  assertBigInt("auto_approve_limit", rule.auto_approve_limit);
+  assertBigInt("per_tx_limit", rule.per_tx_limit);
+  assertBigInt("daily_limit", rule.daily_limit);
+  assertBigInt("allowanceRaw", allowanceRaw);
+
+  // Contract: 0 <= auto_approve_limit (0 is the contract's "always ask me").
+  if (rule.auto_approve_limit < 0n) {
+    throw new ApprovalError(
+      "threshold_negative",
+      `auto_approve_limit must not be negative, got ${rule.auto_approve_limit}`,
+    );
+  }
+  // Contract: per_tx_limit > 0, daily_limit > 0.
+  if (rule.per_tx_limit <= 0n || rule.daily_limit <= 0n) {
+    throw new ApprovalError("non_positive_limit", "per_tx_limit and daily_limit must be strictly positive");
+  }
+  if (allowanceRaw <= 0n) {
+    throw new ApprovalError("non_positive_limit", "allowance must be strictly positive");
+  }
+
+  assertAtMostI128("auto_approve_limit", rule.auto_approve_limit);
+  assertAtMostI128("per_tx_limit", rule.per_tx_limit);
+  assertAtMostI128("daily_limit", rule.daily_limit);
+  assertAtMostI128("allowanceRaw", allowanceRaw);
+
+  // Contract: auto_approve_limit <= per_tx_limit <= daily_limit.
+  if (rule.auto_approve_limit > rule.per_tx_limit || rule.per_tx_limit > rule.daily_limit) {
+    throw new ApprovalError(
+      "limit_order",
+      `require auto_approve_limit <= per_tx_limit <= daily_limit, got ${rule.auto_approve_limit} / ${rule.per_tx_limit} / ${rule.daily_limit}`,
+    );
+  }
+
+  // Contract: at most one asset (effective); the app cannot build a guard flow
+  // without an asset to approve the SAC allowance on.
+  if (rule.allowed_assets.length > MAX_ALLOWED_ASSETS) {
+    throw new ApprovalError(
+      "too_many_assets",
+      `the guard accepts at most ${MAX_ALLOWED_ASSETS} allowed asset, got ${rule.allowed_assets.length}`,
+    );
+  }
+  if (rule.allowed_assets.length === 0) {
+    throw new ApprovalError("no_assets", "at least one allowed asset is required to grant the SAC allowance");
+  }
+  // The allowance targets a real contract; a malformed id would only fail in
+  // the SDK/network after the user has already approved the card.
+  for (const asset of rule.allowed_assets) {
+    assertValidAsset(asset, "allowed asset");
+  }
+
+  // App-side: the allowance is the money ceiling and must cover the daily mandate.
+  if (allowanceRaw < rule.daily_limit) {
+    throw new ApprovalError(
+      "allowance_too_small",
+      `allowance ${allowanceRaw} must be at least the daily limit ${rule.daily_limit}`,
+    );
+  }
+
+  if (
+    !Number.isInteger(allowanceDays) ||
+    allowanceDays < MIN_ALLOWANCE_DAYS ||
+    allowanceDays > MAX_ALLOWANCE_DAYS
+  ) {
+    throw new ApprovalError(
+      "invalid_allowance_days",
+      `allowanceDays must be an integer in ${MIN_ALLOWANCE_DAYS}..${MAX_ALLOWANCE_DAYS}, got ${allowanceDays}`,
+    );
+  }
+}
+
+/** A `C...` contract id, as required by `allowed_assets` and the `approve` target. */
+function assertValidAsset(asset: unknown, label: string): asserts asset is string {
+  if (typeof asset !== "string" || !StrKey.isValidContract(asset)) {
+    throw new ApprovalError(
+      "invalid_asset",
+      `${label} must be a valid C... contract id, got ${JSON.stringify(asset)}`,
+    );
+  }
+}
+
+/** The input the Always-ask baseline builder validates (rule + allowance + asset). */
+export interface BaselineSetupInput {
+  /** The published rule; `auto_approve_limit` may be 0 (the "always ask" value). */
+  rule: Rule;
+  /** SAC allowance granted to the guard (raw units). */
+  allowanceRaw: bigint;
+  /** Allowance lifetime in days (1..90). */
+  allowanceDays: number;
+  /** SAC contract id the allowance is granted on. */
+  assetContractId: string;
+}
+
+/**
+ * Validate the Always-ask baseline setup. It mirrors the enable draft where
+ * relevant, but there is no executor field: the baseline deliberately leaves
+ * the executor unregistered, so `pay_executor` can never succeed.
+ */
+export function validateBaselineSetup(input: BaselineSetupInput): void {
+  validateRuleAndAllowance(input.rule, input.allowanceRaw, input.allowanceDays);
+  assertValidAsset(input.assetContractId, "assetContractId");
+}
+
+/**
  * Validate a draft against the contract's real `validate_rule` plus stricter
- * app-side rules that make the enable flow well-defined. Order of checks is
- * documented by the tests; every failure is a typed `ApprovalError`.
+ * app-side rules that make the enable flow well-defined.
  */
 export function validateAutoPayDraft(draft: AutoPayDraft): void {
   if (typeof draft.executor !== "string" || !StrKey.isValidEd25519PublicKey(draft.executor)) {
     throw new ApprovalError("invalid_executor", `executor must be a valid G... address, got ${JSON.stringify(draft.executor)}`);
   }
-
-  assertBigInt("thresholdRaw", draft.thresholdRaw);
-  assertBigInt("perTxLimitRaw", draft.perTxLimitRaw);
-  assertBigInt("dailyLimitRaw", draft.dailyLimitRaw);
-  assertBigInt("allowanceRaw", draft.allowanceRaw);
-
-  // Contract: 0 <= auto_approve_limit (0 is the contract's "always ask me").
-  if (draft.thresholdRaw < 0n) {
-    throw new ApprovalError("threshold_negative", `auto_approve_limit must not be negative, got ${draft.thresholdRaw}`);
-  }
-  // Contract: per_tx_limit > 0, daily_limit > 0.
-  if (draft.perTxLimitRaw <= 0n || draft.dailyLimitRaw <= 0n) {
-    throw new ApprovalError("non_positive_limit", "per_tx_limit and daily_limit must be strictly positive");
-  }
-  if (draft.allowanceRaw <= 0n) {
-    throw new ApprovalError("non_positive_limit", "allowance must be strictly positive");
-  }
-
-  assertAtMostI128("thresholdRaw", draft.thresholdRaw);
-  assertAtMostI128("perTxLimitRaw", draft.perTxLimitRaw);
-  assertAtMostI128("dailyLimitRaw", draft.dailyLimitRaw);
-  assertAtMostI128("allowanceRaw", draft.allowanceRaw);
-
-  // Contract: auto_approve_limit <= per_tx_limit <= daily_limit.
-  if (draft.thresholdRaw > draft.perTxLimitRaw || draft.perTxLimitRaw > draft.dailyLimitRaw) {
-    throw new ApprovalError(
-      "limit_order",
-      `require auto_approve_limit <= per_tx_limit <= daily_limit, got ${draft.thresholdRaw} / ${draft.perTxLimitRaw} / ${draft.dailyLimitRaw}`,
-    );
-  }
-
-  // Contract: at most one asset (effective); the app cannot enable auto-pay
-  // without an asset to approve the SAC allowance on.
-  if (draft.allowedAssets.length > MAX_ALLOWED_ASSETS) {
-    throw new ApprovalError(
-      "too_many_assets",
-      `the guard accepts at most ${MAX_ALLOWED_ASSETS} allowed asset, got ${draft.allowedAssets.length}`,
-    );
-  }
-  if (draft.allowedAssets.length === 0) {
-    throw new ApprovalError("no_assets", "at least one allowed asset is required to grant the SAC allowance");
-  }
-
-  // App-side: the allowance is the money ceiling and must cover the daily mandate.
-  if (draft.allowanceRaw < draft.dailyLimitRaw) {
-    throw new ApprovalError(
-      "allowance_too_small",
-      `allowance ${draft.allowanceRaw} must be at least the daily limit ${draft.dailyLimitRaw}`,
-    );
-  }
-
-  if (
-    !Number.isInteger(draft.allowanceDays) ||
-    draft.allowanceDays < MIN_ALLOWANCE_DAYS ||
-    draft.allowanceDays > MAX_ALLOWANCE_DAYS
-  ) {
-    throw new ApprovalError(
-      "invalid_allowance_days",
-      `allowanceDays must be an integer in ${MIN_ALLOWANCE_DAYS}..${MAX_ALLOWANCE_DAYS}, got ${draft.allowanceDays}`,
-    );
-  }
+  validateRuleAndAllowance(ruleFromDraft(draft), draft.allowanceRaw, draft.allowanceDays);
 }
 
 /** Project a validated draft onto the on-chain `Rule` shape (snake_case, exact). */

@@ -3,8 +3,9 @@
  *
  * The app-side approval policy (D10/D10b/D10c): profiles, the auto-pay draft
  * and its validation, pure loosening/tightening classification, read-back
- * sentences, and the builders for the three-step enable, disable and tighten
- * flows. Everything is pure or dependency-injected; nothing signs or submits.
+ * sentences, and the builders for the Always-ask baseline, the three-step
+ * enable, disable and tighten flows. Everything is pure or dependency-injected;
+ * nothing signs or submits.
  */
 export {
   ApprovalError,
@@ -17,11 +18,14 @@ export {
   makeAutoPayDraft,
   ruleFromDraft,
   validateAutoPayDraft,
+  validateBaselineSetup,
+  validateRuleAndAllowance,
   type ApprovalErrorCode,
   type ApprovalMode,
   type ApprovalProfile,
   type AutoPayDraft,
   type AutoPayDraftInput,
+  type BaselineSetupInput,
 } from "./types.ts";
 export {
   assertTightening,
@@ -35,6 +39,7 @@ export { requiresApprovalCard, resolveApprovalRoute, type GuardRoute } from "./r
 export { formatRawAmount, readBack, readBackDisable, type DisableReadBackInput, type ReadBackOptions } from "./readback.ts";
 export {
   LEDGER_SECONDS,
+  buildBaselineSetup,
   buildDisableAutoPay,
   buildEnableAutoPay,
   buildTightenRule,
@@ -42,6 +47,7 @@ export {
   type ApprovalCardSummary,
   type ApprovalExposure,
   type ApprovalStepKind,
+  type BaselineSetupResult,
   type BuiltApprovalStep,
   type DisableAutoPayDeps,
   type DisableAutoPayInput,
@@ -49,5 +55,6 @@ export {
   type EnableAutoPayDeps,
   type EnableAutoPayResult,
   type RuleChangeDeps,
+  type TightenRuleOptions,
   type TightenRuleResult,
 } from "./enableAutoPay.ts";

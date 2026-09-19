@@ -52,14 +52,15 @@ Not touched (per scope): `stellar/src/guard/**`, `keeper/**`, `anchor/**`, `cont
 | `requiresApprovalCard` | `(route) => boolean` | `route === "pay_owner"` |
 | `readBack` | `(draft, { assetSymbol, timeZone?, now? }) => string` | exact D10c sentence |
 | `readBackDisable` | `({ assetSymbol, revokeAllowance }) => string` | tighten read-back |
-| `buildEnableAutoPay` | `(deps, draft) => Promise<EnableAutoPayResult>` | 3 steps in order, one card |
+| `buildEnableAutoPay` | `(deps, draft) => Promise<EnableAutoPayResult>` | 3 steps, arming order `approve, set_rule, set_executor`, one card |
+| `buildBaselineSetup` | `(deps, { rule, allowanceRaw, allowanceDays, assetContractId }) => Promise<BaselineSetupResult>` | Always-ask baseline: `approve, set_rule` (NO executor) |
 | `buildDisableAutoPay` | `(deps, { revokeAllowance }) => Promise<DisableAutoPayResult>` | `revoke_executor` (+ `approve(0)`) |
-| `buildTightenRule` | `(deps, nextRule) => Promise<TightenRuleResult>` | single `set_rule` + classification |
+| `buildTightenRule` | `(deps, nextRule, { allowLoosening? }) => Promise<TightenRuleResult>` | single `set_rule`; refuses loosening by default |
 | `assertTightening` | `(change) => void` | throws `use_enable_flow` on loosening/mixed/new_rule |
 
 `ApprovalError` codes: `invalid_amount_string`, `invalid_executor`, `threshold_negative`,
 `non_positive_limit`, `amount_out_of_range`, `limit_order`, `too_many_assets`, `no_assets`,
-`allowance_too_small`, `invalid_allowance_days`, `missing_asset`, `use_enable_flow`.
+`invalid_asset`, `allowance_too_small`, `invalid_allowance_days`, `missing_asset`, `use_enable_flow`.
 
 ### Contract mirror (`contracts/polaris_guard/src/lib.rs::validate_rule`, read-only)
 
@@ -90,13 +91,23 @@ Not touched (per scope): `stellar/src/guard/**`, `keeper/**`, `anchor/**`, `cont
 `confirmationLevel`: `loosening`/`mixed`/`new_rule` -> `card_and_touch_id`;
 `tightening` -> `light`; `same` -> `none`.
 
-## Enable 3-step failure-state table (safe ordering: allowance LAST)
+## Enable 3-step failure-state table (arming order: executor LAST)
+
+> **Corrected in T1-fix (B2).** The SAC allowance is mandatory for every guard
+> payment, so the Always-ask baseline already carries one. What ARMS unattended
+> payments is the executor registration together with a positive
+> `auto_approve_limit`. The executor is therefore the final step.
 
 | Failure point | Resulting on-chain state | Unattended-payment exposure |
 |---|---|---|
-| step 1 `set_executor` fails | transaction atomic; executor, rule, allowance all unchanged | none — no new path |
-| step 1 ok, step 2 `set_rule` fails | new executor registered; rule = whatever it was | from the expected `always_ask` start (no rule or `auto_approve_limit == 0`) none. Caveat: if a positive-threshold rule **and** a live allowance already existed, the new executor could act under the OLD rule; this flow assumes an `always_ask` start (documented in code/report) |
-| step 2 ok, step 3 `approve` fails | executor + rule armed; guard has no allowance | none — `transfer_from` reverts with `InsufficientAllowance` (#116). Retry only the `approve` step |
+| step 1 `approve` fails | transaction atomic; allowance, rule and executor all unchanged | none — nothing armed |
+| step 1 ok, step 2 `set_rule` fails | only the allowance changed (possibly lower); rule unchanged (`auto_approve_limit == 0` in the baseline) | none — no executor and threshold 0 |
+| step 2 ok, step 3 `set_executor` fails | allowance + new positive rule live, but **no executor** | none — `pay_executor` requires a registered executor (#107 `NoExecutor`) |
+| all three ok | executor + positive rule + allowance | armed; unattended payments possible up to the mandate |
+
+No prefix of the sequence (0, 1 or 2 steps) can let `pay_executor` succeed; only
+the full sequence arms it. Enforced by the pure state-model test in
+`enableAutoPay.test.ts`.
 
 ## Test fixture changes caused by the new default profile
 
@@ -169,18 +180,58 @@ America/New_York); disable with/without allowance revoke; tighten classification
 - **`MAX_ALLOWED_ASSETS = 1`** mirrors the *effective* contract limit (`validate_rule` refuses
   `len() > 1`), not the structural `10`. The app additionally requires at least one asset so an
   `approve` step exists.
-- **Failure-after-step-1 caveat:** the enable flow is safe from the intended `always_ask`
-  start; a pre-existing positive rule + live allowance is the one case where a newly registered
-  executor could inherit an old mandate. Flagged in code and above rather than silently
-  assumed away.
+- **Prefix safety (was the "failure-after-step-1 caveat"):** with the executor registered LAST,
+  no prefix of the enable sequence can let `pay_executor` succeed — see the corrected
+  failure-state table and the pure state-model test. The earlier allowance-last ordering left a
+  window (executor + new positive rule against the mandatory baseline allowance), which T1-fix
+  removed.
 - **No signing/submission:** all builders return unsigned XDR + `payloadHash`; nothing calls
   `sign`/`send`. Summaries are decoded from the XDR via the guard's `decodeInvocation`.
 - The temporary root `node_modules` symlink was used only to run tests and is removed.
 
 ## Suggested Next Step
 
-1. Reviewer: re-run the three gates and attack the validation mirror and the 3-step safe order.
+1. Reviewer: re-run the three gates and attack the validation mirror and the arming order.
 2. Add the `guard/allowance.ts` revoke helper (or allow `amount === 0`) to drop the local
    `approve(0)` builder.
 3. Owner A wires the enable card (3 actions, 1 Touch ID) to `buildEnableAutoPay`; the agent
    lane parses voice into `AutoPayDraft`; then a live testnet smoke run.
+
+---
+
+## Review fixes (T1-fix, 2026-09-19)
+
+Applied the corrections from `backlog/approval-policy-review.md` (independent review, verdict
+"approve with corrections"). Scope stayed inside `stellar/src/approval/**` plus this report; no
+commit/push/tag; `stellar/src/guard/**` untouched.
+
+| # | Review item | Fix |
+|---|---|---|
+| B2 | "allowance last is safe" was false once the mandatory baseline allowance exists | Reordered `buildEnableAutoPay` to **`approve` → `set_rule` → `set_executor`** (executor last = the arming step). Updated `order`, `steps`, `summary.actions`, code comments and the failure-state table. Added a pure state-model test proving that prefixes of 0/1/2 steps cannot let `pay_executor` succeed and only the full sequence can. |
+| B1 | `set_rule` test asserted through a lossy `scValToNative` round-trip (falsely green against the old ABI bug) | Replaced it with RAW ScVal assertions: `scvSymbol` map keys, `scvI128` for the three limits, `scvAddress` for every `allowed_assets` element, `scvBool` for `known_recipients_only`. Passes now that the guard encoder fix has landed. |
+| gap §11e | No builder for the Always-ask baseline | Added `buildBaselineSetup(deps, { rule, allowanceRaw, allowanceDays, assetContractId })` → `steps: [approve, set_rule]` (no executor), `confirmation: "card_and_touch_id"`, XDR-decoded summary + exposure, "Always ask" note. Validation mirrors the contract's `validate_rule` (`per_tx > 0`, `daily > 0`, `0 <= auto_approve_limit <= per_tx <= daily`, one asset in v0.1) plus allowance `>= daily` and days 1..90. Tests: happy path, decoded order/args, every validation error, and the "no executor → no auto-pay" state model. |
+| §5 | `buildTightenRule` did not refuse loosening itself | Calls `assertTightening` by default (typed `ApprovalError("use_enable_flow")`, builds nothing). Explicit opt-out `{ allowLoosening: true }` builds the step and still returns `card_and_touch_id`. Tested both ways (loosening + new_rule). |
+| §5 / F-06 | Asset ids were not validated | Added typed `invalid_asset` (`StrKey.isValidContract`) for every `allowed_assets` element and for the baseline `assetContractId`. Fixtures use the real testnet USDC SAC id `CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA` from `contracts/DEPLOYED.md`. |
+| §5 | Disable card omitted the design caveats | `buildDisableAutoPay` notes now always state "Revoking the executor does not stop schedules that already exist (cancel them separately)." and, when the allowance is revoked, "Revoking the allowance disables ALL guard payments, including ones you approve yourself." Enable/baseline notes state that schedules need the allowance to cover their total. |
+| §5 | The flow did not surface the current allowance | Added optional `currentAllowanceRaw` to the enable/baseline deps. When provided the summary shows `Allowance: <old> -> <new>` and a WARNING line when the new allowance is lower ("may break scheduled payments"). Tested both directions plus the unknown case. |
+| §5 | Duplicated `describeValue` | `guard/describe.ts` does not export its helper and `guard/` is out of scope, so the local copy stays with a `TODO(T1-fix)` pointing at the export-and-delete follow-up. |
+
+### Gates re-run (T1-fix)
+
+```
+$ caffeinate -i npm run check -w @polaris/stellar        # tsc exit 0
+$ caffeinate -i npm run test:approval -w @polaris/stellar
+ Test Files  4 passed (4)
+      Tests  98 passed (98)
+$ caffeinate -i npm test -w @polaris/stellar
+ keeper:  ℹ tests 67 / pass 67 / fail 0
+ anchor:  Test Files 5 passed / Tests 111 passed
+ payments: Test Files 7 passed / Tests 121 passed
+ guard:   Test Files 7 passed / Tests 133 passed   (incl. the golden ABI tests)
+ approval: Test Files 4 passed / Tests 98 passed
+```
+
+Total = 67 + 111 + 121 + 133 + 98 = **530 passed, 0 failed**.
+
+Acceptance: `git status --short` lists only `stellar/src/approval/**` and
+`backlog/approval-policy.md`; the temporary root `node_modules` symlink is removed.
