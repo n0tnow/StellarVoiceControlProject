@@ -74,6 +74,7 @@ flowchart TD
 
     AG --> LLM["LLM API (OpenAI-compatible)"]
     AG --> STT["Speech-to-text"]
+    AG --> TTS["Text-to-speech<br/>Fish Audio / local say"]
     AG --> MCP["MCP: Raven, LumenLoop<br/>read-only knowledge"]
     AG --> DEV["Developer mode<br/>workspace files, allow-listed CLI"]
     ST --> ANC["TR Mock Anchor<br/>SEP-1/10/12/38/6"]
@@ -94,7 +95,7 @@ flowchart TD
 | Trigger | Tauri global-shortcut plugin. Handler receives `ShortcutState::Pressed` / `Released` → hold-to-talk. *Verified:* docs.rs `tauri_plugin_global_shortcut`. | ✅ |
 | Capture | Microphone via webview `getUserMedia` or Rust (`cpal`); decided in the shell spike | 🔲 |
 | STT (Turkish) | **Not decided.** Current plan: try **Whisper** first (local `whisper-rs`/whisper.cpp — offline, no key, safe on flaky venue Wi-Fi — or a cloud Whisper API). If it proves unstable, fall back to a **multimodal model that accepts audio directly**. Caveat: we have *not* verified that Claude models accept audio input — check before relying on it; otherwise another provider's API is needed. Decide by spike: Turkish accuracy + latency | 🔲 |
-| TTS | macOS `say -v Yelda` (free, Turkish voice) for MVP | 🟡 |
+| TTS | **Fish Audio** `s2.1-pro-free` as primary (voice fixed by `POLARIS_TTS_REFERENCE_ID`), macOS `say -v Yelda` as the required local fallback; backend chosen by `POLARIS_TTS_BACKEND` | ✅ code on `feat/a3-tts`; live Fish call pending a provisioned key (`backlog/2026-09-19-a3-tts.md`) |
 | Read-back | Assistant reads back parsed amount + recipient **before** any approval (guards against STT errors) | 🟡 |
 
 ### 4.2 Agent core
@@ -248,7 +249,7 @@ Threats and mitigations:
 | Fallback | If the spike fails (hotkey, mic, Touch ID, or macOS permissions in dev builds), switch to **Electron**: the TS brain is reused unchanged. | ✅ |
 | UI | React + TypeScript (Vite) | 🟡 |
 | LLM | OpenCode Zen Go (`deepseek-v4.1-flash`), OpenAI-compatible behind the `AgentLlm` port; swappable via env | ✅ |
-| STT / TTS | see §4.1 | 🔲 / 🟡 |
+| STT / TTS | see §4.1 | 🔲 / ✅ |
 | Contracts | Rust + `soroban-sdk`, deployed with Stellar CLI | ✅ |
 | Network | Stellar **testnet** only | ✅ |
 
