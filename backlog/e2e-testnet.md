@@ -152,3 +152,14 @@ Sum = 67 + 111 + 121 + 133 + 112 + 121 + 36 = **701 passed, 0 failed**.
 - **SAC (`CBRBMTWR…`, `simulate allowance(owner, guard)`):** 4800 E2EUSD.
 - **Schedule delay:** `get_schedule(13).next_run_at = 1789851780` vs `getTransaction(30bb69e6…).createdAt = 1789851797` → 17 s.
 - Re-running the verification script against `~/.polaris-e2e/results-2026-09-19T21-03-56-289Z.json` should reproduce `16 ok, 0 bad`.
+
+## Polish (2026-09-20, W-e2e)
+
+Follow-up round on the non-blocking review items (`backlog/e2e-testnet-review.md` §9). This does not change the 12/12 result above; the full report for this round is `backlog/e2e-polish.md`.
+
+- **Iteration trail / "one uninterrupted run" wording:** the live run above is **one uninterrupted `e2e:setup --reset --live` + `e2e:run --live`**, but it was not the project's first attempt. An earlier results file (`results-2026-09-19T20-55-54-163Z.json`) records a prior run in which S3 failed `tx_too_early` and S5 failed; that failure produced the `sendPayment` fix, after which the run was repeated cleanly. "One uninterrupted run" refers to that final clean run (ledgers 4765597 → 4765649), not to the first attempt.
+- **`e2e:setup --reset` overwrite:** `--reset` replaces the previous throwaway `~/.polaris-e2e/keys.json` with a new key set and drops the stored asset record; there is no backup. Now stated in the setup plan output and in `stellar/src/live/README.md`.
+- **`e2e:run` is not idempotent:** its scenario assertions assume the fresh S0 baseline (empty rule/executor, untouched balances). A second `e2e:run --live` without a fresh `--reset` setup fails mid-way. Now stated in the run plan output and in the README.
+- **Uniform network timeouts (review #1):** `sendTransaction`, `getTransaction`, `submitTransaction` and `loadAccount` are hard-bounded at 30 s and every submission honours a whole-operation deadline (120 s), surfacing typed `NetworkTimeout` / `OperationTimeout` errors; offline tests drive them with a hanging fake server.
+- **Key-file hardening (review COR-2):** `loadOrCreateKeys` now repairs and re-checks `0700`/`0600` on load, not just on write; the unused `maskSecret` helper was removed.
+- **Manual-testing tooling:** `e2e:status` and `e2e:tool` (plus `stellar/src/live/README.md`) exercise the same chain-lane code the app will use, with a decoded approval card and an explicit confirmation step. See `backlog/e2e-polish.md`.
