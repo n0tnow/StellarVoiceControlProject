@@ -171,3 +171,35 @@
   `backlog/2026-09-19-a1-stt.md`)
 
 <!-- New notes are appended chronologically at the bottom. -->
+
+## 2026-09-19 — A1: On-device STT becomes the default (privacy rationale)
+- **Idea:** Replace "cloud-first" as the A1 default with Apple's on-device
+  `SFSpeechRecognizer`, keeping Groq as an explicit opt-in and a configured fallback.
+- **Discussion:** The user overrode the earlier cloud-first choice. The decisive argument is not
+  cost or latency but the product: **Polaris is a wallet**. A spoken command ("send 10 USDC to
+  Ada") is financial intent, so the architecturally correct default is to keep the audio on the
+  machine. On-device is also free forever, works offline and needs no API key. The verified
+  machine facts (macOS 27, M3): `tr-TR` and `en-US` report `supportsOnDeviceRecognition = true`,
+  `SFSpeechURLRecognitionRequest` accepts a file URL, and `requiresOnDeviceRecognition` /
+  `contextualStrings` / `taskHint = .dictation` are all accepted; Speech permission is currently
+  `notDetermined`, so the user will see a prompt on first use.
+- **Decision:**
+  1. **On-device is the default.** `POLARIS_STT_BACKEND` (`ondevice` | `groq`) selects; blank or
+     unknown resolves to `ondevice` (unknown also raises a warning). `POLARIS_STT_LOCALE` overrides
+     the locale, default fixed `tr-TR`.
+  2. **The fallback is narrow and loud.** Groq is attached only when a key is configured, and it
+     fires only when the recognizer reports `Unavailable` *before* any audio was recognized. A
+     mid-flight failure is surfaced, never silently uploaded. Every fallback prints that the audio
+     left the machine.
+  3. **Force on-device.** `requiresOnDeviceRecognition = true` so audio cannot reach Apple's
+     servers either; if `supportsOnDeviceRecognition()` is false the backend refuses to run.
+  4. **The locale is a conscious cost.** `SFSpeechRecognizer` is single-locale (no Whisper-style
+     auto-detect), so `tr-TR` is fixed and overridable; the known cost is that English-only
+     utterances may be phoneticised as Turkish. `contextualStrings` (USDC, XLM, Stellar, Soroban,
+     lumen, testnet, Polaris) keeps the wallet entities correct.
+  5. **Permission is requested lazily** on the STT worker at first transcription, bounded, never on
+     the main thread; denial degrades to the short overlay label "Allow speech" and capture keeps
+     working.
+- **Status:** decided (implemented on `feat/a1-ondevice-stt`; a real permissioned recognition run
+  and the on-device latency/accuracy numbers are still pending a human — see
+  `backlog/2026-09-19-a1-ondevice-stt.md`)
