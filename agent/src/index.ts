@@ -46,13 +46,36 @@ export {
   AGENT_API_KEY_ENV,
   AGENT_BASE_URL_ENV,
   AGENT_MODEL_ENV,
+  AGENT_PROVIDER_ENV,
   AGENT_USER_AGENT,
+  ANTHROPIC_API_KEY_ENV,
+  ANTHROPIC_BASE_URL_ENV,
   DEFAULT_AGENT_BASE_URL,
   DEFAULT_AGENT_MODEL,
+  anthropicOptionsFromEnv,
   openAiOptionsFromEnv,
   processEnv,
+  resolveProvider,
   type AgentEnv,
+  type AgentProvider,
 } from "./llm/config.ts";
+export {
+  ANTHROPIC_VERSION,
+  AnthropicLlm,
+  DEFAULT_ANTHROPIC_BASE_URL,
+  DEFAULT_ANTHROPIC_MODEL,
+  DEFAULT_MAX_TOKENS,
+  messagesEndpoint,
+  thinkingFor,
+  type AnthropicOptions,
+} from "./llm/anthropic.ts";
+export {
+  LANGUAGE_TAG,
+  languageBase,
+  languageFromToolCalls,
+  normalizeLanguage,
+  stripLanguageTag,
+} from "./language.ts";
 export {
   newSessionId,
   OpenAiCompatibleLlm,

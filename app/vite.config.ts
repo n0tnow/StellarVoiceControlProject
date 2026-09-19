@@ -17,11 +17,18 @@ const rootDir = path.resolve(import.meta.dirname, "..");
 export default defineConfig({
   plugins: [react(), tailwindcss()],
 
-  // Let Vite read the repo-root `.env`, and expose only the non-secret model id
-  // to the webview. The agent credential is never exposed to the webview: the
-  // provider call runs in Rust (`agent_chat`), which reads the key itself.
+  // Let Vite read the repo-root `.env`, and expose only non-secret values to the
+  // webview: the model id and the provider id (which wire format to build). The
+  // agent credential is never exposed: the provider call runs in Rust
+  // (`agent_chat`), which reads `OPENCODE_API_KEY`/`ANTHROPIC_API_KEY` itself.
   envDir: rootDir,
-  envPrefix: ["VITE_", "TAURI_ENV_", "POLARIS_AGENT_MODEL", "POLARIS_ALLOW_AUTO_APPROVE"],
+  envPrefix: [
+    "VITE_",
+    "TAURI_ENV_",
+    "POLARIS_AGENT_MODEL",
+    "POLARIS_AGENT_PROVIDER",
+    "POLARIS_ALLOW_AUTO_APPROVE",
+  ],
 
   resolve: {
     alias: {

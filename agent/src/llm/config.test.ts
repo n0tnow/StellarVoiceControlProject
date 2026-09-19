@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { AgentError } from "../errors.ts";
-import { openAiOptionsFromEnv } from "./config.ts";
+import { anthropicOptionsFromEnv, openAiOptionsFromEnv, resolveProvider } from "./config.ts";
 
 test("defaults to OpenCode Zen Go when the environment is empty", () => {
   const options = openAiOptionsFromEnv({});
@@ -32,4 +32,57 @@ test("a non-http base URL is a config error, not a bad request later", () => {
     () => openAiOptionsFromEnv({ POLARIS_AGENT_BASE_URL: "ftp://nope" }),
     (error: unknown) => error instanceof AgentError && error.kind === "config",
   );
+});
+
+test("the provider defaults to openai and accepts anthropic", () => {
+  assert.deepEqual(resolveProvider({}), { provider: "openai", recognized: true });
+  assert.deepEqual(resolveProvider({ POLARIS_AGENT_PROVIDER: "" }), {
+    provider: "openai",
+    recognized: true,
+  });
+  assert.deepEqual(resolveProvider({ POLARIS_AGENT_PROVIDER: "  " }), {
+    provider: "openai",
+    recognized: true,
+  });
+  assert.deepEqual(resolveProvider({ POLARIS_AGENT_PROVIDER: "OpenAI" }), {
+    provider: "openai",
+    recognized: true,
+  });
+  assert.deepEqual(resolveProvider({ POLARIS_AGENT_PROVIDER: " anthropic " }), {
+    provider: "anthropic",
+    recognized: true,
+  });
+  // A typo must be reported so the caller can warn, never silently accepted.
+  assert.deepEqual(resolveProvider({ POLARIS_AGENT_PROVIDER: "claude" }), {
+    provider: "openai",
+    recognized: false,
+  });
+});
+
+test("anthropic options default to api.anthropic.com and the Anthropic key", () => {
+  const options = anthropicOptionsFromEnv({
+    POLARIS_AGENT_MODEL: "claude-sonnet-5",
+    ANTHROPIC_API_KEY: " sk-ant ",
+  });
+  assert.equal(options.baseUrl, "https://api.anthropic.com");
+  assert.equal(options.model, "claude-sonnet-5");
+  assert.equal(options.apiKey, "sk-ant");
+});
+
+test("anthropic uses its own base URL variable, not the Zen one", () => {
+  // A leftover `POLARIS_AGENT_BASE_URL` (which points at OpenCode Zen Go) must
+  // not redirect the Messages request.
+  const options = anthropicOptionsFromEnv({
+    POLARIS_AGENT_BASE_URL: "https://opencode.ai/zen/go/v1",
+    POLARIS_ANTHROPIC_BASE_URL: "https://proxy.test/anthropic/",
+    POLARIS_AGENT_MODEL: "claude-haiku-4-5",
+  });
+  // The client trims the trailing slash when it builds the endpoint.
+  assert.equal(options.baseUrl, "https://proxy.test/anthropic/");
+  assert.equal(options.model, "claude-haiku-4-5");
+  assert.equal(options.apiKey, "");
+});
+
+test("anthropic falls back to the Sonnet 5 model id when none is set", () => {
+  assert.equal(anthropicOptionsFromEnv({}).model, "claude-sonnet-5");
 });

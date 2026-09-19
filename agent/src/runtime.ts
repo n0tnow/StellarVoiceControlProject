@@ -7,7 +7,14 @@
  * identical.
  */
 import type { AgentLlm } from "./loop.ts";
-import { openAiOptionsFromEnv, processEnv, type AgentEnv } from "./llm/config.ts";
+import {
+  anthropicOptionsFromEnv,
+  openAiOptionsFromEnv,
+  processEnv,
+  resolveProvider,
+  type AgentEnv,
+} from "./llm/config.ts";
+import { AnthropicLlm } from "./llm/anthropic.ts";
 import { OpenAiCompatibleLlm } from "./llm/openai.ts";
 import { sendPaymentTool } from "./tools/payment.ts";
 import { createToolRegistry, type ToolRegistry } from "./tools/registry.ts";
@@ -29,10 +36,27 @@ export interface AgentRuntime {
   llm: AgentLlm;
 }
 
-/** Builds the default runtime from the environment (real provider, no network yet). */
+/**
+ * Builds the default runtime from the environment.
+ *
+ * `POLARIS_AGENT_PROVIDER` picks the implementation behind the `AgentLlm` port:
+ * the OpenAI-compatible client (default) or the Anthropic Messages client. An
+ * unknown value falls back to OpenAI-compatible and warns, so a typo cannot
+ * silently change where the request goes.
+ */
 export function createAgentRuntime(env: AgentEnv = processEnv()): AgentRuntime {
+  const { provider, recognized } = resolveProvider(env);
+  if (!recognized) {
+    console.warn(
+      `polaris: unknown POLARIS_AGENT_PROVIDER — using the OpenAI-compatible default ` +
+        `(accepted values are \`openai\` and \`anthropic\`)`,
+    );
+  }
   return {
     registry: createDefaultRegistry(),
-    llm: new OpenAiCompatibleLlm(openAiOptionsFromEnv(env)),
+    llm:
+      provider === "anthropic"
+        ? new AnthropicLlm(anthropicOptionsFromEnv(env))
+        : new OpenAiCompatibleLlm(openAiOptionsFromEnv(env)),
   };
 }

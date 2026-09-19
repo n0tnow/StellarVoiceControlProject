@@ -11,11 +11,13 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 import {
+  AnthropicLlm,
   createDefaultRegistry,
   createEventBus,
   OpenAiCompatibleLlm,
   runTurn,
   toAgentError,
+  type AgentProvider,
 } from "@polaris/agent";
 import type { AgentStage, Intent } from "@polaris/interfaces";
 import { markTurnPhase } from "@/lib/polaris";
@@ -26,11 +28,25 @@ import { markTurnPhase } from "@/lib/polaris";
  */
 export const AGENT_BASE_URL = "agent+polaris://provider";
 
+/**
+ * Which provider the Rust transport should speak to (step A11).
+ *
+ * Non-secret, so it is bundled from the same `POLARIS_AGENT_PROVIDER` variable
+ * the Rust side reads; both sides choosing from one value is what keeps the
+ * request body (TS) and the wire headers (Rust) in step.
+ */
+export const AGENT_PROVIDER: AgentProvider =
+  (import.meta.env.POLARIS_AGENT_PROVIDER ?? "").trim().toLowerCase() === "anthropic"
+    ? "anthropic"
+    : "openai";
+
 /** Model id is safe to bundle (no secret); Rust injects the credential. */
 export const AGENT_MODEL =
   import.meta.env.POLARIS_AGENT_MODEL && import.meta.env.POLARIS_AGENT_MODEL.trim().length > 0
     ? import.meta.env.POLARIS_AGENT_MODEL.trim()
-    : "glm-5.3-flash";
+    : AGENT_PROVIDER === "anthropic"
+      ? "claude-sonnet-5"
+      : "glm-5.3-flash";
 
 /** Reply shape of the Rust `agent_chat` command (`AgentHttpResponse`). */
 interface AgentHttpResponse {
@@ -51,7 +67,11 @@ async function tauriAgentFetch(_input: RequestInfo | URL, init?: RequestInit): P
   // A11: the request is fully built (system prompt, tools, transcript) at this
   // instant; Rust records it on the open turn trace before the network call.
   markTurnPhase("agent request built");
-  const response = await invoke<AgentHttpResponse>("agent_chat", { body, sessionId });
+  const response = await invoke<AgentHttpResponse>("agent_chat", {
+    body,
+    sessionId,
+    provider: AGENT_PROVIDER,
+  });
   return new Response(response.body, {
     status: response.status,
     headers: { "content-type": "application/json" },
@@ -63,6 +83,8 @@ export interface AgentOutcome {
   answer: string;
   intent?: Intent;
   executedTools: string[];
+  /** Model-reported BCP-47 language of the turn (step A11); drives the voice. */
+  language?: string;
   /** Measured end-to-end around `runTurn`, mirroring A1's latency line. */
   latencyMs: number;
 }
@@ -82,13 +104,25 @@ export type AgentRun =
 
 const registry = createDefaultRegistry();
 const bus = createEventBus();
-const llm = new OpenAiCompatibleLlm({
-  baseUrl: AGENT_BASE_URL,
-  model: AGENT_MODEL,
-  // Empty on purpose: the Rust transport adds `Authorization` server-side.
-  apiKey: "",
-  fetchImpl: tauriAgentFetch,
-});
+// The same `AgentLlm` port, two wire formats. The Rust `agent_chat` transport
+// is told which provider it is carrying (`AGENT_PROVIDER`) so it can add the
+// matching headers — `Authorization` + `x-opencode-session`, or `x-api-key` +
+// `anthropic-version`. The credential is injected server-side in both cases, so
+// `apiKey` is empty here and no secret ever enters the bundle.
+const llm =
+  AGENT_PROVIDER === "anthropic"
+    ? new AnthropicLlm({
+        baseUrl: AGENT_BASE_URL,
+        model: AGENT_MODEL,
+        apiKey: "",
+        fetchImpl: tauriAgentFetch,
+      })
+    : new OpenAiCompatibleLlm({
+        baseUrl: AGENT_BASE_URL,
+        model: AGENT_MODEL,
+        apiKey: "",
+        fetchImpl: tauriAgentFetch,
+      });
 
 /** Per-turn observation hooks. Used by the shell to drive the honest stage. */
 export interface AgentTurnHooks {
@@ -136,6 +170,7 @@ export async function runAgentTurn(
         transcript,
         answer: result.answer,
         ...(result.intent ? { intent: result.intent } : {}),
+        ...(result.language ? { language: result.language } : {}),
         executedTools: result.executedTools,
         latencyMs,
       },
