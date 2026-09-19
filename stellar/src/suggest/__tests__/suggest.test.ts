@@ -7,8 +7,12 @@ import {
   validateSuggestContext,
 } from "../suggest.ts";
 import type { DisableAutoPay, HistoryRecord, NoChange, RuleDraft, ScheduleDraft, SuggestOptions, Suggestion } from "../types.ts";
+import { parseAmount, roundUpToDisplayMultiple } from "../amount.ts";
+import { ROUNDING_STEP_DISPLAY } from "../constants.ts";
+import { dropAmountOutliers, maxOf, sortBigints } from "../stats.ts";
 import {
   DAY,
+  DECIMALS,
   NOW,
   addr,
   aliasesOf,
@@ -332,6 +336,142 @@ describe("daily_limit cap invariant (B2)", () => {
     const { history, contacts } = workedExampleHistory();
     const context = ctx({ knownContacts: contacts, rule: { autoApproveLimit: "50", perTxLimit: "15" } });
     expect(find(suggest(history, context), "daily_limit")).toBeUndefined();
+  });
+});
+
+describe("daily_limit outlier robustness (B1-residual)", () => {
+  /** 9 records: 8 x 10 plus a single 1000 (on one of the 10-days); no rule. */
+  function singleOutlier(): HistoryRecord[] {
+    return [
+      ...Array.from({ length: 8 }, (_, index) =>
+        rec({
+          id: `o${index}`,
+          ts: NOW - (index + 1) * DAY,
+          recipientAddress: addr(index),
+          amountRaw: raw("10"),
+        }),
+      ),
+      rec({ id: "outlier", ts: NOW - DAY, recipientAddress: addr(900), amountRaw: raw("1000") }),
+    ];
+  }
+
+  /** `tens` x 10 plus two 1000 outliers, spread over distinct days. */
+  function twoOutliers(tens: number): HistoryRecord[] {
+    const records = Array.from({ length: tens }, (_, index) =>
+      rec({ id: `t${index}`, ts: NOW - (index + 1) * DAY, recipientAddress: addr(index), amountRaw: raw("10") }),
+    );
+    records.push(
+      rec({ id: "out-a", ts: NOW - (tens + 1) * DAY, recipientAddress: addr(900), amountRaw: raw("1000") }),
+    );
+    records.push(
+      rec({ id: "out-b", ts: NOW - (tens + 2) * DAY, recipientAddress: addr(901), amountRaw: raw("1000") }),
+    );
+    return records;
+  }
+
+  it("never carries the full-pool p90/max (1000) as the required autoApproveLimit", () => {
+    const history = singleOutlier();
+    const daily = find(suggest(history, ctx()), "daily_limit");
+    expect(daily).toBeDefined();
+    const draft = daily?.proposedChange as RuleDraft;
+    expect(draft.autoApproveLimit).toBe("10");
+    expect(draft.autoApproveLimit).not.toBe("1000");
+    // The robust fallback agrees with the auto_pay_threshold proposal (single source of truth).
+    const threshold = find(suggest(history, ctx()), "auto_pay_threshold");
+    expect((threshold?.proposedChange as RuleDraft).autoApproveLimit).toBe("10");
+  });
+
+  it("drops the daily suggestion when no robust value survives exclusion", () => {
+    // 8 records total, 7 x 10 + 1 x 1000: after robust exclusion only 7 remain (< minPayments).
+    const history = [
+      ...Array.from({ length: 7 }, (_, index) =>
+        rec({
+          id: `s${index}`,
+          ts: NOW - (index + 1) * DAY,
+          recipientAddress: addr(index),
+          amountRaw: raw("10"),
+        }),
+      ),
+      rec({ id: "outlier", ts: NOW - 8 * DAY, recipientAddress: addr(900), amountRaw: raw("1000") }),
+    ];
+    expect(find(suggest(history, ctx()), "auto_pay_threshold")).toBeUndefined();
+    expect(find(suggest(history, ctx()), "daily_limit")).toBeUndefined();
+  });
+
+  it("stays robust with 10 records and two outliers", () => {
+    const daily = find(suggest(twoOutliers(8), ctx()), "daily_limit");
+    expect((daily?.proposedChange as RuleDraft).autoApproveLimit).toBe("10");
+  });
+
+  it("stays robust with 11 records and two outliers", () => {
+    const daily = find(suggest(twoOutliers(9), ctx()), "daily_limit");
+    expect((daily?.proposedChange as RuleDraft).autoApproveLimit).toBe("10");
+  });
+
+  it("property: every RuleDraft is outlier-bounded and correctly ordered (300 seeded histories)", () => {
+    const rng = makeRng(20260920);
+    let ruleDrafts = 0;
+    for (let iteration = 0; iteration < 300; iteration += 1) {
+      const count = randInt(rng, 8, 40);
+      const history: HistoryRecord[] = [];
+      for (let index = 0; index < count; index += 1) {
+        // The first record is pinned to day 29 so the window span is (almost) always >= minSpanDays.
+        const offset = index === 0 ? 29 : randInt(rng, 1, 29);
+        const amount = rng() < 0.1 ? String(randInt(rng, 200, 2000)) : String(randInt(rng, 1, 50));
+        history.push(
+          rec({
+            id: `h${iteration}-${index}`,
+            ts: NOW - offset * DAY,
+            recipientAddress: addr(index),
+            amountRaw: raw(amount),
+          }),
+        );
+      }
+      // Rule shapes never carry `autoApproveLimit`, so every draft's threshold is engine-derived.
+      const roll = rng();
+      const rule =
+        roll < 0.4
+          ? undefined
+          : roll < 0.7
+            ? { perTxLimit: String(randInt(rng, 1, 60)) }
+            : { perTxLimit: String(randInt(rng, 1, 60)), dailyLimit: String(randInt(rng, 60, 200)) };
+      const suggestions = suggest(history, ctx({ rule }));
+
+      // Independent oracle: robust pool over the eligible (all public/confirmed/USDC, in window) amounts.
+      const amounts = sortBigints(history.map((record) => record.amountRaw));
+      const robust = dropAmountOutliers(amounts, 3);
+      const robustMaxRounded = roundUpToDisplayMultiple(maxOf(robust), DECIMALS, ROUNDING_STEP_DISPLAY);
+
+      for (const suggestion of suggestions) {
+        if (suggestion.kind !== "auto_pay_threshold" && suggestion.kind !== "daily_limit") continue;
+        const draft = suggestion.proposedChange as RuleDraft;
+        ruleDrafts += 1;
+        const autoApprove = parseAmount(draft.autoApproveLimit, DECIMALS);
+        expect(autoApprove).toBeGreaterThanOrEqual(0n);
+        expect(autoApprove).toBeLessThanOrEqual(robustMaxRounded);
+        if (rule?.perTxLimit !== undefined) {
+          expect(autoApprove).toBeLessThanOrEqual(parseAmount(rule.perTxLimit, DECIMALS));
+        }
+        if (draft.perTxLimit !== undefined) {
+          const perTx = parseAmount(draft.perTxLimit, DECIMALS);
+          expect(autoApprove).toBeLessThanOrEqual(perTx);
+          if (rule?.perTxLimit !== undefined) {
+            expect(perTx).toBeLessThanOrEqual(parseAmount(rule.perTxLimit, DECIMALS));
+          }
+        }
+        if (draft.dailyLimit !== undefined) {
+          const daily = parseAmount(draft.dailyLimit, DECIMALS);
+          if (draft.perTxLimit !== undefined) {
+            expect(parseAmount(draft.perTxLimit, DECIMALS)).toBeLessThanOrEqual(daily);
+          } else {
+            expect(autoApprove).toBeLessThanOrEqual(daily);
+          }
+        }
+        expect(() => JSON.stringify(suggestion.proposedChange)).not.toThrow();
+      }
+    }
+    // The generator must actually exercise both kinds, not trivially pass with zero drafts.
+    expect(ruleDrafts).toBeGreaterThan(50);
   });
 });
 

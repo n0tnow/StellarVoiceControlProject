@@ -301,26 +301,62 @@ function isRuleDraftOrdered(draft: RuleDraft, decimals: number): boolean {
   return true;
 }
 
+interface RobustThreshold {
+  /** Sorted, outlier-robust amount pool — the single source of truth for a proposed threshold. */
+  pool: bigint[];
+  /** Proposed auto-approve threshold in raw units (rounded up, clamped to `rule.perTxLimit`). */
+  thresholdRaw: bigint;
+  /** True when `thresholdRaw` was clamped down to an existing `rule.perTxLimit`. */
+  capped: boolean;
+  /** Display string of the existing per-tx cap when `capped`; `""` otherwise. */
+  capDisplay: string;
+  /** Aggregate statistics over `pool` (used for evidence and the rationale). */
+  stats: AmountStats;
+}
+
+/**
+ * Single source of truth for the auto-approve threshold (B1). Builds the outlier-robust pool
+ * (median-based exclusion, `UNUSUAL_MULTIPLIER × median`), requires `minPayments` to survive, then
+ * rounds up and clamps via `computeAutoApproveThreshold`.
+ *
+ * BOTH `auto_pay_threshold` and the required `autoApproveLimit` fallback of `daily_limit` call this,
+ * so the daily draft can never be derived from the full (non-robust) pool again.
+ */
+function deriveRobustThreshold(
+  records: readonly HistoryRecord[],
+  context: SuggestContext,
+  resolved: Resolved,
+): RobustThreshold | null {
+  const pool = thresholdPool(records, context);
+  if (pool.length === 0) return null;
+  const amounts = sortBigints(pool.map((record) => record.amountRaw));
+  const robustAmounts = dropAmountOutliers(amounts, UNUSUAL_MULTIPLIER);
+  if (robustAmounts.length < resolved.minPayments) return null;
+  const stats = amountStatsFromSorted(robustAmounts, resolved.decimals);
+  if (stats.p90Raw <= 0n) return null;
+  const computation = computeAutoApproveThreshold(stats.p90Raw, stats.maxRaw, context, resolved.decimals);
+  if (!computation) return null;
+  return {
+    pool: robustAmounts,
+    thresholdRaw: computation.proposedRaw,
+    capped: computation.capped,
+    capDisplay: computation.capDisplay,
+    stats,
+  };
+}
+
 function autoPayThresholdSuggestion(
   result: GuardResult,
   context: SuggestContext,
   resolved: Resolved,
 ): Suggestion | null {
-  const pool = thresholdPool(result.records, context);
-  if (pool.length === 0) return null;
-  const amounts = sortBigints(pool.map((record) => record.amountRaw));
   // B1: derive the threshold from an outlier-robust pool. The median is robust, so amounts above
   // `UNUSUAL_MULTIPLIER × median` are dropped BEFORE the p90 is taken. A single outlier can no
   // longer become the auto-approve threshold, and a small sample cannot silently auto-approve it.
-  const robustAmounts = dropAmountOutliers(amounts, UNUSUAL_MULTIPLIER);
-  if (robustAmounts.length < resolved.minPayments) return null;
-  const stats = amountStatsFromSorted(robustAmounts, resolved.decimals);
+  const derivation = deriveRobustThreshold(result.records, context, resolved);
+  if (!derivation) return null;
+  const { stats, thresholdRaw, capped, capDisplay } = derivation;
   const p90Raw = stats.p90Raw;
-  if (p90Raw <= 0n) return null;
-
-  const computation = computeAutoApproveThreshold(p90Raw, stats.maxRaw, context, resolved.decimals);
-  if (!computation) return null;
-  const { proposedRaw, capped, capDisplay } = computation;
 
   if (context.autoPayEnabled && context.rule?.autoApproveLimit !== undefined) {
     const currentRaw = tryParseAmount(context.rule.autoApproveLimit, resolved.decimals);
@@ -328,8 +364,8 @@ function autoPayThresholdSuggestion(
     if (currentRaw !== undefined && currentRaw >= p90Raw) return null; // already covers p90
   }
 
-  const proposedDisplay = formatAmount(proposedRaw, resolved.decimals);
-  const count = robustAmounts.length;
+  const proposedDisplay = formatAmount(thresholdRaw, resolved.decimals);
+  const count = stats.count;
   const windowDays = resolved.windowDays;
   const contactPhrase =
     context.knownContacts.size > 0 ? `${count} payments to saved contacts` : `${count} payments`;
@@ -386,6 +422,9 @@ function dailyLimitSuggestion(
 
   const proposedDisplay = formatAmount(proposedRaw, resolved.decimals);
   const p95Display = formatAmount(p95, resolved.decimals);
+  // Evidence stays full-pool: `daily_limit` deliberately includes every confirmed public day (an
+  // exceptional day is still a real spend), so `dailyMedian`/`p95DailyTotal`/`dailyMax` are not
+  // outlier-filtered. The auto-approve fallback below IS outlier-robust (B1-residual).
   const stats = amountStats(result.records, resolved.decimals);
   const evidence = baseEvidence(resolved, stats);
   evidence.p95DailyTotal = p95Display;
@@ -393,20 +432,22 @@ function dailyLimitSuggestion(
   evidence.dailyMax = formatAmount(dailyMax, resolved.decimals);
 
   // `RuleDraft.autoApproveLimit` is required by the seam. This suggestion only changes the daily
-  // mandate, so keep the rule's existing per-tx threshold, or fall back to the shared threshold
-  // computation (B2) which is clamped to the rule's per-tx limit so the draft can never violate
-  // `autoApproveLimit <= perTxLimit`.
-  const fallback = computeAutoApproveThreshold(stats.p90Raw, stats.maxRaw, context, resolved.decimals);
-  if (!fallback) return null;
+  // mandate, so keep the rule's existing threshold, or fall back to the SAME outlier-robust
+  // derivation used by `auto_pay_threshold` (B1-residual), clamped to the rule's per-tx limit so the
+  // draft can never violate `autoApproveLimit <= perTxLimit`.
   let autoApproveLimit: string;
   let fallbackCapped = false;
+  let fallbackCapDisplay = "";
   if (context.rule?.autoApproveLimit !== undefined) {
     const currentRaw = tryParseAmount(context.rule.autoApproveLimit, resolved.decimals);
     if (currentRaw === null || currentRaw === undefined || currentRaw < 0n) return null;
     autoApproveLimit = context.rule.autoApproveLimit;
   } else {
-    autoApproveLimit = formatAmount(fallback.proposedRaw, resolved.decimals);
-    fallbackCapped = fallback.capped;
+    const derivation = deriveRobustThreshold(result.records, context, resolved);
+    if (!derivation) return null;
+    autoApproveLimit = formatAmount(derivation.thresholdRaw, resolved.decimals);
+    fallbackCapped = derivation.capped;
+    fallbackCapDisplay = derivation.capDisplay;
   }
   const draft: RuleDraft = {
     autoApproveLimit,
@@ -424,7 +465,7 @@ function dailyLimitSuggestion(
     `${context.displayAsset} (p95), so a daily limit of ${proposedDisplay} ${context.displayAsset} ` +
     `(1.5× with headroom) keeps auto-pay bounded. This is the agent's real daily mandate.`;
   if (fallbackCapped) {
-    rationale += ` The auto-pay threshold is capped at your existing on-chain per-transaction limit of ${fallback.capDisplay} ${context.displayAsset}.`;
+    rationale += ` The auto-pay threshold is capped at your existing on-chain per-transaction limit of ${fallbackCapDisplay} ${context.displayAsset}.`;
   }
 
   return {
@@ -662,6 +703,9 @@ function unusualSuggestions(
         `A payment of ${amountDisplay} ${context.displayAsset} in the last ${UNUSUAL_WINDOW_DAYS} days ` +
         `is ${ratio}× your typical p90 of ${formatAmount(baselineRaw, resolved.decimals)} ` +
         `${context.displayAsset}. Consider requiring extra confirmation next time.`,
+      // Note: `evidence.p90` is deliberately overloaded here — it is the outlier-robust baseline
+      // (the value the alert is compared against) while `median`/`max`/`count` stay full-pool.
+      // Privacy-safe either way; the mixed baseline is intentional so the ratio is reproducible.
       evidence: {
         ...baseEvidence(resolved, amountStats(result.records, resolved.decimals)),
         p90: formatAmount(baselineRaw, resolved.decimals),

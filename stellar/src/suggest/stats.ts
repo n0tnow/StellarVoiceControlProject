@@ -116,6 +116,11 @@ export function recipientFrequency(records: readonly HistoryRecord[]): Map<strin
  * the auto-pay threshold and the unusual-payment baseline. For `multiplier >= 1` the median itself
  * always survives, so the result is never empty for a non-empty input. Only the values are
  * filtered; callers must still require a minimum remaining count.
+ *
+ * Known limit (deliberate): once MORE than half the records are "outliers" the median itself is
+ * contaminated and nothing is excluded, so the "robust" pool equals the full pool. At that point the
+ * large amounts are the normal spend, so proposing them is defensible; the roundUp5(max) bound still
+ * holds because it is derived from the returned pool.
  */
 export function dropAmountOutliers(sortedAsc: readonly bigint[], multiplier: number): bigint[] {
   if (sortedAsc.length === 0) throw new Error("dropAmountOutliers: empty input");

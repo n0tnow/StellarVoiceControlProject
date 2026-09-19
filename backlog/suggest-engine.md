@@ -205,3 +205,66 @@ recording the failures below.
 - `npm run check -w @polaris/stellar` → passes (tsc, 0 errors).
 - `npm run test:suggest -w @polaris/stellar` → **4 files / 140 tests passed** (was 121).
 - `npm test -w @polaris/stellar` → keeper **67**, anchor **111**, suggest **140** (**318** total), all green.
+
+## Review fixes 2 (T3, 2026-09-19)
+
+Applied the blocking B1-residual correction and the cheap, clearly-correct non-blocking items from
+`backlog/suggest-engine-review-2.md`. Scope: `stellar/src/suggest/**` (code + tests) and this report
+only; no network, no commit/push/add. "Fails without the fix" was proven by temporarily reverting the
+daily fallback once, running the committed suite, and restoring (verified no `TEMP_REVERT` remained).
+
+### B1-residual — `daily_limit` required `autoApproveLimit` was derived from the full pool
+- Extracted a single source of truth, `deriveRobustThreshold(records, context, resolved)`, returning
+  `{ pool, thresholdRaw, capped, capDisplay, stats }` (the robust pool + the rounded/clamped
+  threshold). It owns the `thresholdPool` → `dropAmountOutliers(…, UNUSUAL_MULTIPLIER)` →
+  `minPayments` floor → `computeAutoApproveThreshold` chain.
+- `autoPayThresholdSuggestion` and the `daily_limit` fallback now **both** call it; there is no second
+  threshold derivation anywhere. The daily fallback is only derived when `rule.autoApproveLimit` is
+  absent (an existing threshold is carried verbatim), and if no robust value survives the suggestion
+  is dropped rather than filled from the full pool.
+- Repro (`9 = 8×10 + 1×1000`, no rule): before → `autoApproveLimit:"1000"`; after → `"10"`. The daily
+  suggestion is dropped for `8 = 7×10 + 1×1000` (robust pool 7 < `minPayments`), since no threshold
+  can be carried.
+- Decision on `dailyLimit` itself: the review allowed either robustifying `dailyTotals` or documenting
+  the deliberate full-pool inclusion. Chosen: **document** (comment in `suggest.ts`). An exceptional
+  *day* is a real aggregate spend; the p95-of-active-days is already a robust order statistic, and
+  excluding the day would under-set the mandate. Evidence (`dailyMedian`/`p95DailyTotal`/`dailyMax`)
+  therefore stays full-pool; only the auto-approve fallback is robust. Flagged here for the reviewer.
+- Tests (`daily_limit outlier robustness (B1-residual)`, 5 new):
+  1. 9-record single-outlier repro → `autoApproveLimit === "10"` (and equals the `auto_pay_threshold`
+     proposal; never `"1000"`).
+  2. 8-record fixture with robust pool < `minPayments` → both `auto_pay_threshold` and `daily_limit`
+     dropped.
+  3. 10 records + two outliers → `"10"`.
+  4. 11 records + two outliers → `"10"`.
+  5. Seeded property test over **300 histories**: every `RuleDraft` in any suggestion satisfies
+     `0 <= autoApproveLimit <= roundUp5(max of the robust pool)`, `autoApproveLimit <= perTxLimit <=
+     dailyLimit` (when present), and never exceeds an existing `rule.perTxLimit`; proposals are
+     JSON-safe. The generator produced **297/300** histories with suggestions and exercised **586**
+     `RuleDraft`s (assertion `> 50`).
+- **Fails without the fix:** reverting the daily fallback to full-pool `computeAutoApproveThreshold` →
+  **5 failed / 140 passed** (all five new tests).
+
+### Non-blocking items applied
+- `stats.ts`: documented the majority-outlier limit of `dropAmountOutliers` (median contamination when
+  > half the records are "outliers"; the roundUp5(max) bound still holds).
+- `suggest.ts`: documented that `unusual_payment_alert`'s `evidence.p90` is deliberately the robust
+  baseline while `median`/`max`/`count` stay full-pool.
+
+### Non-blocking items skipped (with reason)
+- **`tighten_dormant` needs `autoPayEnabledSince`**: intended conservative behaviour; already documented
+  in `types.ts` `SuggestContext`. Called out here for the UI/seam owner (fresh install on 30 d history
+  gets no dormant nudge until the caller supplies it).
+- **Ordering-suppressed valid daily cap**: a friendlier rationale-visible drop would need a new seam
+  field/behaviour; out of scope for a correctness fix. Left to the UI owner.
+- **`evidence.lastUsedDays` == `unusedDays`** (design §6.3 says "last-used date"): cosmetic and changing
+  the shape would ripple through the seam; left for the unification pass.
+- **Bounded-loop cost**: `advanceFirstRunAt`'s arithmetic fallback could be tried first, but the loop is
+  already bounded and fully tested, and the change is a non-observable micro-optimization; kept as-is to
+  keep the diff focused.
+
+### Final gates (after fixes)
+- `npm run check -w @polaris/stellar` → passes (tsc, 0 errors).
+- `npm run test:suggest -w @polaris/stellar` → **4 files / 145 tests passed** (was 140).
+- `npm test -w @polaris/stellar` → keeper **67**, anchor **111**, suggest **145** (**323** total), all
+  green.
