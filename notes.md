@@ -613,3 +613,37 @@
   templates remain tr/en only.
 - **Status:** implemented on `feat/a12-language-detection`; pushed, no PR.
   `backlog/2026-09-20-a12-language-detection.md`.
+
+## 2026-09-20 — A13: unblock Sonnet 5 (drop `temperature`) and stop the model inventing assets
+- **Idea:** Two demo-blocking fixes. (1) The A12 report's `HTTP 400: temperature is
+  deprecated for this model` on `claude-sonnet-5` — the Anthropic client still set
+  and sent `temperature`. (2) The model guessed assets: "send 400 dollar" produced
+  `asset: "USD"`, which the demo does not support, because nothing told it which
+  assets exist.
+- **Discussion:** Sampling parameters (`temperature`, `top_p`, `top_k`) are removed
+  on the current Claude models (Sonnet 5, Opus 5, Opus 4.8/4.7, Fable 5) and
+  sending one is a 400; they survive on Haiku 4.5. We do not need a non-default
+  temperature for deterministic-ish short intent extraction, so the honest fix is
+  to send none at all rather than special-case a model list that will only grow.
+  For assets, the gap was the prompt plus validation: the model must be told the
+  list, and an unsupported code must become a clarification, not an intent.
+- **Decision:** Anthropic never sends a sampling parameter (option deleted, not
+  left as a trap); the OpenAI-compatible client keeps `temperature`. Supported
+  assets live in ONE place, `agent/src/assets.ts`, read by both the system prompt
+  and `parseSendPayment` — there is no second list to keep in sync. The ceiling is
+  `USDC` (the demo stablecoin and default) and `XLM` (the native asset); colloquial
+  money words — dollar/dollars/dolar/`$`/`USD` — canonicalise to USDC. A genuinely
+  unsupported code (EUR, BTC, …) is an `input` error the loop speaks as a
+  clarification.
+- **Verification:** real `claude-sonnet-5` (via the shipped client, `npm run cli`):
+  "Ahmet'e 5 USDC gönder" → `{kind:send, asset:"USDC", amount:"5", recipient:"Ahmet"}`
+  in 1868 ms; "can you send 400 dollar to bilal" → `asset:"USDC"` in 3225 ms (the
+  bug fixed); "hello can you hear me" → no tool call, "Yes, I can hear you. What
+  would you like to do?" in 2241 ms; "can you send 400 euro to bilal" → no intent,
+  "Sorry, I can only send USDC or XLM, not euros." in 2586 ms. App 19, agent
+  100→108, cargo 120/5, typecheck/build/clippy clean.
+- **Still open:** the in-app mic→notch run still needs a human. XLM is advertised
+  as supported but the guard MVP allowlists one asset per owner; the asset list is
+  the agent-side ceiling, not an on-chain promise.
+- **Status:** implemented on `feat/a12-language-detection`; pushed, no PR.
+  `backlog/2026-09-20-a12-language-detection.md` (A13 section appended).

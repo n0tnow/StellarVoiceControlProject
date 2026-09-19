@@ -221,3 +221,105 @@ the detected language was `tr`, not because the model guessed.
   the parallel-confidence probe (ignored).
 - `app/src-tauri/src/events.rs`: the transcript event's `language` key, including
   explicit `null`.
+
+---
+
+# A13 — unblock Claude Sonnet 5, and stop the model inventing assets
+
+- **Date:** 2026-09-20
+- **Worker/Agent:** opencode worker (deepseek-v4.1-flash)
+- **Branch/Worktree:** `feat/a12-language-detection` / `.worktrees/a12` (continued)
+- **PR:** none (per the task: no PR, no merge, no tag)
+- **Baseline:** app 19, agent 100, cargo 120 passed / 5 ignored, typecheck/build/clippy clean
+- **After:** app 19, agent 108, cargo 120 passed / 5 ignored, typecheck/build/clippy clean
+
+## 1. `temperature` broke Sonnet 5 — removed from the Anthropic path
+
+The A12 report's `HTTP 400: temperature is deprecated for this model` was the
+client itself: `agent/src/llm/anthropic.ts` set `temperature` from options and sent
+it on every request. Sampling parameters (`temperature`, `top_p`, `top_k`) are
+removed on the current Claude models (Sonnet 5, Opus 5, Opus 4.8/4.7, Fable 5) —
+sending one is a 400 — and still accepted on Haiku 4.5. Rather than branch on a
+model list that only grows, the option was **deleted entirely** and the client now
+sends no sampling parameter for any model. The OpenAI-compatible client
+(`openai.ts`) is unchanged and still sends `temperature`. The same stray
+`temperature: 0` was removed from the Anthropic SDK call in
+`bench-providers.ts`, so the bench keeps working on Sonnet 5.
+
+`agent/src/llm/anthropic.test.ts` gains `never sends a sampling parameter, for any
+model (step A13)`, which asserts `temperature`/`top_p`/`top_k` are absent from both
+the parsed body and its serialised JSON.
+
+## 2. The model invented `USD` — one asset list, prompt + validation
+
+`agent/src/assets.ts` is the single source of truth: `SUPPORTED_ASSETS = ["USDC",
+"XLM"]`, `DEFAULT_ASSET = "USDC"`, and `ASSET_SYNONYMS` (dollar/dollars/dolar/`$`/
+`usd` → USDC). Both layers read it — there is no second list:
+
+- **Prompt** (`prompt.ts`): the asset rule is generated from the list, so it stays
+  true if the list grows (`"the supported asset is USDC"` vs `"the supported assets
+  are USDC and XLM"`). It names the supported codes, maps the colloquial money
+  words to USDC, and says to omit `asset` when none was named.
+- **Validation** (`tools/payment.ts`): `normalizeAsset` canonicalises the model's
+  value against the same list. A blank value defaults to USDC; a colloquial word
+  maps to USDC; a genuinely unsupported code (`EUR`, `BTC`, …) throws an `input`
+  error, which `loop.ts` already speaks as a clarification — so a guess can no
+  longer reach the approval seam as a bogus intent.
+
+The tool's `asset` description is generated from the list too.
+
+### Tests added
+- `agent/src/assets.test.ts` (new): the prompt names every supported asset and
+  every synonym from the one list; `normalizeAsset` returns a canonical code, a
+  synonym's target, the default for blank/omitted, and `undefined` (never a guess)
+  for EUR/BTC/non-strings.
+- `agent/src/tools/payment.test.ts`: colloquial words → USDC; case-insensitive
+  supported codes; genuinely unsupported assets rejected as `input`.
+- `agent/src/loop.test.ts`: a colloquial word is canonicalised at the loop seam;
+  an unsupported asset becomes a clarification, not an intent.
+
+## 3. Real `claude-sonnet-5` runs (shipped client, `npm run cli`)
+
+Provider forced on the command line: `POLARIS_AGENT_PROVIDER=anthropic
+POLARIS_AGENT_MODEL=claude-sonnet-5`. Latency is the one `cli.ts` measures around
+`runTurn` (the model call).
+
+```
+$ npm run cli -w @polaris/agent -- "Ahmet'e 5 USDC gönder"
+agent: model=claude-sonnet-5, tools=1
+intent in 1868 ms
+{ "answer": "Send 5 USDC to Ahmet.",
+  "intent": { "kind": "send", "asset": "USDC", "amount": "5", "recipient": "Ahmet",
+              "source": "Ahmet'e 5 USDC gönder" }, "latencyMs": 1868 }
+
+$ npm run cli -w @polaris/agent -- "can you send 400 dollar to bilal"
+intent in 3225 ms
+{ "answer": "Send 400 USDC to bilal.",
+  "intent": { "kind": "send", "asset": "USDC", "amount": "400", "recipient": "bilal" },
+  "latencyMs": 3225 }        # was asset "USD" before this change
+
+$ npm run cli -w @polaris/agent -- "hello can you hear me"
+no intent in 2241 ms
+{ "answer": "Yes, I can hear you. What would you like to do?",
+  "intent": null, "latencyMs": 2241 }
+
+$ npm run cli -w @polaris/agent -- "can you send 400 euro to bilal"   # rejection proof
+no intent in 2586 ms
+{ "answer": "Sorry, I can only send USDC or XLM, not euros.",
+  "intent": null, "latencyMs": 2586 }
+```
+
+- Turkish: **1868 ms**, `asset: "USDC"`.
+- Dollar: **3225 ms**, `asset: "USDC"` (the bug fixed — not `USD`).
+- Hello: **2241 ms**, no intent, conversational answer.
+- Euro (extra evidence): **2586 ms**, no intent, spoken-style refusal.
+
+## 4. Still open / notes
+
+- **In-app mic → notch run still needs a human**, as with every prior step.
+- **XLM is advertised but the guard MVP allowlists one asset per owner**; the list
+  is the agent-side ceiling, not an on-chain authorisation promise.
+- The `.env` Anthropic selection now works end to end — the A12 blocker is closed.
+- `temperature` can still be injected via the explicit `AnthropicOptions.extra`
+  escape hatch, but it is no longer a first-class option and is never sent by
+  default (asserted by test).
