@@ -12,10 +12,11 @@
  * a transaction.
  */
 import { Account, Asset, BASE_FEE, Memo, Operation, StrKey, TransactionBuilder } from "@stellar/stellar-sdk";
+import { DEFAULT_HOME_DOMAIN } from "./config.ts";
 import { AnchorHttpError, requestJson } from "./http.ts";
 import { shortKey } from "./explain.ts";
 import { getCustomer, KycRequiredError } from "./sep12.ts";
-import { safeHttpsUrl, safeId, sanitizeAnchorText } from "./text.ts";
+import { safeHttpsUrl, safeId, sanitizeAnchorText, type AnchorOwnedLink } from "./text.ts";
 import type {
   AnchorAsset,
   AnchorContext,
@@ -512,6 +513,85 @@ export class PollTimeoutError extends Error {
   }
 }
 
+/**
+ * Extra, sanitised hint appended to a poll timeout when the domain is the TR mock
+ * anchor (whose deposit payout worker stalled on 2026-09-20). Static text only:
+ * the timeout path never fetches anything automatically.
+ */
+export const TR_MOCK_PAYOUT_HINT =
+  "The TR mock anchor accepted the order but has not paid out; run " +
+  "`npm run anchor:check -w @polaris/stellar -- --live --payout-check` and, for a demo, the labelled non-TR scenario " +
+  "`--home-domain testanchor.stellar.org`.";
+
+// ---------- timeout text: anchor-owned links, quoting and length cap ----------
+
+/** Fixed hard cap for the composed `PollTimeoutError.message`. */
+export const MAX_POLL_TIMEOUT_MESSAGE = 600;
+
+/** True for IPv4/IPv6 literals (defence in depth; toml hosts are checked upstream too). */
+function looksLikeIpLiteral(host: string): boolean {
+  return host.includes(":") || host.startsWith("[") || /^[0-9.]+$/.test(host) || /^0x[0-9a-f]+$/i.test(host);
+}
+
+/** Hosts the anchor itself declares: its home domain plus its toml endpoint hosts (EXACT match). */
+function anchorDeclaredHosts(toml: AnchorToml): Set<string> {
+  const hosts = new Set<string>();
+  const add = (value: string | undefined): void => {
+    if (!value) return;
+    try {
+      const u = new URL(value.includes("://") ? value : `https://${value}`);
+      if (u.protocol === "https:" && !u.username && !u.password && !u.port && !looksLikeIpLiteral(u.hostname)) {
+        hosts.add(u.hostname.toLowerCase());
+      }
+    } catch {
+      // Not a usable host; ignore it rather than allowing anything.
+    }
+  };
+  add(toml.homeDomain);
+  add(toml.transferServer);
+  add(toml.webAuthEndpoint);
+  return hosts;
+}
+
+/**
+ * `more_info_url` is anchor-authored: accept it only when it is https, has no
+ * credentials/port, is short enough, and its host EXACTLY matches a host the
+ * anchor itself declares (its home domain or a `TRANSFER_SERVER` /
+ * `WEB_AUTH_ENDPOINT` host). Everything else is dropped. Never auto-fetched.
+ */
+export function anchorOwnedLink(value: unknown, toml: AnchorToml, max = 300): AnchorOwnedLink | undefined {
+  if (typeof value !== "string" || value.length === 0 || value.length > max) return undefined;
+  if (/[\u0000-\u001f\u007f]/.test(value)) return undefined;
+  let u: URL;
+  try {
+    u = new URL(value);
+  } catch {
+    return undefined;
+  }
+  if (u.protocol !== "https:" || u.username || u.password || u.port) return undefined;
+  if (looksLikeIpLiteral(u.hostname)) return undefined;
+  if (!anchorDeclaredHosts(toml).has(u.hostname.toLowerCase())) return undefined;
+  return u.toString() as AnchorOwnedLink;
+}
+
+/** Wraps an untrusted anchor message in quotes, escaping backslashes and embedded double quotes. */
+export function quoteAnchorText(text: string): string {
+  return `"${text.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
+/**
+ * Composes the timeout error text and caps it at `MAX_POLL_TIMEOUT_MESSAGE`. When
+ * the (validated) link would push it over the cap, the link is left out of the
+ * message — it stays available in the `sep6.timeout` explain record.
+ */
+export function composeTimeoutMessage(base: string, said: string, linkText: string, hint: string): string {
+  const withLink = `${base}${said}${linkText}${hint}`;
+  if (withLink.length <= MAX_POLL_TIMEOUT_MESSAGE) return withLink;
+  const withoutLink = `${base}${said}${hint}`;
+  if (withoutLink.length <= MAX_POLL_TIMEOUT_MESSAGE) return withoutLink;
+  return `${withoutLink.slice(0, MAX_POLL_TIMEOUT_MESSAGE - 1)}…`;
+}
+
 /** Repeated network/5xx failures while polling; carries the last state we knew. */
 export class PollInterruptedError extends Error {
   readonly last: AnchorTransaction;
@@ -657,7 +737,28 @@ export async function pollTransaction(
       return { tx, outcome: "stopped", history };
     }
     if (ctx.now().getTime() - started >= timeout) {
-      throw new PollTimeoutError(`order ${id} is still "${tx.status}" after ${Math.round(timeout / 1000)}s`, tx);
+      const seconds = Math.round(timeout / 1000);
+      const said = tx.message ? `; the anchor last said: ${quoteAnchorText(tx.message)}` : "";
+      // B1: the anchor's `more_info_url` is shown only when it is on the anchor's own host(s).
+      const safeLink = anchorOwnedLink(tx.moreInfoUrl, toml);
+      const withheld = !safeLink && Boolean(tx.moreInfoUrl);
+      const linkText = safeLink
+        ? ` (order details: ${safeLink})`
+        : withheld
+          ? " (link withheld: not on the anchor's host)"
+          : "";
+      const hint = toml.homeDomain === DEFAULT_HOME_DOMAIN ? ` ${TR_MOCK_PAYOUT_HINT}` : "";
+      ctx.explain.record(
+        "sep6.timeout",
+        `SEP-6 order ${id} is still "${tx.status}" after ${seconds}s, so we stopped waiting.` +
+          (tx.message ? " The anchor's own status message is attached." : "") +
+          (withheld ? " The anchor's order link was not shown (link withheld: not on the anchor's host)." : "") +
+          hint,
+        "The order never reached a final state. A status like \"pending_anchor\" that does not move usually means a problem on the anchor's side, not with your account; the safe next step is to check the order later instead of paying again.",
+        { anchorSaid: tx.message, link: safeLink },
+      );
+      const base = `order ${id} is still "${tx.status}" after ${seconds}s`;
+      throw new PollTimeoutError(composeTimeoutMessage(base, said, linkText, hint), tx);
     }
     await ctx.sleep(interval);
   }

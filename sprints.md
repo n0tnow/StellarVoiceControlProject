@@ -101,13 +101,71 @@
 - [ ] Approval card + Touch ID gate → signed → testnet tx (M2 slice complete).
 - **Accept:** "send 10 USDC to <alias>" end-to-end, Touch ID approved, tx visible on explorer.
 
+## Milestone 2b — Minimal Integration Slice (chain lane first) 🔲
+> Source: `backlog/2026-09-19-slice-gap-analysis.md` §G.3 (S1–S10), adapted to decisions D1/D2.
+> Integration between the UI lane and the chain lane is **paused until both sides are done**.
+> The chain lane stays **headless** (Node scripts, typed input) and touches only `stellar/` and
+> `contracts/`. Voice is **not** on the critical path.
+> Items marked **PROPOSED** await Owner A agreement.
+>
+> **Live testnet status (2026-09-20, chain-lane PR):** 12/12 scenarios S0–S11 pass on
+> Stellar TESTNET, independently verified on-chain (`backlog/e2e-testnet-review.md`); the
+> manual tool `e2e:tool` exercises the same chain-lane code the app will use
+> (`backlog/e2e-polish.md`). Offline: 922 tests green across 8 suites.
+
+### Chain lane (Owner B — critical path)
+- [x] (2026-09-20, chain-lane PR) **C1.** Real `sendPayment` ChainTool: `Intent` → unsigned XDR + decoded summary; alias resolution via committed `aliases.json` first (D1 step 1)
+- [x] (2026-09-20, chain-lane PR) **C2.** `polaris_guard` owner-side TypeScript client: `set_rule`, `set_alias`, SAC `approve`, `pay_executor`, plus `direct` / `guarded` modes of `sendPayment` (D1 step 2)
+- [x] (2026-09-20, chain-lane PR) **C3.** Headless end-to-end script: `Intent` → XDR → dev-key sign → `submitSignedTx` → testnet tx; over-limit rejected with guard error **#105** (`NeedsOwnerApproval`) (D1 step 3)
+- [ ] **C4.** Registration/adapter so a shell can turn an `Intent` into a `ChainToolResult`; expose `@polaris/stellar` to the webview (no voice dependency)
+- [ ] **C5. (PROPOSED)** Signing option: Rust approval gate + TypeScript signing/submission (option 1) for the demo; full Rust-native signer post-hackathon
+- [ ] **C6. (PROPOSED)** Standardise signing on XDR: `SigningService.sign(payloadHash)` → `signTransaction(xdr)` — needs Owner A agreement
+- [x] (2026-09-20, chain-lane PR) **C7.** Guard client + keeper take the contract id as a parameter (e.g. `GUARD_CONTRACT_ID`), never hard-coded, so v0.1 and v0.2 (`polaris_guard_v2`) run side by side (D9)
+- [x] (2026-09-20, chain-lane PR) **T1.** Approval policy + `enableAutoPay(draft)` builder (`always_ask` | `auto_under_limit`; safe order `approve` → `set_rule` → `set_executor`, executor last = arming), `buildBaselineSetup()` / `buildTightenRule()` / `disableAutoPay()`, profile→on-chain mapping — `stellar/src/guard/` (PLANNED) (D10/D10b/D10c/D13; see `docs/approval-and-scheduling.md` §3, §9, §11)
+- [x] (2026-09-20, chain-lane PR) **T2.** Schedule tools: `schedulePayment`, `cancelSchedule`, `listSchedules` ChainTools + explicit-timezone local→UTC helper (see `docs/approval-and-scheduling.md` §5, §9)
+
+### Voice lane (Owner A — not blocking)
+- [ ] **V1. (PROPOSED)** Merge order of the `interfaces/src/index.ts` branches: `a0` → `a1-stt` → `a1-ondevice` → `a2` → `a3` → `docs/rule-types-and-decisions` (freeze the seam after `a0`)
+- [ ] **V2.** Merge A0 (+ A1): `make dev` runs, hold hotkey → `transcript` event
+- [ ] **V3.** Text-input dev path calling `runAgentTurn(text)` → `Intent` in `AgentTrace`
+- [ ] **V4.** Approval card component renders the summary + Approve/Deny
+- [ ] **V5.** Submit path: sign in TS, `submitSignedTx(signedXdr, unsignedXdr)`, emit `tx_submitted`
+- [ ] **V6.** Replace text input with the merged voice path
+- [ ] **V7. (stretch)** Touch ID (LocalAuthentication) behind the approval gate
 
 ## Milestone 3 — Chain & Guard 🔲
-- [ ] polaris_guard Soroban contract: per-tx/daily spending limit + alias book; deployed on testnet, contract ID documented
+- [x] polaris_guard Soroban contract: per-tx/daily spending limit + alias book; deployed on testnet, contract ID documented (2026-09-19, PR #10 + keeper PR #9)
 - [ ] Anchor flow: SEP-10/38/6 TRY mock deposit → USDC balance, driven by voice
+  - SEP-6 client merged ([PR #11](https://github.com/n0tnow/StellarVoiceControlProject/pull/11)); voice wiring pending (Owner A, not on the chain-lane critical path)
 - [ ] Protocol integration: Soroswap swap OR DeFindex vault (pick ONE via testnet spike, do not attempt both)
 - [ ] Approval card UI polished (Stellar Design System / shadcn), explorer links on card
 - [ ] (optional if time) MPP pay-per-command session
+
+## Milestone 3b — Privacy modes (spike-gated) 🔲
+> Design and decisions: [`docs/confidential-payments.md`](docs/confidential-payments.md).
+> Testnet only; CT first, SPP second. Each system is gated by a time-boxed (2h) spike before
+> integration. Scheduled confidential payments are out of scope (D6).
+- [x] Design doc written (2026-09-19, this docs PR — `docs/confidential-payments.md`)
+- [ ] CT spike (2h cap) → GO / NO-GO (`backlog/confidential-spike-ct.md`)
+- [ ] CT integration (`stellar/src/confidential/`, PLANNED) — conditional on GO
+- [ ] SPP spike (2h cap) → GO / NO-GO (`backlog/confidential-spike-spp.md`)
+- [ ] SPP integration (`stellar/src/spp/`, PLANNED) — conditional on GO
+- [ ] `polaris_guard_v2` crate (new contract, own deployment; NOT an edit of `polaris_guard`) — D9
+- [ ] `polaris_privacy_gate` crate (conditional on the spike showing on-chain deposit/withdraw gating is possible) — D9
+- [ ] Approval-card privacy variant + batch payroll card
+- [ ] Local encrypted transaction history (key custody open question)
+- [ ] Demo talking points (privacy limits, public deposit/withdraw leg)
+
+## Milestone 3c — Approval, scheduling & suggestions 🔲
+> Design and decisions: [`docs/approval-and-scheduling.md`](docs/approval-and-scheduling.md).
+> Work items T3–T6 (T1/T2 live in Milestone 2b). D10 is the always-ask default; D11 suggestions are
+> never auto-applied; D12 (keeper hosting) is PROPOSED; D13 fixes the enable order
+> (`approve` → `set_rule` → `set_executor`); D14: the keeper cannot be in-contract (app =
+> opportunistic keeper, tip-paying v2 parked).
+- [x] (2026-09-20, chain-lane PR) **T3.** Suggestions engine: pure `suggest()` + fixtures + tests — `stellar/src/suggest/` (PLANNED), offline
+- [ ] **T4.** History readers: local encrypted history store + Horizon/`Paid` events reader
+- [ ] **T5.** UI (Owner A): Settings "Security" profiles, "Upcoming payments" list with Cancel, suggestions panel with Accept/Dismiss, auto-pay enable card
+- [ ] **T6.** Demo runbook completed after T1/T2/T5 (`docs/demo-runbook.md`)
 
 ## Milestone 4 — Delivery / Presentation 🔲
 > Deadline: 20 Sep 12:00. Bonuses (passkey wallet, P2P escrow, developer mode) ONLY after M4 items are done.

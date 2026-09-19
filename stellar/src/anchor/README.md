@@ -160,6 +160,79 @@ On mainnet the zero-XLM user needs sponsored reserves / fee bumps instead of Fri
 discovery and info (assets SRT/USDC/native, amounts 1-10) but demands SEP-12 fields
 (`first_name`, `last_name`, `email_address`), which surface as `KycRequiredError`.
 
+### 2026-09-20 live re-check: deposit payout stalled on the anchor (not our client)
+
+A fresh 50 TRY deposit (order `sep_uwg7nu53jr5inqpc1926`) walked
+`pending_user_transfer_start -> pending_anchor` but then sat in `pending_anchor` for
+>180 s, where 2026-09-19 it completed in ~2 s. Evidence that this is anchor-side:
+
+* The anchor still accepts the whole flow: SEP-1, SEP-10 (challenge signed by
+  `GDXY…E73M`), SEP-38 (`50 TRY -> 1.0198045 USDC`), SEP-12 (auto-approved), the
+  deposit order and `simulate-bank-transfer` all returned as documented.
+* The order's own message is `"TRY received; paying USDC on Stellar."`, `status_eta 5`,
+  `updated_at` frozen at creation — it never reached `pending_stellar`/`completed`.
+* Horizon shows the treasury (`GCLC…W7T3Z6`) made **no outgoing USDC payment after
+  20:59:32Z**, while it kept receiving withdrawal payments (e.g. 1 USDC at 22:12:02Z).
+  Horizon, `/health` (treasury ~29 139 USDC, `low_balance:false`) and the anchor were
+  all up.
+* `/sep6/info` now omits `min_amount`/`max_amount` (2026-09-19 it printed 0.5 / 300) and
+  `/health` reports `limits: {min_onramp_try:null, max_onramp_try:null, min_offramp_usdc:null}`.
+  The client treats missing limits as optional and still created the order.
+
+The client is correct here; the fix is graceful reporting: on a poll timeout it now
+records `sep6.timeout` and includes the anchor's sanitised last `message` (with
+embedded double quotes escaped) in the `PollTimeoutError`, so a stuck order names the
+anchor's own status instead of a bare "still pending_anchor". The `more_info_url` is
+included only when it is **https-only, credentials/length rejected, and host-restricted
+to the anchor's own host** (exact match against the home domain or a host declared in the
+anchor's `TRANSFER_SERVER`/`WEB_AUTH_ENDPOINT`); an off-host link is withheld
+(`(link withheld: not on the anchor's host)`) and is never fetched. The composed error is
+length-capped; a link that does not fit stays only in the `sep6.timeout` explain record.
+Covered by offline mocked-HTTP regression tests. Until the anchor's payout worker
+recovers, the TR deposit path cannot reach `completed`; see `backlog/anchor-live-check.md`
+for the full evidence and demo guidance.
+
+## Primary vs fallback demo
+
+The demo has one **primary** path (the Turkish anchor, SEP-6 only) and one
+**labelled fallback** for when the primary's payout pipeline is stalled. The
+scenario registry (`scenarios.ts`) is the single place that decides which home
+domains are allowed and what each one may prove; unknown domains are refused
+unless deliberately passed as `custom` (never in the CLI).
+
+```bash
+# Plan only: prints both scenarios, makes ZERO network requests.
+npm run anchor:check -w @polaris/stellar
+
+# Read-only live check: SEP-1 discovery + SEP-6 /info + SEP-10 login (validated
+# before signing) for both domains, plus the TR payout-health heuristic.
+npm run anchor:check -w @polaris/stellar -- --live --payout-check
+
+# One domain only:
+npm run anchor:check -w @polaris/stellar -- --live --home-domain testanchor.stellar.org
+```
+
+| | Primary — TR path | Fallback — NON-TR test scenario |
+|---|---|---|
+| Home domain | `tr-mock-anchor.fly.dev` | `testanchor.stellar.org` |
+| Label (travels with every result) | "TR path — SEP-6 only (SEP-24 prohibited in Turkey)" | "NON-TR test scenario (SDF test anchor) — discovery + SEP-10 login + SEP-6 info only; deposit stops at SEP-12 KYC" |
+| What it proves | The Turkish path's SEP-1 discovery, SEP-6 `/info` and SEP-10 login work; a full demo also does SEP-6 deposit/withdraw | A second, independent anchor's SEP-1 discovery, SEP-6 `/info` and SEP-10 login work |
+| What it does NOT prove | Nothing about a real Turkish anchor (this is a mock); no mainnet route | Nothing about the Turkish path. It is a comparison only. **No deposit/withdraw is attempted**: going further needs SEP-12 KYC (`first_name`, `last_name`, `email_address`) |
+| SEP-24 | Prohibited (MASAK) and never used | Never used |
+
+Honest limits: the fallback is **not** a Turkish solution and must never be
+presented as one. It shares only the standard programmatic SEPs; it does not
+prove a TRY on/off-ramp, a bank leg, or MASAK compliance. The live check signs
+nothing that can move funds: SEP-10 challenges have sequence number 0, the
+keypair is throwaway and in-memory, and the JWT is never printed (only its
+length and expiry). `--payout-check` is a **heuristic** over the TR treasury's
+public Horizon history (thresholds in `payoutHealth.ts`, advisory only). It counts
+only `payment` / `path_payment_strict_send` / `path_payment_strict_receive`
+outflows: `create_claimable_balance` and `account_merge` records are ignored even
+though the TR mock advertises `claimable_balances:true`, so a payout made through
+those op types would be missed. A newest outgoing dated in the future (beyond a
+2-minute clock-skew tolerance) is reported as `unknown`, not `payouts-flowing`.
+
 ## Mock vs mainnet
 
 | | TR mock anchor (testnet) | Real Turkish anchor (mainnet) |

@@ -3,7 +3,7 @@ export * from "./config.ts";
 export * from "./explain.ts";
 export * from "./types.ts";
 export { assertAmount, toStroops } from "./amount.ts";
-export { safeHttpsUrl, safeId, sanitizeAnchorText } from "./text.ts";
+export { safeHttpsUrl, safeId, sanitizeAnchorText, type AnchorOwnedLink } from "./text.ts";
 export { assertSafeEndpoint, parseHomeDomain, UnsafeAnchorError, type NetPolicy } from "./net.ts";
 export { AnchorHttpError, MAX_JSON_BYTES, MAX_TOML_BYTES, readCapped } from "./http.ts";
 export { discoverAnchor, findAsset, parseStellarToml, TomlError } from "./sep1.ts";
@@ -37,6 +37,7 @@ export {
   startDeposit,
   startWithdraw,
   TransactionInfoRequiredError,
+  TR_MOCK_PAYOUT_HINT,
   type DepositParams,
   type PollOptions,
   type PollOutcome,
@@ -49,6 +50,28 @@ export { assertSameTransaction, describeXdr, withdrawalSummary, type ApprovalSum
 export { buildTrustlineTx, inspectAccount, preflight, type AccountState, type PreflightOptions, type PreflightResult } from "./preflight.ts";
 export { balanceOf, explorerAccountUrl, explorerTxUrl, hasTrustline, loadAccount, submitEnvelope } from "./horizon.ts";
 export { simulateBankTransfer } from "./sandbox.ts";
+export {
+  assertPlainAnchorDomain,
+  describeAnchorScenario,
+  SDF_TEST_ANCHOR_HOME_DOMAIN,
+  TR_MOCK_HOME_DOMAIN,
+  type AnchorScenario,
+  type ScenarioId,
+} from "./scenarios.ts";
+export {
+  classifyPayoutHealth,
+  findTreasuryAddress,
+  parseHorizonPayments,
+  PAYMENT_HISTORY_LIMIT,
+  PAYOUT_FLOWING_WITHIN_MS,
+  PAYOUT_STALLED_AFTER_MS,
+  readPayoutHealth,
+  TR_MOCK_TREASURY,
+  type PayoutHealth,
+  type PayoutHealthResult,
+  type PayoutPayment,
+  type PayoutVerdict,
+} from "./payoutHealth.ts";
 export { AnchorSession, type AnchorSessionConfig } from "./session.ts";
 export { runDepositFlow, runWithdrawFlow, type DepositFlowOptions, type DepositFlowResult, type WithdrawFlowOptions, type WithdrawFlowResult } from "./flows.ts";
 // EnvSigner (test-only) lives behind `@polaris/stellar/anchor/testing`, never in this barrel.

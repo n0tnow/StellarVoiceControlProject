@@ -1,21 +1,27 @@
 import { TransactionBuilder, type Transaction } from "@stellar/stellar-sdk";
 import { describe, expect, it } from "vitest";
 import { TESTNET_PASSPHRASE } from "../config.ts";
+import { ExplainLog } from "../explain.ts";
 import { AnchorHttpError } from "../http.ts";
 import { ensureCustomer, KycRequiredError } from "../sep12.ts";
 import { getPrice, QuoteError } from "../sep38.ts";
 import {
+  anchorOwnedLink,
   buildWithdrawPayment,
   classifyStatus,
+  composeTimeoutMessage,
   explainStatus,
   getInfo,
+  MAX_POLL_TIMEOUT_MESSAGE,
   parseTransaction,
   pollTransaction,
   PollTimeoutError,
+  quoteAnchorText,
   startDeposit,
   startWithdraw,
+  TR_MOCK_PAYOUT_HINT,
 } from "../sep6.ts";
-import type { AnchorTransaction } from "../types.ts";
+import type { AnchorToml, AnchorTransaction } from "../types.ts";
 import { CLIENT, fakeFetch, HOME, jsonResponse, makeCtx, SERVER, TOKEN, TOML, USDC_ISSUER } from "./helpers.ts";
 
 const TRY = "iso4217:TRY";
@@ -297,5 +303,174 @@ describe("SEP-6 polling state machine", () => {
     expect(err).toBeInstanceOf(PollTimeoutError);
     expect((err.last as AnchorTransaction).status).toBe("pending_anchor");
     expect(calls.length).toBe(6); // t=0..5s inclusive at 1s steps
+  });
+
+  it("narrates and reports the anchor's last message + more_info_url when a deposit is stuck (live 2026-09-20 regression)", async () => {
+    const stuckMessage = "TRY received; paying USDC on Stellar.";
+    const { fetch } = fakeFetch({
+      [`GET ${HOME}/sep6/transaction`]: {
+        transaction: {
+          id: "sep_stuck",
+          kind: "deposit",
+          status: "pending_anchor",
+          message: stuckMessage,
+          more_info_url: `https://${HOME}/sep6/tx/sep_stuck`,
+        },
+      },
+    });
+    const ctx = makeCtx(fetch);
+    const err = (await pollTransaction(ctx, TOML, TOKEN, "sep_stuck", { intervalMs: 1000, timeoutMs: 5000 }).catch((e: unknown) => e)) as PollTimeoutError;
+    expect(err).toBeInstanceOf(PollTimeoutError);
+    expect(err.message).toContain('still "pending_anchor"');
+    expect(err.message).toContain(stuckMessage);
+    expect(err.message).toContain(`https://${HOME}/sep6/tx/sep_stuck`);
+    const rec = ctx.explain.all().at(-1)!;
+    expect(rec.step).toBe("sep6.timeout");
+    expect(rec.anchorSaid).toBe(stuckMessage);
+    expect(rec.what).not.toContain(stuckMessage); // anchor text never enters the narration
+    expect(rec.what).not.toContain("testanchor.stellar.org"); // the TR hint is TR-only
+  });
+
+  it("adds the TR-mock payout hint to the timeout narration and error (TR domain only)", async () => {
+    const { fetch } = fakeFetch({
+      [`GET ${HOME}/sep6/transaction`]: { transaction: { id: "sep_tr", kind: "deposit", status: "pending_anchor" } },
+    });
+    const ctx = makeCtx(fetch);
+    const trToml = { ...TOML, homeDomain: "tr-mock-anchor.fly.dev" };
+    const err = (await pollTransaction(ctx, trToml, TOKEN, "sep_tr", { intervalMs: 1000, timeoutMs: 5000 }).catch((e: unknown) => e)) as PollTimeoutError;
+    expect(err).toBeInstanceOf(PollTimeoutError);
+    expect(err.message).toContain("anchor:check");
+    expect(err.message).toContain("testanchor.stellar.org");
+    const rec = ctx.explain.all().at(-1)!;
+    expect(rec.step).toBe("sep6.timeout");
+    expect(rec.what).toContain("TR mock anchor accepted the order but has not paid out");
+    expect(rec.what).toContain("anchor:check");
+    expect(rec.why).not.toContain("testanchor.stellar.org");
+  });
+});
+
+describe("SEP-6 timeout link host restriction (B1), quoting (N2) and message cap (N1)", () => {
+  const TR_HOME = "tr-mock-anchor.fly.dev";
+  const TR_TOML: AnchorToml = {
+    ...TOML,
+    homeDomain: TR_HOME,
+    webAuthEndpoint: `https://${TR_HOME}/auth`,
+    transferServer: `https://${TR_HOME}/sep6`,
+  };
+
+  it.each<[string, unknown, string | undefined]>([
+    ["off-host https link", "https://attacker.example/x", undefined],
+    ["suffix look-alike host", "https://tr-mock-anchor.fly.dev.evil.com/x", undefined],
+    ["userinfo host trick", "https://tr-mock-anchor.fly.dev@evil.com/", undefined],
+    ["plain http", "http://tr-mock-anchor.fly.dev/x", undefined],
+    ["uppercase host", "https://TR-MOCK-ANCHOR.FLY.DEV/x", "https://tr-mock-anchor.fly.dev/x"],
+    ["protocol-relative", "//tr-mock-anchor.fly.dev/x", undefined],
+    ["javascript: scheme", "javascript:alert(1)", undefined],
+    ["ip literal", "https://93.184.216.34/x", undefined],
+    ["over-long URL", `https://${TR_HOME}/${"a".repeat(400)}`, undefined],
+    ["control characters", `https://${TR_HOME}/\u0000x`, undefined],
+    ["non-string", 42, undefined],
+  ])("anchorOwnedLink refuses/accepts: %s", (_name, input, expected) => {
+    expect(anchorOwnedLink(input, TR_TOML)).toBe(expected);
+  });
+
+  it("accepts a host declared by a toml endpoint, not only the home domain", () => {
+    const toml: AnchorToml = { ...TOML, homeDomain: "anchor.example.test", webAuthEndpoint: "https://auth.example.test/auth" };
+    expect(anchorOwnedLink("https://auth.example.test/session", toml)).toBe("https://auth.example.test/session");
+    expect(anchorOwnedLink("https://other.example.test/session", toml)).toBeUndefined();
+  });
+
+  it("N6: ExplainLog.record only accepts an anchor-owned link at the boundary", () => {
+    const log = new ExplainLog();
+    const owned = anchorOwnedLink(`https://${HOME}/session`, TOML);
+    expect(owned).toBeDefined();
+    const rec = log.record("sep6.link", "A link was attached.", "It is on the anchor's own host.", { link: owned });
+    expect(rec.link).toBe(`https://${HOME}/session`);
+    // A plain https string is not an AnchorOwnedLink: the boundary rejects it at compile time.
+    // @ts-expect-error link must be produced by anchorOwnedLink (branded AnchorOwnedLink)
+    log.record("sep6.link", "Unchecked link.", "This must not compile.", { link: "https://evil.example/x" });
+  });
+
+  it("quotes and escapes an anchor message so embedded double quotes cannot break the quoting", () => {
+    expect(quoteAnchorText('a "b" c')).toBe('"a \\"b\\" c"');
+  });
+
+  it("composeTimeoutMessage caps the text and drops the link when it does not fit", () => {
+    const base = 'order x is still "pending_anchor" after 180s';
+    const said = "x".repeat(200);
+    const link = ` (order details: https://${TR_HOME}/${"a".repeat(250)})`;
+    const out = composeTimeoutMessage(base, said, link, ` ${TR_MOCK_PAYOUT_HINT}`);
+    expect(out.length).toBeLessThanOrEqual(MAX_POLL_TIMEOUT_MESSAGE);
+    expect(out).not.toContain("order details");
+    const small = composeTimeoutMessage(base, said, " (order details: https://x.test)", "");
+    expect(small).toContain("order details");
+    expect(small.length).toBeLessThanOrEqual(MAX_POLL_TIMEOUT_MESSAGE);
+  });
+
+  it("omits an off-host more_info_url and says it was withheld", async () => {
+    const { fetch } = fakeFetch({
+      [`GET ${HOME}/sep6/transaction`]: {
+        transaction: {
+          id: "sep_off",
+          kind: "deposit",
+          status: "pending_anchor",
+          message: "TRY received",
+          more_info_url: `https://${TR_HOME}/sep6/tx/sep_off`,
+        },
+      },
+    });
+    const ctx = makeCtx(fetch);
+    const err = (await pollTransaction(ctx, TOML, TOKEN, "sep_off", { intervalMs: 1000, timeoutMs: 3000 }).catch((e: unknown) => e)) as PollTimeoutError;
+    expect(err).toBeInstanceOf(PollTimeoutError);
+    expect(err.message).not.toContain(TR_HOME);
+    expect(err.message).toContain("(link withheld: not on the anchor's host)");
+    const rec = ctx.explain.all().at(-1)!;
+    expect(rec.step).toBe("sep6.timeout");
+    expect(rec.link).toBeUndefined();
+    expect(rec.what).toContain("link withheld: not on the anchor's host");
+  });
+
+  it("includes an on-host more_info_url in the error and the explain record", async () => {
+    const url = `https://${HOME}/sep6/tx/sep_on`;
+    const { fetch } = fakeFetch({
+      [`GET ${HOME}/sep6/transaction`]: {
+        transaction: { id: "sep_on", kind: "deposit", status: "pending_anchor", more_info_url: url },
+      },
+    });
+    const ctx = makeCtx(fetch);
+    const err = (await pollTransaction(ctx, TOML, TOKEN, "sep_on", { intervalMs: 1000, timeoutMs: 3000 }).catch((e: unknown) => e)) as PollTimeoutError;
+    expect(err.message).toContain(url);
+    const rec = ctx.explain.all().at(-1)!;
+    expect(rec.link).toBe(url);
+  });
+
+  it("escapes embedded double quotes in the reported anchor message", async () => {
+    const message = 'He said "send USDC" now';
+    const { fetch } = fakeFetch({
+      [`GET ${HOME}/sep6/transaction`]: {
+        transaction: { id: "sep_q", kind: "deposit", status: "pending_anchor", message },
+      },
+    });
+    const ctx = makeCtx(fetch);
+    const err = (await pollTransaction(ctx, TOML, TOKEN, "sep_q", { intervalMs: 1000, timeoutMs: 3000 }).catch((e: unknown) => e)) as PollTimeoutError;
+    expect(err.message).toContain('\\"send USDC\\"');
+    expect(err.message).not.toContain('"send USDC"');
+    expect(ctx.explain.all().at(-1)?.anchorSaid).toBe(message);
+  });
+
+  it("caps the composed error at MAX and keeps an over-long link only in the explain record", async () => {
+    const id = "t".repeat(80);
+    const longMessage = "m".repeat(200);
+    const longUrl = `https://${HOME}/sep6/tx/${"a".repeat(240)}`;
+    const { fetch } = fakeFetch({
+      [`GET ${HOME}/sep6/transaction`]: {
+        transaction: { id, kind: "deposit", status: "pending_anchor", message: longMessage, more_info_url: longUrl },
+      },
+    });
+    const ctx = makeCtx(fetch);
+    const err = (await pollTransaction(ctx, TOML, TOKEN, id, { intervalMs: 1000, timeoutMs: 3000 }).catch((e: unknown) => e)) as PollTimeoutError;
+    expect(err.message.length).toBeLessThanOrEqual(MAX_POLL_TIMEOUT_MESSAGE);
+    expect(err.message).not.toContain(longUrl);
+    expect(ctx.explain.all().at(-1)?.link).toBe(longUrl);
   });
 });

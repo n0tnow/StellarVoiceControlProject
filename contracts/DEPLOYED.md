@@ -292,6 +292,53 @@ the host, not from policy.
 The CLI prints these as `Error(Contract, #105)` — it does **not** resolve the name
 from the deployed spec, so keep this table next to whatever reads the errors.
 
+## Known limitations (v0.1)
+
+Findings from `backlog/contracts-audit.md` (audit) and `backlog/contracts-audit-review.md` (independent
+review). No Critical or High findings; these are product/liveness and documentation-level caveats. The
+batched v0.2 fix plan is in [`backlog/guard-v0.2-hardening.md`](../backlog/guard-v0.2-hardening.md).
+
+**Contract evolution (D9, 2026-09-19):** `polaris_guard` v0.1 is **frozen** and stays the reference
+deployment. Any future change or addition ships as a **new contract crate under `contracts/`** (own Cargo
+package, own tests, own testnet deployment and its **own section in this file**, e.g.
+`polaris_guard_v2`), so old and new contracts run side by side. Nothing below re-deploys v0.1 in place:
+the "fixed in v0.2" column means "fixed in the new `polaris_guard_v2` contract", not an edit of the
+frozen v0.1 source.
+
+| ID | Severity | Limitation | Consequence for the demo | fixed in v0.2 (new contract `polaris_guard_v2`)? |
+|---|---|---|---|---|
+| F-01 | Medium | No pause / emergency stop; `revoke_executor` does not stop schedules. | Only kill switches for a schedule are `cancel_schedule` or revoking the SAC allowance (which also disables `pay_owner`). State it, don't hide it. | Y |
+| F-02 | Medium | Schedule id space is never reused; keeper `list_due` sweep cost grows with ids ever created. | Accepted tradeoff; a busy day does not break the demo, it only makes the keeper scan a few more pages. | N |
+| F-03 | Low | `execute_schedule` does not re-check `known_recipients_only`; removing/re-pointing an alias does not stop an existing schedule (recipient is owner-authored at creation). | Product decision to keep + document; revisit in v0.2. | Y |
+| F-04 | Low | `Known` vs `KnownRefs` TTL divergence. | A long-untouched but still-aliased recipient can archive independently (restore bill under Protocol 23); no demo impact. | Y |
+| F-05 | Low | Insufficient balance surfaces as the token's error `#10`, not a guard error. | The app/keeper must range-route errors (`< 100` = token/host), not assume every rejection is guard policy. | N |
+| F-06 | Low | `pay_owner` forwards an unvalidated `asset` address. | Client must resolve `asset` from the owner's allowlist and never pass an agent-supplied address; card renders the XDR's real asset. | N |
+| F-07 | Info | Unauthenticated reads expose schedule data. | Acceptable for a public testnet demo; note the privacy implication for mainnet. | N |
+| F-08 | Info | `MAX_ALLOWED_ASSETS` check is unreachable while `allowed_assets.len() > 1` is rejected. | Dead documentation; keep for when per-asset budgets land. | Y |
+| F-09 | Info | `contracts/scripts/demo.sh:81` comment says `expiration_ledger` while the flag is `--live_until_ledger`. | Documentation only — fixed in this docs PR. | N (doc-only) |
+| F-10 | Info | `stellar/src/keeper/README.md:146` log example shows `AllowanceMissing` code 5; code 5 is `SacAuthentication`, code 9 is `SacAllowanceError`. | Documentation only — fixed in this docs PR. | N (doc-only) |
+| F-11 | Info | No upgrade path (deliberate). | A fix means a new contract ID and every owner re-publishing rule + allowance. | N (by design) |
+| F-12 | Low | Failed schedules are retried forever with no auto-deactivation. | Simulation failures cost no fee; owner can always cancel manually. | Y |
+| N-01 | Info | `list_due(cursor, 0)` returns `([], 0)`, indistinguishable from end-of-space. | Latent only — the keeper always requests `>= 1`. | Y |
+| N-02 | Info | Rule / executor / alias mutations emit no events. | Off-chain monitoring must diff storage; no demo impact. | Y |
+| N-03 | Info | Keeper's `execute_schedule` bumps the owner's `Rule` TTL (third party pays rent). | Rent-transfer nuance — documented only; keeper pays the rent, bounded (~120 days); no demo impact. | N |
+
+### Demo talking points
+
+- `known_recipients_only` does **not** bind schedules (F-03).
+- The only kill switch for an existing schedule is `cancel_schedule` or revoking the SAC allowance
+  (which also disables `pay_owner`) (F-01).
+- The contract is **non-upgradeable by design** (F-11).
+- **Testnet only** — no mainnet deployment exists and none is planned for this milestone.
+
+### Privacy modes note
+
+`polaris_guard` enforces its per-tx/daily limits on **plaintext** amounts, so it cannot enforce them on
+the confidential leg of a private payment — the contract never sees the amount. The envelope is instead
+enforced at the **public boundary** (capping the deposit into the CT wrapper / SPP pool, whose amounts
+are public) plus a client-side per-transfer limit gated by the approval card. Design:
+[`docs/confidential-payments.md`](../docs/confidential-payments.md) §7.
+
 ## Demo
 
 ```bash

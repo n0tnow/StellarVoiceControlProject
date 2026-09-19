@@ -143,7 +143,7 @@ One JSON object per line on stdout:
 
 ```json
 {"ts":"2026-09-19T12:00:00.000Z","level":"info","event":"executed","id":7,"hash":"ab12...","status":"SUCCESS","ledger":1234567}
-{"ts":"...","level":"warn","event":"rejected","id":8,"status":"REJECTED","error":{"kind":"allowance_missing","name":"AllowanceMissing","code":5,"message":"HostError: Error(Contract, #5)"},"retryInMs":60000}
+{"ts":"...","level":"warn","event":"rejected","id":8,"status":"REJECTED","error":{"kind":"allowance_missing","name":"SacAllowanceError","code":9,"message":"HostError: Error(Contract, #9)"},"retryInMs":60000}
 ```
 
 Events: `config`, `keeper_started`, `executed`, `dry_run`, `pending`,

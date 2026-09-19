@@ -680,3 +680,170 @@
   app (only the flags are verified, not the pixels), and the in-app mic run.
 - **Status:** implemented on `feat/a12-language-detection`; pushed, no PR.
   `backlog/2026-09-20-a14-language-precedence-and-fullscreen.md`.
+## 2026-09-19 — Round-3 Decisions: Contracts Frozen, Privacy Modes, Work Order
+- **Decision (D8):** `polaris_guard` is **frozen for the slice**. The v0.1 audit findings go into
+  `contracts/DEPLOYED.md` ("Known limitations (v0.1)") + demo talking points, and the fixes are batched
+  into a single `polaris_guard` v0.2 redeploy **only after the slice works** — any change = new contract
+  ID = every owner re-publishes rule + allowance + keeper env update. Spec:
+  [`backlog/guard-v0.2-hardening.md`](backlog/guard-v0.2-hardening.md).
+- **Status:** decided
+
+## 2026-09-19 — Integration Paused; Chain Lane Headless First
+- **Decision:** Integration between the UI/voice lane (Owner A) and the chain lane (Owner B) is
+  deliberately **paused until both sides are done**. The chain lane stays **headless** (Node scripts,
+  typed input) and touches only `stellar/` and `contracts/`. Voice is not on the critical path.
+- **Pointer:** `backlog/2026-09-19-slice-gap-analysis.md` §G.3; `sprints.md` "Milestone 2b".
+- **Status:** decided
+
+## 2026-09-19 — Privacy Modes: CT then SPP (Testnet Only)
+- **Decision (D2–D6):** Confidential/private payments are **in scope** as "privacy modes" because the
+  project is **testnet only**, so the unaudited developer-preview status of Confidential Tokens (CT) and
+  Stellar Private Payments (SPP) is not a blocker (still labelled testnet-only/unaudited). Order: **CT
+  first, SPP second**, each gated by a 2h spike.
+- **Decision:** voice expresses the mode as intent ("secretly"/"privately"); registration, contacts,
+  address entry, default-mode changes are **manual-tab only**; addresses are never dictated by voice;
+  **fail-closed** (never downgrade a private request to public). **Instant payroll is in**, **scheduled
+  confidential payments are out** (keeper has no sender secret material).
+- **Pointer:** [`docs/confidential-payments.md`](docs/confidential-payments.md).
+- **Status:** decided
+
+## 2026-09-19 — D1: Chain-Lane Work Order
+- **Decision (D1):** chain lane order — (1) real `sendPayment` ChainTool (`Intent` → unsigned XDR +
+  decoded summary; alias via committed `aliases.json`), (2) `polaris_guard` owner-side TS client
+  (`set_rule`, `set_alias`, SAC `approve`, `pay_executor`, `direct`/`guarded` modes), (3) headless
+  end-to-end script (over-limit rejected with guard error **#105**), and **only then** (4) the privacy
+  spikes. Workers run sequentially.
+- **Pointer:** `docs/confidential-payments.md` §9; `sprints.md` "Milestone 2b".
+- **Status:** decided
+
+## 2026-09-19 — Worker Ladder: DeepSeek v4.1 Flash via opencode
+- **Decision:** round-3 workers run as **DeepSeek v4.1 Flash** via opencode under the Claude-based
+  coordinator. The worker ladder table is **local-only** and never committed, so the ladder was simply
+  updated locally for this round (no repo change).
+- **Pointer:** `AGENTS.md` §2 (worker architecture); `docs/model-ladder.md` (local-only).
+- **Status:** decided
+
+## 2026-09-19 — Idea: Guard Limits at the Public Boundary for Privacy Modes
+- **Idea:** because a confidential transfer hides its amount, `polaris_guard` cannot enforce per-tx/daily
+  limits on the confidential leg. Move the enforceable guarantee to the **public boundary**: cap the
+  amount moved *into* the CT wrapper / SPP pool (deposit amounts are public), enforce a per-transfer
+  limit client-side (the app knows the amount before encrypting), and use the approval card as the gate.
+  Keeper is excluded from confidential schedules.
+- **Open question:** whether `polaris_guard` can gate `deposit`/`withdraw` **on-chain** (executor calls
+  the wrapper) — for the spike.
+- **Pointer:** `docs/confidential-payments.md` §7; `contracts/DEPLOYED.md` "Privacy modes note".
+- **Status:** open (resolved by the CT/SPP spikes)
+
+## 2026-09-19 — PROPOSED: Mixed-Mode Payroll Batch Policy
+- **Idea:** A single payroll batch may mix public and private (CT/SPP) recipients, which can leak intent
+  or confuse the single approval card.
+- **Proposed policy (needs owner confirmation):** refuse mixed-mode batches unless every line resolves
+  cleanly to one mode; otherwise split the batch into two cards (one public, one private).
+- **Pointer:** `docs/confidential-payments.md` §11 risk R7.
+- **Status:** open (PROPOSED — needs owner confirmation)
+
+## 2026-09-19 — Decision: Contract Evolution = New Crates, v0.1 Frozen
+- **Decision (D9):** `polaris_guard` v0.1 (deployed, id in `contracts/DEPLOYED.md`) is **frozen** and
+  stays the reference deployment; its source under `contracts/polaris_guard/` is never edited again
+  except for a critical owner-decided fix.
+- **Decision:** every future contract change/addition is a **new crate** under `contracts/` (own Cargo
+  package, own tests, own testnet deployment, own `DEPLOYED.md` section, registered as a workspace
+  member), so old and new contracts are tested and run side by side. This supersedes the D8 wording of a
+  single in-place v0.2 redeploy: v0.2 = new crate `polaris_guard_v2`; any on-chain privacy gate = new
+  crate `polaris_privacy_gate`; client/keeper take the contract id as a parameter.
+- **Pointer:** [`backlog/guard-v0.2-hardening.md`](backlog/guard-v0.2-hardening.md).
+- **Status:** decided
+
+<!-- New notes are appended chronologically at the bottom. -->
+
+## 2026-09-19 — D10/D10b/D10c: Approval Profiles & Auto-Pay
+- **Decision (D10):** default approval profile = **"Always ask"** — every money-out shows an approval
+  card (+ Touch ID); nothing is auto-approved at first start.
+- **Decision (D10b):** the user can later enable **auto-pay under a threshold** by settings OR voice
+  ("don't ask me for payments under 25 USDC"); payments ≤ threshold run via `pay_executor`
+  (agent-signed) without a card, above the threshold still ask.
+- **Decision (D10c):** enabling/loosening is never silent — a voice request creates a **draft** that is
+  read back and applied only after **ONE card + Touch ID**; tightening/disabling may be done by voice
+  with read-back and the lighter confirmation; the **app preference can only be STRICTER than the
+  chain, never looser**.
+- **Execution order:** fixed later by **D13** — `approve` → `set_rule` → `set_executor` (executor last
+  = arming); any earlier "allowance last" ordering is **SUPERSEDED by D13**.
+- **Pointer:** [`docs/approval-and-scheduling.md`](docs/approval-and-scheduling.md) §2–§4.
+- **Status:** decided
+
+## 2026-09-19 — D11: Local Deterministic Smart Suggestions
+- **Decision (D11):** the app analyses the user's payment history and proposes changes (auto-pay
+  threshold, daily limit, recurring → schedule); suggestions are computed **locally and
+  deterministically** (statistics) and an LLM may only phrase them.
+- **Decision:** raw history never leaves the device — only aggregates, and only if the owner allows. A
+  suggestion is **never applied automatically**; it becomes a draft through the same read-back + card +
+  Touch ID flow.
+- **Pointer:** [`docs/approval-and-scheduling.md`](docs/approval-and-scheduling.md) §6.
+- **Status:** decided
+
+## 2026-09-19 — D12 (PROPOSED): Keeper Hosting for the Demo
+- **Proposed decision (D12, awaiting user confirmation):** keeper hosting for the demo = the **same
+  Mac** as the app (`npm run keeper -w @polaris/stellar`, wrapped in `caffeinate -i`); production path
+  = an always-on small server with multiple independent keepers.
+- **Note:** the user asked what "keeper hosting" means, so the docs must explain the keeper in plain
+  words.
+- **Pointer:** [`docs/approval-and-scheduling.md`](docs/approval-and-scheduling.md) §7.
+- **Status:** open (PROPOSED — needs user confirmation)
+
+## 2026-09-19 — D13: Safe Execution Order of the Enable-Auto-Pay Flow
+- **Decision (D13):** the SAC allowance is mandatory for every guard payment, so a baseline allowance
+  already exists in the "Always ask" profile; what **arms** unattended payments is registering the
+  executor together with a positive `auto_approve_limit`. The enable flow therefore executes as
+  **1) `approve` (allowance), 2) `set_rule`, 3) `set_executor`** — registering the executor is the
+  **last, arming** step.
+- **Card:** the approval card lists the same three actions in the same order and calls out the arming
+  step; it is still **ONE card and ONE Touch ID**.
+- **State after a failure:** after step 1 only the allowance changed; after step 2 the new rule is
+  stored but no executor exists so nobody can auto-pay; after step 3 auto-pay is armed.
+- **Disable order:** `revoke_executor` first (**disarm**), then the optional `approve(0)`.
+- **Supersedes:** every earlier statement that the "allowance is last" or that the execution order is
+  `set_executor, set_rule, approve` — all **SUPERSEDED by D13** (D10c note; `docs/approval-and-scheduling.md` §3, §9, §11d; the JSON
+  card example; `docs/interfaces.md` §6.1; `docs/demo-runbook.md`; `sprints.md`; `backlog.md` T1 row).
+- **New T1 deliverables:** `buildBaselineSetup` (allowance + `set_rule` with no executor and
+  `auto_approve_limit` 0 allowed) implements the first-time "Always ask" setup (§11e); `buildTightenRule`
+  refuses loosening by default; `invalid_asset` validation; card caveats (revoking the executor does not
+  stop existing schedules; revoking the allowance disables ALL guard payments including owner-approved
+  ones); an "allowance old → new" line with a warning when the new allowance is lower than the current.
+- **Pointer:** [`docs/approval-and-scheduling.md`](docs/approval-and-scheduling.md) §3, §9, §11.
+- **Status:** decided
+
+## 2026-09-19 — D14: Can the Keeper Live Inside the Contract?
+- **Decision (D14):** **No.** Soroban has no scheduler or timers; a contract cannot wake itself — every
+  execution needs a transaction from someone.
+- **What is possible:** (a) `execute_schedule` needs no auth, so anyone can trigger it — the **app can
+  act as an opportunistic keeper** (on start and while open it runs due schedules) and the **payee** can
+  trigger it too; (b) a future contract (**a NEW crate, per D9**, e.g. `polaris_guard_v2`) could pay a
+  small **tip** to whoever triggers a due schedule so third parties run keepers — **PARKED**, not for
+  the hackathon; (c) the demo keeps **D12** (keeper on the same Mac, **PROPOSED**).
+- **Pointer:** [`docs/approval-and-scheduling.md`](docs/approval-and-scheduling.md) §7; parked idea in
+  [`backlog/guard-v0.2-hardening.md`](backlog/guard-v0.2-hardening.md).
+- **Status:** decided
+
+## 2026-09-20 — Chain Lane Completed and Verified Live on Testnet
+- **Idea:** The chain lane (`sendPayment`, guard client, approval T1, schedules T2, suggestions T3, live adapters) is complete and verified end to end.
+- **Evidence:** **922** offline tests green across 8 suites (`backlog/final-gate-chain-lane.md`); **12/12** live scenarios S0–S11 on Stellar TESTNET, independently re-read on-chain (`backlog/e2e-testnet-review.md`, all hashes `SUCCESS`); manual tool `e2e:tool` (`backlog/e2e-polish.md`).
+- **Bugs the live run found:** `sendPayment` set a lower time bound (`minTime = now`) → `tx_too_early` on testnet; fixed to `minTime = 0`. Earlier rounds, independent review caught the `setRule` ABI encoding defect (`scvString`/`scvU64` instead of `scvSymbol`/`scvI128`) and the suggestions outlier threshold.
+- **Status:** decided
+
+## 2026-09-20 — Review Process Finding: Independent Review Catches What Fake-RPC Tests Cannot
+- **Idea:** Every chain-lane module had a separate independent reviewer (author never reviews own code).
+- **Finding:** The reviewers caught **real defects in every module** (a reject on guard-client, blocking fixes in send-payment, approval, schedule, suggest, and the e2e tooling). Offline fake-RPC tests cannot catch ABI-encoding or clock/timing bugs — those only surfaced through independent XDR/spec analysis and the live run.
+- **Decision:** Keep mandatory per-module independent review before merge; treat a live testnet run as required evidence for chain-lane work.
+- **Status:** decided
+
+## 2026-09-20 — Decision: Approval Gate Is STRICT
+- **Decision:** The manual `e2e:tool` approval gate is **STRICT**: it approves only the exact lowercase `y` or `yes` (at most one trailing `\n` removed); no trimming, no case folding, so `Y`, `Y `, ` y`, `YES`, `Yes`, `yes please`, `1` and EOF all abort.
+- **Rationale:** approval must be explicit and default-deny; the prompt times out (120 s) and signs only the exact XDR that was displayed.
+- **Pointer:** `stellar/src/live/confirm.ts`; `backlog/e2e-polish.md` (B3) and `backlog/e2e-polish-review-2.md`.
+- **Status:** decided
+
+## 2026-09-20 — Local-Only Artefacts Intentionally Not in the PR
+- **Idea:** Some exploratory artefacts stay local only and are deliberately **not** part of the chain-lane PR.
+- **What/where:** the test UI branch (`local/test-ui`) and the privacy/passkey spikes on local branches `spike/ct`, `spike/spp`, `spike/passkey`. Their reports live on those branches (local-only), not under `backlog/` in this PR.
+- **Pointer:** chain-lane scope check in `backlog/final-gate-chain-lane.md` (Step 1: no `stellar/src/spike` or live-UI code in the diff).
+- **Status:** decided

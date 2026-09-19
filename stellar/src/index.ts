@@ -38,10 +38,11 @@ function todo(tool: string): ChainTool {
  * Chain tools the agent may call. Every one returns an unsigned XDR plus a
  * summary decoded from it (`docs/interfaces.md` §2).
  *
- * TODO(B): implement in this order — `sendPayment` first (it is the M2 vertical
- * slice), then `swap`/`guardPolicy`. `depositTry` (SEP-10/38/6 anchor) is in ./anchor.
+ * Chain-lane implementations live under `stellar/src/{payments,guard,approval,schedule,suggest,live}`; anchor in ./anchor; `swap`/`guardPolicy` remain stubs.
  */
-export const sendPayment = todo("sendPayment");
+// Real payment builder (Intent -> unsigned XDR + decoded summary). Configure it once
+// with `configurePayments(deps)`; calling it before that throws a typed refusal.
+export { sendPayment } from "./payments/index.ts";
 export const swap = todo("swap");
 export const guardPolicy = todo("guardPolicy");
 
@@ -53,3 +54,15 @@ export * as anchor from "./anchor/index.ts";
 
 /** Off-chain keeper that triggers due `polaris_guard` schedules (untrusted; see src/keeper/README.md). */
 export * as keeper from "./keeper/index.ts";
+
+/** Owner/executor-side `polaris_guard` client, SAC allowance helper and routing policy (contract id is a parameter). */
+export * as guard from "./guard/index.ts";
+
+/** App-side approval policy: profiles, auto-pay drafts, classification, read-back and the enable/disable builders (D10). */
+export * as approval from "./approval/index.ts";
+
+/** Schedule tools: unsigned `create_schedule`/`cancel_schedule` + "Upcoming payments" view models + time helpers. */
+export * as schedule from "./schedule/index.ts";
+
+/** Deterministic, offline suggestions engine (T3). Pure: never applies a change (D11). */
+export * as suggest from "./suggest/index.ts";

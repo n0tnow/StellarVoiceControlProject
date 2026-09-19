@@ -48,3 +48,13 @@ export function safeHttpsUrl(value: unknown, max = 300): string | undefined {
     return undefined;
   }
 }
+
+declare const ANCHOR_OWNED_LINK: unique symbol;
+
+/**
+ * A link that has passed the anchor-own-host check (`anchorOwnedLink` in
+ * `sep6.ts`): https, no credentials/port, and a host the anchor itself declares.
+ * The brand is compile-time only — it stops a plain (unchecked) URL from being
+ * passed into `ExplainLog.record`, whose `link` field requires this type.
+ */
+export type AnchorOwnedLink = string & { readonly [ANCHOR_OWNED_LINK]: true };
