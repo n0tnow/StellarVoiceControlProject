@@ -261,6 +261,71 @@ fn known_recipients_only_gates_unknown_addresses() {
 }
 
 #[test]
+fn repointing_an_alias_un_marks_the_old_address() {
+    // Regression: `set_alias` used to leave `Known(old)` behind when the alias
+    // was re-pointed, so an owner moving "ada" to a new wallet left the old one
+    // agent-payable forever — without ever approving that wallet again.
+    let env = Env::default();
+    env.mock_all_auths();
+    let fx = setup(&env);
+    configure(&fx, &env, true);
+
+    let ada = String::from_str(&env, "ada");
+    fx.guard.set_alias(&fx.owner, &ada, &fx.alice);
+    assert!(fx.guard.is_known_recipient(&fx.owner, &fx.alice));
+
+    // Move the alias to a new wallet. The old destination stops being known.
+    fx.guard.set_alias(&fx.owner, &ada, &fx.bob);
+    assert_eq!(fx.guard.get_alias(&fx.owner, &ada), Some(fx.bob.clone()));
+    assert!(
+        !fx.guard.is_known_recipient(&fx.owner, &fx.alice),
+        "the abandoned wallet must not stay agent-payable"
+    );
+    assert!(fx.guard.is_known_recipient(&fx.owner, &fx.bob));
+
+    // And the executor path now enforces the move, not just the predicate.
+    assert_eq!(
+        fx.guard
+            .try_pay_executor(&fx.executor, &fx.owner, &fx.alice, &fx.asset, &USDC),
+        Err(Ok(Error::NeedsOwnerApproval))
+    );
+    assert_eq!(fx.token.balance(&fx.alice), 0);
+    fx.guard
+        .pay_executor(&fx.executor, &fx.owner, &fx.bob, &fx.asset, &USDC);
+    assert_eq!(fx.token.balance(&fx.bob), USDC);
+}
+
+#[test]
+fn an_address_stays_known_while_another_alias_points_at_it() {
+    // The refcount behind the fix: dropping one alias must not un-mark an
+    // address another alias still resolves to (a case the old shared marker got
+    // wrong in the other direction).
+    let env = Env::default();
+    env.mock_all_auths();
+    let fx = setup(&env);
+    configure(&fx, &env, true);
+
+    let ada = String::from_str(&env, "ada");
+    let mom = String::from_str(&env, "mom");
+    fx.guard.set_alias(&fx.owner, &ada, &fx.alice);
+    fx.guard.set_alias(&fx.owner, &mom, &fx.alice);
+
+    // Re-point one of the two aliases: alice is still known through the other.
+    fx.guard.set_alias(&fx.owner, &ada, &fx.bob);
+    assert!(fx.guard.is_known_recipient(&fx.owner, &fx.alice));
+    assert!(fx.guard.is_known_recipient(&fx.owner, &fx.bob));
+
+    // Removing the surviving alias finally un-marks her.
+    fx.guard.remove_alias(&fx.owner, &mom);
+    assert!(!fx.guard.is_known_recipient(&fx.owner, &fx.alice));
+    assert_eq!(
+        fx.guard
+            .try_pay_executor(&fx.executor, &fx.owner, &fx.alice, &fx.asset, &USDC),
+        Err(Ok(Error::NeedsOwnerApproval))
+    );
+}
+
+#[test]
 fn revoked_executor_cannot_pay() {
     let env = Env::default();
     env.mock_all_auths();

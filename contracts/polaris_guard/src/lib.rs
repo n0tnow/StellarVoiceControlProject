@@ -207,9 +207,9 @@ pub struct DaySpend {
 }
 
 /// Persistent storage schema. Everything is keyed by owner so one deployed guard
-/// can serve many wallets; `Known` is the reverse index of `Alias`, needed
-/// because `known_recipients_only` asks "is this *address* known?" and the alias
-/// book is keyed by the spoken name.
+/// can serve many wallets; `Known` is the membership marker behind
+/// `known_recipients_only`, needed because that predicate asks "is this
+/// *address* known?" while the alias book is keyed by the spoken name.
 ///
 /// # No shared mutable list
 ///
@@ -223,7 +223,7 @@ pub struct DaySpend {
 /// The layout now follows the append-only enumeration pattern from Stellar's
 /// storage-strategies guide: a monotonic counter, one entry per item, and
 /// pagination pushed to the caller (see [`PolarisGuard::list_due`]). `NextSchedId`
-/// is the only remaining shared entry, and only `create_schedule` writes it — the
+/// is the only shared entry left, and only `create_schedule` writes it — the
 /// keeper never touches it, and two owners contend only if they create schedules
 /// in the very same ledger.
 #[contracttype]
@@ -233,7 +233,9 @@ pub enum DataKey {
     Executor(Address),
     /// (owner, spoken alias) -> recipient
     Alias(Address, String),
-    /// (owner, recipient) -> () — membership marker for `known_recipients_only`
+    /// (owner, recipient) -> () — membership marker for `known_recipients_only`.
+    /// Refcounted by [`DataKey::KnownRefs`]: it is dropped only when the last
+    /// alias resolving to that recipient goes away.
     Known(Address, Address),
     Spent(Address),
     Schedule(u32),
@@ -242,6 +244,12 @@ pub enum DataKey {
     OwnerScheds(Address),
     /// Monotonic id source. Written only by `create_schedule`.
     NextSchedId,
+    /// (owner, recipient) -> u32 — how many of the owner's aliases currently
+    /// resolve to that recipient. Aliases are arbitrary strings with no reverse
+    /// index (the storage API cannot enumerate keys), so a counter is what lets
+    /// `set_alias` and `remove_alias` drop [`DataKey::Known`] at exactly the
+    /// right moment instead of leaking a removable-only-by-coincidence marker.
+    KnownRefs(Address, Address),
 }
 
 // ---------------------------------------------------------------------------
@@ -350,29 +358,34 @@ impl PolarisGuard {
 
     /// Maps a spoken name ("ada") to an address, and marks that address as a
     /// known recipient for `known_recipients_only`.
+    ///
+    /// Re-pointing an alias at a new address un-marks the old one the moment no
+    /// other alias still resolves there. Without that, moving an alias to a new
+    /// wallet would leave the **previous** wallet permanently agent-payable
+    /// without owner approval — the exact opposite of what the alias book is for.
     pub fn set_alias(env: Env, owner: Address, alias: String, address: Address) {
         owner.require_auth();
         let akey = DataKey::Alias(owner.clone(), alias);
+        match env.storage().persistent().get::<_, Address>(&akey) {
+            Some(previous) if previous != address => {
+                unref_known(&env, &owner, &previous);
+                ref_known(&env, &owner, &address);
+            }
+            Some(_) => {} // same name -> same address: nothing to re-mark
+            None => ref_known(&env, &owner, &address),
+        }
         env.storage().persistent().set(&akey, &address);
         bump(&env, &akey);
-        let kkey = DataKey::Known(owner, address);
-        env.storage().persistent().set(&kkey, &());
-        bump(&env, &kkey);
     }
 
-    /// Drops an alias and un-marks its recipient.
-    ///
-    /// Caveat: if two aliases point at the same address, removing either one
-    /// removes the shared `Known` marker. Re-add the surviving alias to restore
-    /// it. (Kept simple on purpose — the reverse index holds no count.)
+    /// Drops an alias and un-marks its recipient once no alias resolves there.
+    /// Re-pointing the alias first (`set_alias`) has the same effect.
     pub fn remove_alias(env: Env, owner: Address, alias: String) {
         owner.require_auth();
         let akey = DataKey::Alias(owner.clone(), alias);
         if let Some(addr) = env.storage().persistent().get::<_, Address>(&akey) {
             env.storage().persistent().remove(&akey);
-            env.storage()
-                .persistent()
-                .remove(&DataKey::Known(owner, addr));
+            unref_known(&env, &owner, &addr);
         }
     }
 
@@ -790,6 +803,42 @@ fn bump(env: &Env, key: &DataKey) {
     env.storage()
         .persistent()
         .extend_ttl(key, BUMP_THRESHOLD, BUMP_TO);
+}
+
+/// Adds one alias reference to `to` and ensures its `Known` marker is set.
+fn ref_known(env: &Env, owner: &Address, to: &Address) {
+    let kkey = DataKey::Known(owner.clone(), to.clone());
+    env.storage().persistent().set(&kkey, &());
+    bump(env, &kkey);
+    let rkey = DataKey::KnownRefs(owner.clone(), to.clone());
+    let refs: u32 = env
+        .storage()
+        .persistent()
+        .get::<_, u32>(&rkey)
+        .unwrap_or(0)
+        .saturating_add(1);
+    env.storage().persistent().set(&rkey, &refs);
+    bump(env, &rkey);
+}
+
+/// Drops one alias reference. The `Known` marker goes away only with the last
+/// reference, so an address shared by two aliases stays known while either
+/// survives — and a re-pointed alias cannot leave its old destination payable.
+fn unref_known(env: &Env, owner: &Address, to: &Address) {
+    let rkey = DataKey::KnownRefs(owner.clone(), to.clone());
+    let refs: u32 = env.storage().persistent().get(&rkey).unwrap_or(0);
+    // A missing/zero count means the marker predates refcounting; treating the
+    // marker itself as the single reference keeps removal working for such
+    // entries rather than stranding them.
+    if refs <= 1 {
+        env.storage().persistent().remove(&rkey);
+        env.storage()
+            .persistent()
+            .remove(&DataKey::Known(owner.clone(), to.clone()));
+    } else {
+        env.storage().persistent().set(&rkey, &(refs - 1));
+        bump(env, &rkey);
+    }
 }
 
 fn validate_rule(rule: &Rule) -> Result<(), Error> {
