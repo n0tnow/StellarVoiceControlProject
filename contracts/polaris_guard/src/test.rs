@@ -777,3 +777,34 @@ fn owner_payment_requires_the_owner_signature() {
     assert_eq!(auths.len(), 1);
     assert_eq!(auths.first().unwrap().0, fx.owner);
 }
+
+// ---------------------------------------------------------------------------
+// One asset per rule (until per-asset daily budgets land)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn rule_rejects_more_than_one_allowed_asset() {
+    // `daily_limit` is enforced against a single cross-asset counter, and raw
+    // units are not comparable across decimals, so two assets on one allowlist
+    // would silently make the budget meaningless. Refuse the configuration.
+    let env = Env::default();
+    env.mock_all_auths();
+    let fx = setup(&env);
+
+    let second = env
+        .register_stellar_asset_contract_v2(Address::generate(&env))
+        .address();
+
+    let mut two = rule(&env, &fx.asset, false);
+    two.allowed_assets = Vec::from_array(&env, [fx.asset.clone(), second]);
+    assert_eq!(
+        fx.guard.try_set_rule(&fx.owner, &two),
+        Err(Ok(Error::InvalidRule))
+    );
+
+    // Zero (deny-all for the agent) and one are both fine.
+    let mut none = rule(&env, &fx.asset, false);
+    none.allowed_assets = Vec::new(&env);
+    fx.guard.set_rule(&fx.owner, &none);
+    fx.guard.set_rule(&fx.owner, &rule(&env, &fx.asset, false));
+}

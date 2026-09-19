@@ -64,8 +64,13 @@ const BUMP_THRESHOLD: u32 = 30 * DAY_IN_LEDGERS;
 /// a fresh persistent entry).
 const BUMP_TO: u32 = 120 * DAY_IN_LEDGERS;
 
-/// Rule lists are iterated on every payment, so they are bounded to keep the
-/// worst-case footprint predictable (security.md class #10, fee griefing).
+/// Hard ceiling on `Rule.allowed_assets`.
+///
+/// Currently the *effective* limit is 1, enforced in [`validate_rule`]: the daily
+/// counter is a single cross-asset total, and raw units are not comparable across
+/// decimals, so a 2-decimal token and 7-decimal USDC on the same allowlist would
+/// make `daily_limit` meaningless. This constant stays as the structural bound for
+/// when `Spent(owner, asset)` lands.
 const MAX_ALLOWED_ASSETS: u32 = 10;
 /// Bounds `list_schedules` and the per-owner index entry size.
 const MAX_ACTIVE_PER_OWNER: u32 = 25;
@@ -410,14 +415,18 @@ impl PolarisGuard {
         amount: i128,
     ) -> Result<(), Error> {
         executor.require_auth();
+        let ekey = DataKey::Executor(owner.clone());
         let registered: Address = env
             .storage()
             .persistent()
-            .get(&DataKey::Executor(owner.clone()))
+            .get(&ekey)
             .ok_or(Error::NoExecutor)?;
         if registered != executor {
             return Err(Error::NotExecutor);
         }
+        // Keep the registration alive for an agent that pays daily: this is a
+        // write path, so the entry is already in the read-write footprint.
+        bump(&env, &ekey);
         let rule = load_rule(&env, &owner)?;
 
         // Hard caps first: they are unrecoverable, so reporting them beats
@@ -745,14 +754,33 @@ fn validate_rule(rule: &Rule) -> Result<(), Error> {
     if rule.allowed_assets.len() > MAX_ALLOWED_ASSETS {
         return Err(Error::InvalidRule);
     }
+    // At most ONE asset, for now. `daily_limit` is enforced against a single
+    // cross-asset counter (`DataKey::Spent(owner)`), and raw units are not
+    // comparable across decimals — pairing a 2-decimal token with 7-decimal USDC
+    // would make the daily budget meaningless (200 raw units of the former would
+    // consume the same budget as 0.00002 USDC). Refusing the configuration is
+    // more honest than accounting for it wrongly. Lift this together with a
+    // per-asset `Spent(owner, asset)` counter, not before.
+    if rule.allowed_assets.len() > 1 {
+        return Err(Error::InvalidRule);
+    }
     Ok(())
 }
 
 fn load_rule(env: &Env, owner: &Address) -> Result<Rule, Error> {
-    env.storage()
+    let key = DataKey::Rule(owner.clone());
+    let rule = env
+        .storage()
         .persistent()
-        .get(&DataKey::Rule(owner.clone()))
-        .ok_or(Error::NotConfigured)
+        .get(&key)
+        .ok_or(Error::NotConfigured)?;
+    // Only the payment paths reach this helper, and all of them already write, so
+    // the entry is in the read-write footprint and bumping here is free of the
+    // "read-only call became a write" trap. Without it the hottest *read* entry
+    // in the contract would be the one that archives, making the untrusted keeper
+    // pay restore rent on `execute_schedule`.
+    bump(env, &key);
+    Ok(rule)
 }
 
 fn load_schedule(env: &Env, id: u32) -> Result<Schedule, Error> {
