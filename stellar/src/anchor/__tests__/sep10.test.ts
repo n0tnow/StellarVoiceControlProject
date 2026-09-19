@@ -2,7 +2,7 @@ import { Account, Asset, Keypair, Memo, Networks, Operation, Transaction, Transa
 import { describe, expect, it } from "vitest";
 import { TESTNET_PASSPHRASE } from "../config.ts";
 import { authenticate, ChallengeError, decodeJwt, isExpired, MAX_CHALLENGE_WINDOW_SECONDS, validateChallenge } from "../sep10.ts";
-import { EnvSigner } from "../testSigner.ts";
+import { EnvSigner } from "../testing.ts";
 import type { Signer } from "../types.ts";
 import { CLIENT, fakeFetch, fakeJwt, HOME, jsonResponse, makeChallenge, makeCtx, SERVER, TOML } from "./helpers.ts";
 

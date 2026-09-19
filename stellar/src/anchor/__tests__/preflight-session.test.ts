@@ -6,7 +6,7 @@ import { TESTNET_PASSPHRASE } from "../config.ts";
 import { preflight } from "../preflight.ts";
 import { AnchorSession } from "../session.ts";
 import { runDepositFlow, runWithdrawFlow } from "../flows.ts";
-import { EnvSigner } from "../testSigner.ts";
+import { EnvSigner } from "../testing.ts";
 import type { Signer } from "../types.ts";
 import { combine, CLIENT, fakeChain, fakeClock, fakeJwt, HOME, makeChallenge, makeCtx, SERVER, TOML_TEXT, USDC_ISSUER } from "./helpers.ts";
 
