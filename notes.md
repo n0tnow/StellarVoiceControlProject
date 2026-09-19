@@ -92,4 +92,58 @@
   6. `.gitignore`-d files stay clone-local; `.gitignore` itself must be identical across all clones.
 - **Status:** decided
 
+## 2026-09-19 — Round-3 Decisions: Contracts Frozen, Privacy Modes, Work Order
+- **Decision (D8):** `polaris_guard` is **frozen for the slice**. The v0.1 audit findings go into
+  `contracts/DEPLOYED.md` ("Known limitations (v0.1)") + demo talking points, and the fixes are batched
+  into a single `polaris_guard` v0.2 redeploy **only after the slice works** — any change = new contract
+  ID = every owner re-publishes rule + allowance + keeper env update. Spec:
+  [`backlog/guard-v0.2-hardening.md`](backlog/guard-v0.2-hardening.md).
+- **Status:** decided
+
+## 2026-09-19 — Integration Paused; Chain Lane Headless First
+- **Decision:** Integration between the UI/voice lane (Owner A) and the chain lane (Owner B) is
+  deliberately **paused until both sides are done**. The chain lane stays **headless** (Node scripts,
+  typed input) and touches only `stellar/` and `contracts/`. Voice is not on the critical path.
+- **Pointer:** `backlog/2026-09-19-slice-gap-analysis.md` §G.3; `sprints.md` "Milestone 2b".
+- **Status:** decided
+
+## 2026-09-19 — Privacy Modes: CT then SPP (Testnet Only)
+- **Decision (D2–D6):** Confidential/private payments are **in scope** as "privacy modes" because the
+  project is **testnet only**, so the unaudited developer-preview status of Confidential Tokens (CT) and
+  Stellar Private Payments (SPP) is not a blocker (still labelled testnet-only/unaudited). Order: **CT
+  first, SPP second**, each gated by a 2h spike.
+- **Decision:** voice expresses the mode as intent ("secretly"/"privately"); registration, contacts,
+  address entry, default-mode changes are **manual-tab only**; addresses are never dictated by voice;
+  **fail-closed** (never downgrade a private request to public). **Instant payroll is in**, **scheduled
+  confidential payments are out** (keeper has no sender secret material).
+- **Pointer:** [`docs/confidential-payments.md`](docs/confidential-payments.md).
+- **Status:** decided
+
+## 2026-09-19 — D1: Chain-Lane Work Order
+- **Decision (D1):** chain lane order — (1) real `sendPayment` ChainTool (`Intent` → unsigned XDR +
+  decoded summary; alias via committed `aliases.json`), (2) `polaris_guard` owner-side TS client
+  (`set_rule`, `set_alias`, SAC `approve`, `pay_executor`, `direct`/`guarded` modes), (3) headless
+  end-to-end script (over-limit rejected with guard error **#105**), and **only then** (4) the privacy
+  spikes. Workers run sequentially.
+- **Pointer:** `docs/confidential-payments.md` §9; `sprints.md` "Milestone 2b".
+- **Status:** decided
+
+## 2026-09-19 — Worker Ladder: DeepSeek v4.1 Flash via opencode
+- **Decision:** round-3 workers run as **DeepSeek v4.1 Flash** via opencode under the Claude-based
+  coordinator. The worker ladder table is **local-only** and never committed, so the ladder was simply
+  updated locally for this round (no repo change).
+- **Pointer:** `AGENTS.md` §2 (worker architecture); `docs/model-ladder.md` (local-only).
+- **Status:** decided
+
+## 2026-09-19 — Idea: Guard Limits at the Public Boundary for Privacy Modes
+- **Idea:** because a confidential transfer hides its amount, `polaris_guard` cannot enforce per-tx/daily
+  limits on the confidential leg. Move the enforceable guarantee to the **public boundary**: cap the
+  amount moved *into* the CT wrapper / SPP pool (deposit amounts are public), enforce a per-transfer
+  limit client-side (the app knows the amount before encrypting), and use the approval card as the gate.
+  Keeper is excluded from confidential schedules.
+- **Open question:** whether `polaris_guard` can gate `deposit`/`withdraw` **on-chain** (executor calls
+  the wrapper) — for the spike.
+- **Pointer:** `docs/confidential-payments.md` §7; `contracts/DEPLOYED.md` "Privacy modes note".
+- **Status:** open (resolved by the CT/SPP spikes)
+
 <!-- New notes are appended chronologically at the bottom. -->

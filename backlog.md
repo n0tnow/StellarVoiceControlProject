@@ -12,8 +12,7 @@
 
 | Date | Task | Worker/Agent | Status | Report | Priority |
 |---|---|---|---|---|---|
-| 2026-09-19 | **A0 — harness**: global hotkey (press/release) + microphone capture to WAV + wire both into the existing log pane; delete the temporary `dev_self_test` command | Owner A | open — [PR #6](https://github.com/n0tnow/StellarVoiceControlProject/pull/6) closed unmerged; resume from `rescue/a0-harness` (`7a024a6`) | [`backlog/2026-09-19-a0-harness.md`](backlog/2026-09-19-a0-harness.md) | P0 |
-| 2026-09-19 | Owner B: fill in `stellar/` (anchor SEP-10/38/6 client, `sendPayment` tool) — stubs throw `NotImplementedError` today | Owner B | merged 2026-09-19 — [#10](https://github.com/n0tnow/StellarVoiceControlProject/pull/10) (`a8c4416`), [#9](https://github.com/n0tnow/StellarVoiceControlProject/pull/9) (`259dbe9`), [#11](https://github.com/n0tnow/StellarVoiceControlProject/pull/11) (`a01d6a1`) | [`backlog/anchor-sep6.md`](backlog/anchor-sep6.md), [`backlog/keeper.md`](backlog/keeper.md), [`backlog/guard-rules-schedule.md`](backlog/guard-rules-schedule.md) | P0 |
+| 2026-09-19 | **A0 — harness**: global hotkey (press/release) + microphone capture to WAV + wire both into the existing log pane; delete the temporary `dev_self_test` command | Owner A | open — live work: [PR #14](https://github.com/n0tnow/StellarVoiceControlProject/pull/14) on `feat/a0-push-to-talk-notch` (superseded the closed PR #6; rescue copy preserved on `rescue/a0-harness` (`7a024a6`)) | [`backlog/2026-09-19-a0-harness.md`](backlog/2026-09-19-a0-harness.md) | P0 |
 
 ## Round-2 Reports (2026-09-19)
 
@@ -32,10 +31,39 @@
 | 2026-09-19 | A0 — push-to-talk harness (report rescued) | Owner A | closed unmerged — [PR #6](https://github.com/n0tnow/StellarVoiceControlProject/pull/6); preserved on `rescue/a0-harness` (`7a024a6`) | [`backlog/2026-09-19-a0-harness.md`](backlog/2026-09-19-a0-harness.md) | P0 |
 | 2026-09-19 | Model ladder restore (local-only; report rescued) | coordinating agent | closed unmerged — [PR #5](https://github.com/n0tnow/StellarVoiceControlProject/pull/5); preserved on `rescue/model-ladder-restore` (`4ac06b0`) | [`backlog/2026-09-19-model-ladder-restore.md`](backlog/2026-09-19-model-ladder-restore.md) | P2 |
 
+## Round-3 Reports (2026-09-19)
+
+> Reports produced for the round-3 plan below. All three are **local until this docs PR merges**.
+> Decisions they feed (D1–D8) are recorded in `docs/confidential-payments.md` and `notes.md`.
+
+| Date | Task | Worker/Agent | Status | Report | Priority |
+|---|---|---|---|---|---|
+| 2026-09-19 | Contracts audit (DeepSeek L2) — `polaris_guard` v0.1 findings F-01…F-12, N-01…N-03 | opencode-go/deepseek-v4.1-flash (L2) | done — local until this PR merges | [`backlog/contracts-audit.md`](backlog/contracts-audit.md) | P1 |
+| 2026-09-19 | Independent review of the contracts audit (DeepSeek L4) — accepted with corrections | opencode-go/deepseek-v4.1-flash (L4) | done — local until this PR merges | [`backlog/contracts-audit-review.md`](backlog/contracts-audit-review.md) | P1 |
+| 2026-09-19 | Slice gap analysis — interfaces drift, chain/voice gaps, minimal slice S1–S10 | opencode-go/deepseek-v4.1-flash (L2) | done — local until this PR merges | [`backlog/2026-09-19-slice-gap-analysis.md`](backlog/2026-09-19-slice-gap-analysis.md) | P1 |
+
+## Round-3 Plan (2026-09-19)
+
+> Order and decisions: `docs/confidential-payments.md` §9 (D1), `sprints.md` (M2b / M3b).
+
+| Date | Task | Worker/Agent | Status | Report | Priority |
+|---|---|---|---|---|---|
+| 2026-09-19 | Chain-lane headless slice: real `sendPayment` ChainTool + `polaris_guard` owner-side TS client + headless e2e (`Intent → XDR → sign → submit`, `#105` rejection) | Owner B / worker TBD | planned (next after integration pause) | [`backlog/2026-09-19-slice-gap-analysis.md`](backlog/2026-09-19-slice-gap-analysis.md) | P0 |
+| 2026-09-19 | Confidential-payments **CT spike** (2h cap, testnet, after slice) | worker TBD | planned | [`backlog/confidential-payments.md`](backlog/confidential-payments.md) | P1 (after slice) |
+| 2026-09-19 | Confidential-payments **SPP spike** (2h cap, testnet, after CT) | worker TBD | planned | [`backlog/confidential-payments.md`](backlog/confidential-payments.md) | P2 |
+| 2026-09-19 | `polaris_guard` **v0.2 hardening** (one batched redeploy, after slice works) | worker TBD | planned | [`backlog/guard-v0.2-hardening.md`](backlog/guard-v0.2-hardening.md) | P2 |
+| 2026-09-19 | Read-only verify of the deployed wasm hash on-chain (`stellar contract fetch` + sha256 vs `DEPLOYED.md`) | worker TBD | planned | [`backlog/guard-v0.2-hardening.md`](backlog/guard-v0.2-hardening.md) | P2 |
+| 2026-09-19 | **Interface drift fixes**: wrong Rust mirror path in `interfaces/src/index.ts`; `SigningService.sign(payloadHash)` vs `Signer.signTransaction(xdr)` (**PROPOSED: standardise on XDR**); missing `withdraw` kind | Owner A (agreement) | planned | [`docs/interfaces.md`](docs/interfaces.md) §7 | P1 (needs Owner A) |
+| 2026-09-19 | README stale on A2 (still calls it "mock/Anthropic") | docs worker | planned | [`README.md`](README.md) | P2 |
+| 2026-09-19 | Doc-only fixes: `contracts/scripts/demo.sh:81` comment (F-09) + `stellar/src/keeper/README.md:146` error example (F-10) | docs worker (W-docs) | done in this PR | [`contracts/DEPLOYED.md`](contracts/DEPLOYED.md) §Known limitations | — |
+| 2026-09-19 | Cleanup of merged worktrees/branches | coordinating agent | planned | — | P3 |
+| 2026-09-19 | `.gitignore` `node_modules/` (trailing slash) does not match a `node_modules` **symlink** | coordinating agent | planned | [`backlog/contracts-audit-review.md`](backlog/contracts-audit-review.md) §4 | P3 |
+
 ## Completed Tasks (Archive)
 
 | Date | Task | Worker/Agent | Closed By | Report |
 |---|---|---|---|---|
+| 2026-09-19 | Owner B: fill in `stellar/` (anchor SEP-10/38/6 client, `sendPayment` tool) — stubs threw `NotImplementedError` | Owner B | [#10](https://github.com/n0tnow/StellarVoiceControlProject/pull/10) (`a8c4416`), [#9](https://github.com/n0tnow/StellarVoiceControlProject/pull/9) (`259dbe9`), [#11](https://github.com/n0tnow/StellarVoiceControlProject/pull/11) (`a01d6a1`) merged 2026-09-19 | [`backlog/anchor-sep6.md`](backlog/anchor-sep6.md), [`backlog/keeper.md`](backlog/keeper.md), [`backlog/guard-rules-schedule.md`](backlog/guard-rules-schedule.md) |
 | 2026-09-19 | Monorepo skeleton: `interfaces/`, `agent/`, `app/` (Tauri v2 + React), `stellar/`, `contracts/` (Soroban), tooling (`Makefile`, `scripts/`, `VERSION`, `CHANGELOG.md`) | coordinating agent (no workers, per user instruction) | [PR #4](https://github.com/n0tnow/StellarVoiceControlProject/pull/4) (merged 2026-09-19T12:01:56Z, commit `a559403`) | `backlog/2026-09-19-monorepo-skeleton.md` |
 
 ---

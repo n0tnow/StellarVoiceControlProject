@@ -74,13 +74,50 @@
 - [ ] Approval card + Touch ID gate → signed → testnet tx (M2 slice complete).
 - **Accept:** "send 10 USDC to <alias>" end-to-end, Touch ID approved, tx visible on explorer.
 
+## Milestone 2b — Minimal Integration Slice (chain lane first) 🔲
+> Source: `backlog/2026-09-19-slice-gap-analysis.md` §G.3 (S1–S10), adapted to decisions D1/D2.
+> Integration between the UI lane and the chain lane is **paused until both sides are done**.
+> The chain lane stays **headless** (Node scripts, typed input) and touches only `stellar/` and
+> `contracts/`. Voice is **not** on the critical path.
+> Items marked **PROPOSED** await Owner A agreement.
+
+### Chain lane (Owner B — critical path)
+- [ ] **C1.** Real `sendPayment` ChainTool: `Intent` → unsigned XDR + decoded summary; alias resolution via committed `aliases.json` first (D1 step 1)
+- [ ] **C2.** `polaris_guard` owner-side TypeScript client: `set_rule`, `set_alias`, SAC `approve`, `pay_executor`, plus `direct` / `guarded` modes of `sendPayment` (D1 step 2)
+- [ ] **C3.** Headless end-to-end script: `Intent` → XDR → dev-key sign → `submitSignedTx` → testnet tx; over-limit rejected with guard error **#105** (`NeedsOwnerApproval`) (D1 step 3)
+- [ ] **C4.** Registration/adapter so a shell can turn an `Intent` into a `ChainToolResult`; expose `@polaris/stellar` to the webview (no voice dependency)
+- [ ] **C5. (PROPOSED)** Signing option: Rust approval gate + TypeScript signing/submission (option 1) for the demo; full Rust-native signer post-hackathon
+- [ ] **C6. (PROPOSED)** Standardise signing on XDR: `SigningService.sign(payloadHash)` → `signTransaction(xdr)` — needs Owner A agreement
+
+### Voice lane (Owner A — not blocking)
+- [ ] **V1. (PROPOSED)** Merge order of the `interfaces/src/index.ts` branches: `a0` → `a1-stt` → `a1-ondevice` → `a2` → `a3` → `docs/rule-types-and-decisions` (freeze the seam after `a0`)
+- [ ] **V2.** Merge A0 (+ A1): `make dev` runs, hold hotkey → `transcript` event
+- [ ] **V3.** Text-input dev path calling `runAgentTurn(text)` → `Intent` in `AgentTrace`
+- [ ] **V4.** Approval card component renders the summary + Approve/Deny
+- [ ] **V5.** Submit path: sign in TS, `submitSignedTx(signedXdr, unsignedXdr)`, emit `tx_submitted`
+- [ ] **V6.** Replace text input with the merged voice path
+- [ ] **V7. (stretch)** Touch ID (LocalAuthentication) behind the approval gate
 
 ## Milestone 3 — Chain & Guard 🔲
-- [ ] polaris_guard Soroban contract: per-tx/daily spending limit + alias book; deployed on testnet, contract ID documented
+- [x] polaris_guard Soroban contract: per-tx/daily spending limit + alias book; deployed on testnet, contract ID documented (2026-09-19, PR #10 + keeper PR #9)
 - [ ] Anchor flow: SEP-10/38/6 TRY mock deposit → USDC balance, driven by voice
+  - SEP-6 client merged ([PR #11](https://github.com/n0tnow/StellarVoiceControlProject/pull/11)); voice wiring pending (Owner A, not on the chain-lane critical path)
 - [ ] Protocol integration: Soroswap swap OR DeFindex vault (pick ONE via testnet spike, do not attempt both)
 - [ ] Approval card UI polished (Stellar Design System / shadcn), explorer links on card
 - [ ] (optional if time) MPP pay-per-command session
+
+## Milestone 3b — Privacy modes (spike-gated) 🔲
+> Design and decisions: [`docs/confidential-payments.md`](docs/confidential-payments.md).
+> Testnet only; CT first, SPP second. Each system is gated by a time-boxed (2h) spike before
+> integration. Scheduled confidential payments are out of scope (D6).
+- [x] Design doc written (2026-09-19, this docs PR — `docs/confidential-payments.md`)
+- [ ] CT spike (2h cap) → GO / NO-GO (`backlog/confidential-spike-ct.md`)
+- [ ] CT integration (`stellar/src/confidential/`, PLANNED) — conditional on GO
+- [ ] SPP spike (2h cap) → GO / NO-GO (`backlog/confidential-spike-spp.md`)
+- [ ] SPP integration (`stellar/src/spp/`, PLANNED) — conditional on GO
+- [ ] Approval-card privacy variant + batch payroll card
+- [ ] Local encrypted transaction history (key custody open question)
+- [ ] Demo talking points (privacy limits, public deposit/withdraw leg)
 
 ## Milestone 4 — Delivery / Presentation 🔲
 > Deadline: 20 Sep 12:00. Bonuses (passkey wallet, P2P escrow, developer mode) ONLY after M4 items are done.
