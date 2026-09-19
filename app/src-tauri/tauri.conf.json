@@ -29,6 +29,24 @@
         "focus": false,
         "focusable": false,
         "visible": false
+      },
+      {
+        "label": "prompt",
+        "title": "Polaris Prompt",
+        "url": "prompt.html",
+        "width": 720,
+        "height": 220,
+        "resizable": false,
+        "fullscreen": false,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "alwaysOnTop": true,
+        "visibleOnAllWorkspaces": true,
+        "skipTaskbar": true,
+        "focus": false,
+        "focusable": true,
+        "visible": false
       }
     ],
     "security": {

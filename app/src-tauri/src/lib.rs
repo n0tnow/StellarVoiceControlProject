@@ -8,12 +8,15 @@
 
 mod capture;
 mod commands;
+mod ctrl_tap;
 mod env;
 mod events;
 mod gesture;
 mod hotkey;
 mod hotkey_flags;
 mod notch;
+mod prompt_commands;
+mod prompt_window;
 mod stt;
 mod tts;
 mod types;
@@ -42,6 +45,8 @@ pub fn run() {
             commands::speak,
             notch::notch_geometry,
             hotkey::hotkey_permission,
+            prompt_commands::prompt_resize,
+            prompt_commands::prompt_hide,
         ])
         .setup(|app| {
             // Captures live under the app data dir so they never land in the repo.
@@ -78,6 +83,10 @@ pub fn run() {
 
             // Configures AppKit geometry, then reveals the (initially hidden) window.
             notch::setup(app)?;
+
+            // Step A6: the typed-prompt window and the double-Control detector
+            // that toggles it. The window stays hidden until the gesture fires.
+            prompt_window::setup(app)?;
 
             println!(
                 "polaris: notch overlay ready — hold Control+Option (or Control+Option+Space) \
