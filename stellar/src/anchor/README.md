@@ -66,7 +66,51 @@ Whole journeys: `anchor.runDepositFlow(session, { amountFiat, sandboxBank })` an
 approve, with a summary decoded from the XDR: the USDC trustline if still needed,
 otherwise the SEP-10 challenge. After the shell signs it: `submitSignedTx(xdr)` for a
 trustline, or `session.finishLogin(signedXdr)` for the challenge; then continue with
-`session.startDeposit(...)`. Configure once with `configureAnchor({ signer })`.
+`session.startDeposit(...)`. For cash-out, `withdrawTry(intent)` creates the SEP-6
+order and returns the **unsigned on-chain payment** plus an approval card that names
+the destination, the memo and the asset **code and issuer**; after signing,
+`submitSignedTx(signedXdr)` submits it, then poll. Configure once with
+`configureAnchor({ signer })`.
+
+> `withdrawTry` is typed with a local `AnchorIntent` that adds the `"withdraw"`
+> kind (PR #8 adds it to `@polaris/interfaces`; the TODO there will disappear on
+> merge). Likewise `toAnchorStepEvent()` in `explain.ts` emits exactly
+> `{ type: "anchor_step", step, what, why }`, the shape PR #8 adds to `PolarisEvent`.
+
+## Safety hardening (round-2 review)
+
+Everything an anchor sends is untrusted. The client enforces this at the boundary:
+
+* **Home domain / URLs:** only a plain FQDN is accepted; http, IP literals,
+  `localhost`, ports, credentials, paths and internal TLDs are refused before any
+  request. Every endpoint in `stellar.toml` must be **https on the anchor's own
+  domain (or a subdomain)**; the only escape hatch is the test/ops-only
+  `allowInsecure` / `allowedEndpointHosts` policy. Requests use
+  `redirect: "error"` and a timeout that also covers reading the body; the toml is
+  capped at 100 KB and JSON bodies at 1 MB, streamed or declared.
+* **Untrusted text:** every anchor-authored string (`how`, `instructions`,
+  status `message`, error bodies...) is sanitised (controls, newlines, zero-width
+  and bidi characters removed, length-capped) and carried in explain records as
+  `anchorSaid` — **never** in `what`/`why`, and `narrate()` excludes it, so prompt
+  injection cannot ride the TTS/LLM narration.
+* **Login credential:** the SEP-10 JWT stays inside the session. `login()` and
+  `finishLogin()` return `{ account, expiresAt }` (`SessionInfo`), never the token.
+* **Withdrawal payment:** the destination must be a plain `G...` account (muxed
+  `M...` is refused) and the memo is validated against Stellar's exact rules
+  (id = uint64 as a string; large JSON ids are quoted before parsing so they stay
+  exact; text ≤ 28 UTF-8 bytes; hash = 32-byte hex/base64). `payWithdrawal()` pays
+  **only** the response this session received from `startWithdraw()` — a caller
+  cannot substitute a target — and the signed envelope is checked against the
+  unsigned one before submission. `prepareWithdrawal()` is the unsigned preview
+  for the approval card.
+* **Paused orders:** `pending_customer_info_update` /
+  `pending_transaction_info_update` stop the poll immediately (no 180 s spin) and
+  surface the missing field names (`TransactionInfoRequiredError`), asking SEP-12
+  `GET /customer?transaction_id=` when a KYC server exists.
+* **Code loading:** no TypeScript parameter properties/enums anywhere; the package
+  is `erasableSyntaxOnly` and loads under plain `node` (`node
+  --input-type=module -e "await import('./stellar/src/anchor/index.ts')"`), which
+  is why the e2e script runs with `node`, not `tsx`.
 
 ## The pending_trust gotcha
 

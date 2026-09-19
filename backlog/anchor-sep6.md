@@ -1,9 +1,10 @@
 # Report: anchor-sep6
 
 - **Date:** 2026-09-19
-- **Worker/Agent:** W4 (Claude Sonnet 5)
+- **Worker/Agent:** W4 (Claude Sonnet 5); round-2 hardening by W4b (L2 implementer)
 - **Branch/Worktree:** `feat/anchor-sep6` @ `.worktrees/anchor-sep6`
 - **PR:** https://github.com/n0tnow/StellarVoiceControlProject/pull/11 (draft, `feat/anchor-sep6` -> `main`)
+- **Status (round 2):** all six round-1 review findings addressed and covered by tests; typecheck green; 100/100 anchor tests green; plain `node` loads the package.
 
 ## Completed
 
@@ -21,7 +22,7 @@ SEP-6 anchor client in `stellar/src/anchor/` (README there maps every SEP to cod
 | Explain-log | `explain.ts` | `{ step, what, why, at }`, subscribe (TTS narrator), per-step slices; about 25 distinct plain-English record types (per SEP step and per SEP-6 status) |
 | Signer | `types.ts`, `testSigner.ts` | `Signer { publicKey(), signTransaction(xdr, {networkPassphrase?}) }`; `EnvSigner` reads `POLARIS_TEST_SECRET`; no key handling elsewhere |
 | ChainTool wiring | `chainTools.ts`, `stellar/src/index.ts` | `depositTry` and `submitSignedTx` implemented, `ChainTool`/`Intent` contract untouched; `interfaces/` NOT edited |
-| Tests | `__tests__/` (4 files, 63 tests) | mocked HTTP only: toml parsing, SEP-10 (valid, wrong server key, wrong home/web_auth domain, other account, other network, tampered, garbage, non-zero sequence, missing web_auth_domain, signer swap, wrong JWT sub), SEP-38, SEP-12, SEP-6 requests + statuses, polling machine (7 cases), preflight (4), full session flows, `depositTry`, explain-log content |
+| Tests | `__tests__/` (5 files, 100 tests) | mocked HTTP only: toml parsing, SEP-10 (valid, wrong server key, wrong home/web_auth domain, other account, other network, tampered, garbage, non-zero sequence, missing web_auth_domain, memo, time window, signer swap, wrong JWT sub/prefix), SEP-38, SEP-12, SEP-6 requests + statuses, polling machine, preflight, full session flows, `depositTry`/`withdrawTry`, explain-log content. `hardening.test.ts` covers the round-1 review: host/URL policy, redirect + size caps, memo/destination validation, session-bound payment, sanitisation/JWT redaction, `pending_*_info_update`, transient poll failures, exact stroops |
 | Docs | `stellar/src/anchor/README.md` | SEP-to-code map, pending_trust gotcha, verified mock behaviour, mock-vs-mainnet, SEP-24 note |
 
 ### Wallet SDK decision (`@stellar/typescript-wallet-sdk`)
@@ -50,6 +51,26 @@ Total shared-treasury use: 150 TRY deposited (3 x 50 TRY) and 97 TRY worth withd
 * Withdraw response has the treasury in `account_id` with `memo_type: "id"`; `withdraw_anchor_account` appears only on the transaction record. The rate is locked for 30 min (text in `extra_info.message`), but no `quote_id` is used (no firm quote).
 * A withdrawal completes about 5-6 s after our payment lands; `pending_user_transfer_start` may already be gone by the first poll (then history is just `completed`).
 * SEP-38 `total_price` is `sell/buy`: TRY per USDC on deposit (49.03) but USDC per TRY on withdraw (0.0206). The narration converts this to "1 USDC = 48.54 TRY".
+
+## Round-2 hardening (review findings resolved)
+
+The previous worker's uncommitted WIP was completed; `describe.ts`, `amount.ts`,
+`net.ts`, `text.ts` are now wired (no dead modules), the bogus
+`./anchor/testing` export and the keeper test script are gone, and the lockfile
+loses only the `tsx` devDependency line (`tsx` itself stays: Vite needs it).
+
+| Finding | Fix | Tests |
+|---|---|---|
+| 1. Home domain/URL policy | `net.ts`: plain FQDN only; toml endpoints https + same domain/subdomain; test-only `allowInsecure`/`allowedEndpointHosts`. `http.ts`: `redirect: "error"`, timeout covering the body, 100 KB toml and 1 MB JSON caps (declared or streamed) | `hardening.test.ts` host-policy + size-cap blocks |
+| 2. `payWithdrawal` trusted its argument | The session stores its own `startWithdraw` response; `payWithdrawal(amount)` refuses without it or for another amount, pays only that destination/memo, checks the signed envelope via `assertSameTransaction`, then forgets the order. Muxed `M...` rejected; numeric memo > 2^53 made exact with `quoteNumericMemo`; `prepareWithdrawal()` + `withdrawalSummary()` give the approval card | hardening memo/session-binding blocks; `preflight-session.test.ts` preview test |
+| 3. Approval card lacked the issuer | `describe.ts` decodes operations from the XDR and the card names `Asset issuer:` / `USDC:G...`; `withdrawTry` uses it | `withdrawTry` test + preview test |
+| 4. Unsanitised anchor text + JWT leak | `text.ts` sanitises all anchor strings; explain records carry them as `anchorSaid` (never in `what`/`why`, `narrate()` excludes them); `login()`/`finishLogin()` return `SessionInfo` without the JWT | injection, narrator, redaction tests |
+| 5. Plain node / scripts | No parameter properties or enums; `erasableSyntaxOnly: true`; `test` = anchor vitest only (no `src/keeper`); `anchor:e2e` uses `node`; `node --input-type=module -e "await import('./stellar/src/anchor/index.ts')"` loads all 81 exports | verified manually (recorded in PR) |
+| 6. `pending_customer_info_update` | `sep6.ts` classifies it (and `pending_transaction_info_update`) as `needs_info`, stops polling immediately with `TransactionInfoRequiredError`, and asks SEP-12 `GET /customer?transaction_id=` for the missing fields | hardening pending-info block |
+
+Narration event shape matches PR #8 exactly (`{ type: "anchor_step", step, what,
+why }`, local structural copy + TODO until #8 merges), and `withdrawTry` uses the
+local `AnchorIntent` with the `"withdraw"` kind.
 
 ## Unfinished (handed off)
 * Real signer (Rust/Touch ID) not connected; `Signer` is the plug point (the other team). `docs/interfaces.md` `SigningService.sign(payloadHash)` does not match `Signer.signTransaction(xdr)`; an adapter or an interface decision is needed.
