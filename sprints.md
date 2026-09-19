@@ -89,7 +89,7 @@
 - [ ] Scheduled payments (W1): `create_schedule` / `cancel_schedule` / `execute_schedule`, `list_due`, `spent_today`
 - [ ] Keeper (W3): untrusted bot that finds due schedules (`list_due`) and calls `execute_schedule`
 - [ ] Anchor SEP-6 deposit + withdraw, voice-driven (W4): SEP-1/10/12/38 + SEP-6 only, TRY amounts via SEP-38 quotes, `anchor_step` narration; no SEP-24
-- [x] Rule/Schedule interface types (W5, `docs/rule-types-and-decisions`) (2026-09-19, PR: see `backlog/rule-types-docs.md`)
+- [x] Rule/Schedule interface types (W5, `docs/rule-types-and-decisions`) (2026-09-19, PR #8)
 - [ ] P2P escrow (`polaris_p2p_escrow`, architecture §5.6)
 - [ ] MPP (last): agent paying a paid HTTP-402 service; optional separate "agent wallet" account
 - [ ] README section: how the SEP flow works and why SEP-24 is not used in Turkey
