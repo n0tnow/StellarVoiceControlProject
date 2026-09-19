@@ -107,14 +107,26 @@ impl TtsError {
     }
 }
 
+/// A one-shot notification that audio playback has **actually begun**, as opposed
+/// to synthesis having been requested (step A9).
+///
+/// The `speak` command used to announce "Speaking" the moment it dispatched the
+/// request, so the notch lied for the whole Fish synthesis wait (~2–3 s before
+/// the first sample). Backends now call this exactly when the player starts, and
+/// the command emits `speech_status: speaking` from here — the stage can only be
+/// entered once there is real audio.
+pub type PlaybackStart<'a> = dyn Fn() + Send + Sync + 'a;
+
 /// The backend seam.
 ///
 /// Implementations must be blocking and self-contained. Adding a backend means
 /// implementing this trait and constructing it in [`build_backend`]; the `speak`
 /// command and every future call site stay unchanged.
 pub trait Speaker: Send + Sync {
-    /// Synthesizes `text` and plays it, returning once the audio has finished.
-    fn speak(&self, text: &str) -> Result<(), TtsError>;
+    /// Synthesizes `text` and plays it, invoking `on_playback_start` at the
+    /// moment audio playback begins — never during synthesis — and returning once
+    /// the audio has finished.
+    fn speak(&self, text: &str, on_playback_start: &PlaybackStart<'_>) -> Result<(), TtsError>;
 
     /// Short backend name for the terminal latency line, so the Fish and local
     /// numbers can be told apart on the same scale.
@@ -151,13 +163,22 @@ impl FallbackSpeaker {
 }
 
 impl Speaker for FallbackSpeaker {
-    fn speak(&self, text: &str) -> Result<(), TtsError> {
+    fn speak(&self, text: &str, on_playback_start: &PlaybackStart<'_>) -> Result<(), TtsError> {
+        // A single utterance may cross the primary/fallback boundary (the primary
+        // can fail mid-flight), so the playback-start notification is latched: it
+        // fires at most once per utterance no matter which backend actually plays.
+        let announced = AtomicBool::new(false);
+        let on_start = || {
+            if !announced.swap(true, Ordering::SeqCst) {
+                on_playback_start();
+            }
+        };
         let Some(primary) = &self.primary else {
             // No primary at all (Fish was not configured): speak locally and
             // skip the fallback banner, which would be misleading.
-            return self.fallback.speak(text);
+            return self.fallback.speak(text, &on_start);
         };
-        match primary.speak(text) {
+        match primary.speak(text, &on_start) {
             Ok(()) => Ok(()),
             Err(error) => {
                 eprintln!(
@@ -167,7 +188,7 @@ impl Speaker for FallbackSpeaker {
                     error.detail()
                 );
                 self.used_fallback.store(true, Ordering::Relaxed);
-                self.fallback.speak(text)
+                self.fallback.speak(text, &on_start)
             }
         }
     }
@@ -264,21 +285,29 @@ fn local_speaker() -> Arc<dyn Speaker> {
 /// The "nothing to say" check is backend-independent, so it lives here rather
 /// than inside one provider. Keeping this a free function over an injected
 /// backend is what makes the contract testable without audio or a network.
-pub fn speak_verified(backend: &dyn Speaker, text: &str) -> Result<(), TtsError> {
+pub fn speak_verified(
+    backend: &dyn Speaker,
+    text: &str,
+    on_playback_start: &PlaybackStart<'_>,
+) -> Result<(), TtsError> {
     let text = text.trim();
     if text.is_empty() {
         return Err(TtsError::EmptyText);
     }
-    backend.speak(text)
+    backend.speak(text, on_playback_start)
 }
 
 /// Speaks `text` and prints the terminal lines the `speak` command relies on:
 /// `tts in <ms> ms via <backend>` on success, or the short label plus full detail
 /// on failure. Kept here (rather than inline in the command) so the manual
 /// fallback demonstration runs the exact same path the app does.
-pub fn speak_and_log(backend: &dyn Speaker, text: &str) -> Result<(), TtsError> {
+pub fn speak_and_log(
+    backend: &dyn Speaker,
+    text: &str,
+    on_playback_start: &PlaybackStart<'_>,
+) -> Result<(), TtsError> {
     let started = Instant::now();
-    match speak_verified(backend, text) {
+    match speak_verified(backend, text, on_playback_start) {
         Ok(()) => {
             println!(
                 "polaris: tts in {} ms via {} ({} chars)",
@@ -329,7 +358,7 @@ mod tests {
     }
 
     impl Speaker for FakeSpeaker {
-        fn speak(&self, _text: &str) -> Result<(), TtsError> {
+        fn speak(&self, _text: &str, _on_playback_start: &PlaybackStart<'_>) -> Result<(), TtsError> {
             *self.calls.lock().unwrap() += 1;
             self.result
                 .lock()
@@ -346,8 +375,12 @@ mod tests {
     #[test]
     fn empty_text_is_rejected_before_the_backend_is_called() {
         let backend = FakeSpeaker::returning(Ok(()));
-        assert_eq!(speak_verified(&backend, "   "), Err(TtsError::EmptyText));
-        assert_eq!(speak_verified(&backend, ""), Err(TtsError::EmptyText));
+        let noop = || {};
+        assert_eq!(
+            speak_verified(&backend, "   ", &noop),
+            Err(TtsError::EmptyText)
+        );
+        assert_eq!(speak_verified(&backend, "", &noop), Err(TtsError::EmptyText));
         assert_eq!(*backend.calls.lock().unwrap(), 0);
     }
 
@@ -357,7 +390,7 @@ mod tests {
             seen: Mutex<Vec<String>>,
         }
         impl Speaker for RecordingSpeaker {
-            fn speak(&self, text: &str) -> Result<(), TtsError> {
+            fn speak(&self, text: &str, _on_playback_start: &PlaybackStart<'_>) -> Result<(), TtsError> {
                 self.seen.lock().unwrap().push(text.to_string());
                 Ok(())
             }
@@ -365,7 +398,8 @@ mod tests {
         let backend = RecordingSpeaker {
             seen: Mutex::new(Vec::new()),
         };
-        speak_verified(&backend, "  Sending 5 USDC to Ahmet — confirm?  ").unwrap();
+        let noop = || {};
+        speak_verified(&backend, "  Sending 5 USDC to Ahmet — confirm?  ", &noop).unwrap();
         assert_eq!(
             backend.seen.lock().unwrap().as_slice(),
             &["Sending 5 USDC to Ahmet — confirm?"]
@@ -375,7 +409,73 @@ mod tests {
     #[test]
     fn a_backend_failure_is_propagated_unchanged() {
         let backend = FakeSpeaker::returning(Err(TtsError::MissingKey));
-        assert_eq!(speak_verified(&backend, "hi"), Err(TtsError::MissingKey));
+        let noop = || {};
+        assert_eq!(
+            speak_verified(&backend, "hi", &noop),
+            Err(TtsError::MissingKey)
+        );
+    }
+
+    /// A backend that announces playback and then returns a scripted result, so
+    /// the once-only latch in [`FallbackSpeaker`] can be exercised.
+    struct NotifySpeaker {
+        result: Result<(), TtsError>,
+        name: &'static str,
+    }
+
+    impl Speaker for NotifySpeaker {
+        fn speak(&self, _text: &str, on_playback_start: &PlaybackStart<'_>) -> Result<(), TtsError> {
+            on_playback_start();
+            self.result.clone()
+        }
+
+        fn name(&self) -> &'static str {
+            self.name
+        }
+    }
+
+    #[test]
+    fn playback_start_fires_only_when_a_backend_reports_it() {
+        let announced = std::sync::atomic::AtomicUsize::new(0);
+        let on_start = || {
+            announced.fetch_add(1, Ordering::SeqCst);
+        };
+
+        // A backend that fails before playback must never announce it.
+        let failing = FakeSpeaker::returning(Err(TtsError::Network("dns".into())));
+        assert!(speak_verified(&failing, "hi", &on_start).is_err());
+        assert_eq!(announced.load(Ordering::SeqCst), 0);
+
+        // A backend that really starts playing announces exactly once.
+        let playing = NotifySpeaker {
+            result: Ok(()),
+            name: "fake",
+        };
+        speak_verified(&playing, "hi", &on_start).unwrap();
+        assert_eq!(announced.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn the_fallback_announces_playback_at_most_once_across_the_handoff() {
+        let announced = std::sync::atomic::AtomicUsize::new(0);
+        let on_start = || {
+            announced.fetch_add(1, Ordering::SeqCst);
+        };
+
+        // The primary announces playback and *then* fails; the fallback announces
+        // again. The utterance is still a single playback event.
+        let primary = Arc::new(NotifySpeaker {
+            result: Err(TtsError::Network("mid-flight".into())),
+            name: "fish",
+        });
+        let fallback = Arc::new(NotifySpeaker {
+            result: Ok(()),
+            name: "local",
+        });
+        let backend = FallbackSpeaker::new(Some(primary), fallback);
+
+        backend.speak("merhaba", &on_start).unwrap();
+        assert_eq!(announced.load(Ordering::SeqCst), 1);
     }
 
     #[test]
@@ -418,8 +518,9 @@ mod tests {
         let primary = Arc::new(FakeSpeaker::returning(Err(TtsError::Network("dns".into()))));
         let fallback = Arc::new(FakeSpeaker::returning(Ok(())));
         let backend = FallbackSpeaker::new(Some(primary), fallback);
+        let noop = || {};
 
-        assert!(backend.speak("merhaba").is_ok());
+        assert!(backend.speak("merhaba", &noop).is_ok());
     }
 
     #[test]
@@ -432,9 +533,10 @@ mod tests {
             "say not found".into(),
         ))));
         let backend = FallbackSpeaker::new(Some(primary), fallback);
+        let noop = || {};
 
         assert_eq!(
-            backend.speak("merhaba"),
+            backend.speak("merhaba", &noop),
             Err(TtsError::Local("say not found".into()))
         );
     }
@@ -445,9 +547,10 @@ mod tests {
             Arc::new(FakeSpeaker::returning(Err(TtsError::MissingReferenceId)).named("fish"));
         let fallback = Arc::new(FakeSpeaker::returning(Ok(())).named("local"));
         let backend = FallbackSpeaker::new(Some(primary), fallback);
+        let noop = || {};
 
         assert_eq!(backend.name(), "fish", "nothing has run yet");
-        backend.speak("merhaba").unwrap();
+        backend.speak("merhaba", &noop).unwrap();
         assert_eq!(backend.name(), "local");
     }
 
@@ -456,8 +559,9 @@ mod tests {
         let primary = Arc::new(FakeSpeaker::returning(Ok(())).named("fish"));
         let fallback = Arc::new(FakeSpeaker::returning(Ok(())).named("local"));
         let backend = FallbackSpeaker::new(Some(primary.clone()), fallback.clone());
+        let noop = || {};
 
-        backend.speak("merhaba").unwrap();
+        backend.speak("merhaba", &noop).unwrap();
         assert_eq!(*primary.calls.lock().unwrap(), 1);
         assert_eq!(*fallback.calls.lock().unwrap(), 0);
         assert_eq!(backend.name(), "fish");
@@ -467,8 +571,9 @@ mod tests {
     fn a_local_only_backend_speaks_without_a_primary() {
         let fallback = Arc::new(FakeSpeaker::returning(Ok(())).named("local"));
         let backend = FallbackSpeaker::new(None, fallback);
+        let noop = || {};
 
-        assert!(backend.speak("merhaba").is_ok());
+        assert!(backend.speak("merhaba", &noop).is_ok());
         assert_eq!(backend.name(), "local");
     }
 
@@ -498,8 +603,13 @@ mod tests {
             "local",
             "missing key must select local speech"
         );
-        speak_and_log(backend.as_ref(), "Polaris hazır. Yerel ses çalışıyor.")
-            .expect("local macOS speech must succeed");
+        let noop = || {};
+        speak_and_log(
+            backend.as_ref(),
+            "Polaris hazır. Yerel ses çalışıyor.",
+            &noop,
+        )
+        .expect("local macOS speech must succeed");
     }
 
     /// Whether `bytes` look like an MPEG audio payload: either an ID3v2 tag or
@@ -566,7 +676,14 @@ mod tests {
             &audio[..audio.len().min(4)]
         );
 
-        // 2. The production path: temp file -> `afplay` -> `tts in <ms> ms via fish`.
-        speak_and_log(&speaker, &sentence).expect("live Fish playback must succeed");
+        // 2. The production path: streamed into the player -> `tts in <ms> ms via fish`.
+        // The playback-start notification (the A9 "Speaking" trigger) must fire
+        // exactly once, and only after real audio has begun.
+        let announced = std::sync::atomic::AtomicUsize::new(0);
+        let on_start = || {
+            announced.fetch_add(1, Ordering::SeqCst);
+        };
+        speak_and_log(&speaker, &sentence, &on_start).expect("live Fish playback must succeed");
+        assert_eq!(announced.load(Ordering::SeqCst), 1);
     }
 }

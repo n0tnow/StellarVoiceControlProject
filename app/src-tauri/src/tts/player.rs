@@ -30,7 +30,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 
-use crate::tts::TtsError;
+use crate::tts::{PlaybackStart, TtsError};
 
 /// Writes `bytes` to a unique temp file whose extension comes from `format`.
 ///
@@ -70,11 +70,19 @@ pub fn extension(format: &str) -> String {
 }
 
 /// Plays an audio file with `afplay`, blocking until it finishes.
-pub fn play_file(path: &Path) -> Result<(), TtsError> {
-    let status = Command::new("afplay")
+///
+/// `on_playback_start` fires only once `afplay` has actually started, so a spawn
+/// failure never reads as playback (step A9). `afplay` begins as soon as the
+/// process is up, which is the honest definition of "audio has started" here.
+pub fn play_file(path: &Path, on_playback_start: &PlaybackStart<'_>) -> Result<(), TtsError> {
+    let mut child = Command::new("afplay")
         .arg(path)
-        .status()
+        .spawn()
         .map_err(|error| TtsError::Playback(format!("could not run `afplay`: {error}")))?;
+    on_playback_start();
+    let status = child
+        .wait()
+        .map_err(|error| TtsError::Playback(format!("could not wait for `afplay`: {error}")))?;
     if !status.success() {
         return Err(TtsError::Playback(format!(
             "`afplay` exited with {status} for {}",
@@ -155,10 +163,14 @@ fn ffplay_binary() -> Option<&'static str> {
 /// Pipes the bytes into `ffplay`'s stdin when available, so audio starts at the
 /// first decoded frame instead of after the full download. Falls back to
 /// buffering the body and using `afplay` when no `ffplay` can be started.
-pub fn play_stream<R: Read>(mut reader: R, format: &str) -> Result<(), TtsError> {
+pub fn play_stream<R: Read>(
+    mut reader: R,
+    format: &str,
+    on_playback_start: &PlaybackStart<'_>,
+) -> Result<(), TtsError> {
     if let Some(binary) = ffplay_binary() {
         match spawn_ffplay(binary, format) {
-            Ok(child) => return finish_ffplay(child, &mut reader, binary),
+            Ok(child) => return finish_ffplay(child, &mut reader, binary, on_playback_start),
             // The cached binary disappeared (or a PATH entry went stale); fall
             // through to the buffered path rather than failing the utterance.
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -180,7 +192,7 @@ pub fn play_stream<R: Read>(mut reader: R, format: &str) -> Result<(), TtsError>
         ));
     }
     let path = write_temp_audio(&bytes, format)?;
-    let played = play_file(&path);
+    let played = play_file(&path, on_playback_start);
     // Best-effort cleanup: a leftover temp file must never mask a playback
     // result, and the OS temp dir is pruned by the system anyway.
     let _ = std::fs::remove_file(&path);
@@ -202,12 +214,22 @@ fn spawn_ffplay(binary: &str, format: &str) -> std::io::Result<Child> {
 /// A broken pipe means the player stopped reading (e.g. it hit an error); the
 /// exit status is then the authoritative result, so the feed stops quietly and
 /// the status check below reports the failure.
-fn finish_ffplay<R: Read>(mut child: Child, reader: &mut R, binary: &str) -> Result<(), TtsError> {
+///
+/// `on_playback_start` fires after the first decoded chunk has been handed to the
+/// player — the earliest point at which ffplay can actually emit sound — and
+/// never when the body was empty or the feed failed first (step A9).
+fn finish_ffplay<R: Read>(
+    mut child: Child,
+    reader: &mut R,
+    binary: &str,
+    on_playback_start: &PlaybackStart<'_>,
+) -> Result<(), TtsError> {
     let mut stdin = child
         .stdin
         .take()
         .ok_or_else(|| TtsError::Playback(format!("`{binary}` did not expose stdin")))?;
     let mut buffer = [0u8; 16 * 1024];
+    let mut announced = false;
     loop {
         let read = match reader.read(&mut buffer) {
             Ok(0) => break,
@@ -221,6 +243,10 @@ fn finish_ffplay<R: Read>(mut child: Child, reader: &mut R, binary: &str) -> Res
             return Err(TtsError::Playback(format!(
                 "could not stream audio to `{binary}`: {error}"
             )));
+        }
+        if !announced {
+            announced = true;
+            on_playback_start();
         }
     }
     drop(stdin);
@@ -296,6 +322,43 @@ mod tests {
     fn playing_a_missing_file_is_an_error_not_a_panic() {
         let missing = std::env::temp_dir().join("polaris-tts-does-not-exist.mp3");
         let _ = std::fs::remove_file(&missing);
-        assert!(matches!(play_file(&missing), Err(TtsError::Playback(_))));
+        let noop = || {};
+        assert!(matches!(
+            play_file(&missing, &noop),
+            Err(TtsError::Playback(_))
+        ));
+    }
+
+    /// `play_file` must announce playback only once `afplay` has actually
+    /// started — a silent WAV is enough to prove the callback fires. It is
+    /// macOS-only by construction (the whole crate is).
+    #[test]
+    fn playback_start_fires_when_the_player_really_starts() {
+        // A minimal, valid, silent 16-bit PCM WAV written with the same crate the
+        // capture layer uses. 8 kHz, 1 channel, 80 ms of silence.
+        let path = std::env::temp_dir().join(format!("polaris-tts-silent-{}.wav", std::process::id()));
+        {
+            let spec = hound::WavSpec {
+                channels: 1,
+                sample_rate: 8_000,
+                bits_per_sample: 16,
+                sample_format: hound::SampleFormat::Int,
+            };
+            let mut writer = hound::WavWriter::create(&path, spec).unwrap();
+            for _ in 0..640 {
+                writer.write_sample(0i16).unwrap();
+            }
+            writer.finalize().unwrap();
+        }
+
+        let announced = std::sync::atomic::AtomicUsize::new(0);
+        let on_start = || {
+            announced.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        };
+        let result = play_file(&path, &on_start);
+        let _ = std::fs::remove_file(&path);
+
+        result.expect("afplay must play a valid silent WAV");
+        assert_eq!(announced.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 }

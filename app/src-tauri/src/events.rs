@@ -34,9 +34,10 @@ pub enum AgentStage {
 /// Whether Polaris is currently producing audible speech (step A5).
 ///
 /// This is driven by the actual blocking playback, not by the request: the
-/// `speak` command emits `Speaking` when it hands the sentence to the backend
-/// and `Idle` only once playback has finished (or failed), so the notch can
-/// never be left stuck showing "Speaking".
+/// backend fires a playback-start callback the moment audio really begins (step
+/// A9 — synthesis time is not "Speaking"), and the `speak` command emits `Idle`
+/// only once playback has finished (or failed), so the notch can never be left
+/// stuck showing "Speaking".
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SpeechState {

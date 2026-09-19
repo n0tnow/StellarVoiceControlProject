@@ -15,7 +15,7 @@
 use std::process::Command;
 
 use crate::env;
-use crate::tts::{Speaker, TtsError};
+use crate::tts::{PlaybackStart, Speaker, TtsError};
 
 /// Fixed local voice when `POLARIS_TTS_LOCAL_VOICE` is not set. `Yelda` is the
 /// Turkish voice shipped with macOS and the MVP choice recorded in the
@@ -71,12 +71,19 @@ impl LocalSpeaker {
 }
 
 impl Speaker for LocalSpeaker {
-    fn speak(&self, text: &str) -> Result<(), TtsError> {
+    fn speak(&self, text: &str, on_playback_start: &PlaybackStart<'_>) -> Result<(), TtsError> {
         let args = command_args(self.voice.as_deref(), text);
-        let status = Command::new("say")
+        // `say` synthesizes and plays in one step, so the process starting *is*
+        // playback beginning. Announce after a successful spawn, never before: a
+        // `say` that could not be started must not read as "Speaking".
+        let mut child = Command::new("say")
             .args(&args)
-            .status()
+            .spawn()
             .map_err(|error| TtsError::Local(format!("could not run `say`: {error}")))?;
+        on_playback_start();
+        let status = child
+            .wait()
+            .map_err(|error| TtsError::Local(format!("could not wait for `say`: {error}")))?;
         if !status.success() {
             return Err(TtsError::Local(format!("`say` exited with {status}")));
         }

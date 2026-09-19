@@ -23,7 +23,7 @@ use std::time::Duration;
 use serde::Serialize;
 
 use crate::env;
-use crate::tts::{player, Speaker, TtsError};
+use crate::tts::{player, PlaybackStart, Speaker, TtsError};
 
 /// Default model; override with `POLARIS_TTS_MODEL`.
 pub const DEFAULT_MODEL: &str = "s2.1-pro-free";
@@ -229,10 +229,10 @@ impl Speaker for FishSpeaker {
     /// live response through lets playback begin at roughly the provider's
     /// time-to-first-byte. `synthesize` is retained for the live test's payload
     /// assertion; the app always streams.
-    fn speak(&self, text: &str) -> Result<(), TtsError> {
+    fn speak(&self, text: &str, on_playback_start: &PlaybackStart<'_>) -> Result<(), TtsError> {
         let key = self.api_key.as_deref().ok_or(TtsError::MissingKey)?;
         let response = self.request_with_key(text, key)?;
-        player::play_stream(response, &self.format)
+        player::play_stream(response, &self.format, on_playback_start)
     }
 
     fn name(&self) -> &'static str {
@@ -304,7 +304,8 @@ mod tests {
             DEFAULT_LATENCY.to_string(),
         );
         assert!(!speaker.has_key());
-        assert_eq!(speaker.speak("hello"), Err(TtsError::MissingKey));
+        let noop = || {};
+        assert_eq!(speaker.speak("hello", &noop), Err(TtsError::MissingKey));
     }
 
     #[test]
@@ -318,7 +319,11 @@ mod tests {
         );
         // The key path would reach the network; the voice-id guard must fire
         // first because sending without it drifts the voice.
-        assert_eq!(speaker.speak("hello"), Err(TtsError::MissingReferenceId));
+        let noop = || {};
+        assert_eq!(
+            speaker.speak("hello", &noop),
+            Err(TtsError::MissingReferenceId)
+        );
     }
 
     #[test]

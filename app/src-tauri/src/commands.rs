@@ -85,6 +85,11 @@ pub struct SpeechFailure {
 /// overlay can show a "Speaking" state for exactly as long as audio is being
 /// produced. `Idle` is emitted on **both** the success and the failure path, so a
 /// TTS failure can never leave the notch stuck on "Speaking".
+///
+/// Step A9: `Speaking` is emitted from the backend's **real playback-start**
+/// callback, not when the command is dispatched. The Fish synthesis wait (~2–3 s)
+/// therefore stays on the previous stage instead of lying about speaking; and if
+/// synthesis fails before any audio exists, `Speaking` is never emitted at all.
 #[tauri::command]
 pub async fn speak(
     app: AppHandle,
@@ -95,14 +100,17 @@ pub async fn speak(
     let backend = Arc::clone(speaker.inner());
     let task_backend = Arc::clone(&backend);
     let started = Instant::now();
-    events::emit(
-        &app,
-        PolarisEvent::SpeechStatus {
-            state: SpeechState::Speaking,
-        },
-    );
+    let start_app = app.clone();
+    let on_playback_start = move || {
+        events::emit(
+            &start_app,
+            PolarisEvent::SpeechStatus {
+                state: SpeechState::Speaking,
+            },
+        );
+    };
     let joined = tauri::async_runtime::spawn_blocking(move || {
-        tts::speak_and_log(task_backend.as_ref(), &text)
+        tts::speak_and_log(task_backend.as_ref(), &text, &on_playback_start)
     })
     .await;
     // Playback has ended (or never started): release the overlay before doing
