@@ -137,7 +137,7 @@ pub enum Error {
     InvalidSchedule = 112,
     /// Someone other than the schedule's owner tried to cancel it.
     NotScheduleOwner = 113,
-    /// Per-owner or global active-schedule cap reached.
+    /// Per-owner cap on active schedules reached. There is no global cap.
     TooManySchedules = 114,
     /// Checked arithmetic refused (i128 spend counter or u64 time advance).
     Overflow = 115,
