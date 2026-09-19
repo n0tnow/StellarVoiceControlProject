@@ -203,3 +203,28 @@
 - **Status:** decided (implemented on `feat/a1-ondevice-stt`; a real permissioned recognition run
   and the on-device latency/accuracy numbers are still pending a human — see
   `backlog/2026-09-19-a1-ondevice-stt.md`)
+
+## 2026-09-19 — A3: TTS provider and voice-stability decisions
+- **Idea:** Add spoken output. Provider chosen by the owner: **Fish Audio**
+  `s2.1-pro-free` as primary (free tier, Turkish, no card), with **local macOS
+  `say`** as a mandatory fallback.
+- **Discussion:** The free Fish tier is time-limited (available until 2026-11-30)
+  and explicitly has **no SLA**, so a silent assistant is a real demo risk. The
+  fallback is therefore broader than A1's: it fires on any Fish failure, not just
+  a narrow pre-flight one, at the cost of a different voice for that utterance.
+- **Decisions:**
+  1. **Mirror A1's seam.** A `Speaker` trait with `fish.rs` + `local.rs` behind it
+     and `build_backend()` selecting from `POLARIS_TTS_BACKEND` (`fish` default,
+     `local` opt-in); unknown values warn and use `fish`.
+  2. **One fixed voice, enforced.** Fish selects the engine with the `model`
+     header and the voice with body `reference_id`. `POLARIS_TTS_REFERENCE_ID` is
+     therefore required; if it is missing the request is never sent and local
+     speech is used, so the voice can never drift between requests.
+  3. **Playback stays dependency-free.** Fish audio bytes go to a temp file and
+     macOS `afplay` plays them; the local backend's `say` synthesizes and plays in
+     one step.
+  4. **No TS seam change.** Failures reuse the existing `error` event with a short
+     label; a dedicated `speech_status` event is left to A2 if the UI wants one.
+- **Status:** implemented on `feat/a3-tts` (96 tests, clippy clean); the **live
+  Fish call is unverified** pending a provisioned `FISH_AUDIO_API_KEY` — see
+  `backlog/2026-09-19-a3-tts.md`.
