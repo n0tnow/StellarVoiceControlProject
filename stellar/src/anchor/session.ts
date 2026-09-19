@@ -9,8 +9,8 @@
 import { DEFAULT_ASSET_CODE, DEFAULT_HOME_DOMAIN, TESTNET_FRIENDBOT_URL, TESTNET_HORIZON_URL, TESTNET_PASSPHRASE } from "./config.ts";
 import { ExplainLog, shortKey } from "./explain.ts";
 import { balanceOf, loadAccount, submitEnvelope, explorerTxUrl } from "./horizon.ts";
-import { preflight, type PreflightOptions, type PreflightResult } from "./preflight.ts";
-import { authenticate, isExpired } from "./sep10.ts";
+import { buildTrustlineTx, inspectAccount, preflight, type AccountState, type PreflightOptions, type PreflightResult } from "./preflight.ts";
+import { authenticate, completeChallenge, isExpired, requestChallenge } from "./sep10.ts";
 import { discoverAnchor, findAsset, normaliseHomeDomain } from "./sep1.ts";
 import { ensureCustomer, type CustomerInfo } from "./sep12.ts";
 import { getPrice } from "./sep38.ts";
@@ -77,6 +77,7 @@ export class AnchorSession {
   private tomlCache: AnchorToml | undefined;
   private tokenCache: AuthToken | undefined;
   private customerOk = false;
+  private pendingChallenge: string | undefined;
   private assetCache: (AnchorAsset & { fiat?: string }) | undefined;
 
   constructor(config: AnchorSessionConfig) {
@@ -152,6 +153,58 @@ export class AnchorSession {
   /** SEP-10: log in by signing the anchor's challenge (cached until near expiry). */
   login(): Promise<StepResult<AuthToken>> {
     return this.step(() => this.token());
+  }
+
+  /**
+   * Two-phase SEP-10 login for UIs that show the challenge for approval first:
+   * `beginLogin()` returns the validated, UNSIGNED challenge XDR; after the
+   * user's signer signs it, pass the result to `finishLogin()`.
+   */
+  beginLogin(): Promise<StepResult<{ challengeXdr: string }>> {
+    return this.step(async () => {
+      const challengeXdr = await requestChallenge(this.ctx, await this.toml(), await this.signer.publicKey());
+      this.pendingChallenge = challengeXdr;
+      return { challengeXdr };
+    });
+  }
+
+  /** Completes `beginLogin()` with the signed challenge. */
+  finishLogin(signedChallengeXdr: string): Promise<StepResult<AuthToken>> {
+    return this.step(async () => {
+      if (!this.pendingChallenge) throw new Error("call beginLogin() first");
+      this.tokenCache = await completeChallenge(
+        this.ctx,
+        await this.toml(),
+        await this.signer.publicKey(),
+        this.pendingChallenge,
+        signedChallengeXdr,
+      );
+      this.pendingChallenge = undefined;
+      return this.tokenCache;
+    });
+  }
+
+  /** Account readiness (exists / trustline / balances) without changing anything. */
+  inspect(): Promise<StepResult<AccountState>> {
+    return this.step(async () => inspectAccount(this.ctx, await this.signer.publicKey(), await this.asset()));
+  }
+
+  /** Unsigned `changeTrust` XDR for the anchor asset, or undefined when the account already trusts it. */
+  buildTrustline(): Promise<StepResult<{ xdr: string } | undefined>> {
+    return this.step(async () => {
+      const account = await this.signer.publicKey();
+      const asset = await this.asset();
+      const state = await inspectAccount(this.ctx, account, asset);
+      if (!state.exists || state.hasTrustline) return undefined;
+      return {
+        xdr: buildTrustlineTx({
+          account,
+          sequence: state.raw?.sequence ?? "0",
+          networkPassphrase: this.ctx.networkPassphrase,
+          asset,
+        }),
+      };
+    });
   }
 
   /** SEP-12: register as a customer (auto-approved on the mock). */

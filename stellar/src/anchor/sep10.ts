@@ -100,10 +100,8 @@ export function decodeJwt(jwt: string): { sub?: string; exp?: number; iss?: stri
   }
 }
 
-export async function authenticate(ctx: AnchorContext, toml: AnchorToml, signer: Signer): Promise<AuthToken> {
-  const account = await signer.publicKey();
-
-  // 1) GET challenge
+/** Step 1+2 of SEP-10: fetch the challenge and validate it BEFORE anything is signed. */
+export async function requestChallenge(ctx: AnchorContext, toml: AnchorToml, account: string): Promise<string> {
   const ch = await requestJson<ChallengeResponse>(ctx, toml.webAuthEndpoint, {
     query: { account, home_domain: toml.homeDomain },
   });
@@ -113,8 +111,6 @@ export async function authenticate(ctx: AnchorContext, toml: AnchorToml, signer:
     `SEP-10: the anchor sent a one-off challenge for ${shortKey(account)}. It is a transaction that can never be submitted to the network.`,
     "It is the anchor's way of asking \"prove you own this account\" without a password.",
   );
-
-  // 2) Validate before signing
   validateChallenge({
     challengeXdr: ch.transaction,
     toml,
@@ -128,20 +124,26 @@ export async function authenticate(ctx: AnchorContext, toml: AnchorToml, signer:
       `has sequence number 0 (so it cannot move money), is for ${toml.homeDomain}, and has not expired.`,
     "This stops a fake website from tricking us into signing a real payment disguised as a login.",
   );
+  return ch.transaction;
+}
 
-  // 3) Sign via the injected signer
-  const signed = await signer.signTransaction(ch.transaction, { networkPassphrase: ctx.networkPassphrase });
-  assertSignedChallenge(signed, ch.transaction, toml, ctx.networkPassphrase, account);
+/** Step 3+4 of SEP-10: check the signed challenge is the one we asked for, trade it for a JWT. */
+export async function completeChallenge(
+  ctx: AnchorContext,
+  toml: AnchorToml,
+  account: string,
+  challengeXdr: string,
+  signedXdr: string,
+): Promise<AuthToken> {
+  assertSignedChallenge(signedXdr, challengeXdr, toml, ctx.networkPassphrase, account);
   ctx.explain.record(
     "sep10.sign",
     `SEP-10: proved we own ${shortKey(account)} by signing the challenge — no password involved and no funds moved.`,
     "A signature can only be made by the holder of the private key, so the anchor now knows this is really you.",
   );
-
-  // 4) POST → JWT
   const res = await requestJson<{ token?: string }>(ctx, toml.webAuthEndpoint, {
     method: "POST",
-    json: { transaction: signed },
+    json: { transaction: signedXdr },
   });
   if (!res.token) throw new ChallengeError("anchor accepted the signature but returned no token");
   const claims = decodeJwt(res.token);
@@ -156,6 +158,14 @@ export async function authenticate(ctx: AnchorContext, toml: AnchorToml, signer:
     "The token is like a short-lived visitor badge: it lets us ask for quotes, deposits and withdrawals for this account only.",
   );
   return token;
+}
+
+/** Full SEP-10 login through the injected signer: challenge -> validate -> sign -> JWT. */
+export async function authenticate(ctx: AnchorContext, toml: AnchorToml, signer: Signer): Promise<AuthToken> {
+  const account = await signer.publicKey();
+  const challenge = await requestChallenge(ctx, toml, account);
+  const signed = await signer.signTransaction(challenge, { networkPassphrase: ctx.networkPassphrase });
+  return completeChallenge(ctx, toml, account, challenge, signed);
 }
 
 /** True when the token is missing or within `skewMs` of expiry. */

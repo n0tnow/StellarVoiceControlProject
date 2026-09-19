@@ -4,7 +4,7 @@ export * from "./explain.ts";
 export * from "./types.ts";
 export { AnchorHttpError } from "./http.ts";
 export { parseStellarToml, discoverAnchor, findAsset, TomlError } from "./sep1.ts";
-export { validateChallenge, authenticate, decodeJwt, isExpired, ChallengeError } from "./sep10.ts";
+export { validateChallenge, requestChallenge, completeChallenge, authenticate, decodeJwt, isExpired, ChallengeError } from "./sep10.ts";
 export { ensureCustomer, getCustomer, KycRequiredError, type CustomerInfo, type CustomerStatus } from "./sep12.ts";
 export { getPrice, QuoteError, type PriceRequest } from "./sep38.ts";
 export {
@@ -34,3 +34,4 @@ export { simulateBankTransfer } from "./sandbox.ts";
 export { AnchorSession, assertAmount, type AnchorSessionConfig } from "./session.ts";
 export { runDepositFlow, runWithdrawFlow, type DepositFlowOptions, type DepositFlowResult, type WithdrawFlowOptions, type WithdrawFlowResult } from "./flows.ts";
 export { EnvSigner } from "./testSigner.ts";
+export { configureAnchor, getAnchorSession, depositTry, submitSignedTx, describeXdr, type SubmitResult } from "./chainTools.ts";
