@@ -2,8 +2,8 @@
 
 - **Date:** 2026-09-19
 - **Worker/Agent:** notch-research
-- **Branch/Worktree:** `codex/notch-research` / `.worktrees/notch-research` (worktree creation was blocked by local Git ref permissions; report was prepared in the shared workspace)
-- **PR:** pending coordinator commit/PR; no source files changed
+- **Branch/Worktree:** `codex/notch-research` / `.worktrees/notch-research`
+- **PR:** https://github.com/n0tnow/StellarVoiceControlProject/pull/7 (`codex/notch-research` → `main`)
 
 ## Completed
 
@@ -11,6 +11,7 @@
 - Researched current Tauri v2 transparent-window configuration and permissions.
 - Reviewed primary open-source notch implementations: DynamicNotchKit, MacCam-NotchIsland, NotchApp, and Dynamac-Island.
 - Wrote implementation-ready geometry, state, timing, fallback, permission, and verification guidance in [`docs/reports/2026-09-19-notch-overlay-research.md`](../docs/reports/2026-09-19-notch-overlay-research.md).
+- Corrected the geometry section to use a valid monotonic SVG path and clarified that modifier-only Control+Option requires native local/global `flagsChanged` monitoring in the current A0 implementation.
 
 ## Recommendation
 

@@ -27,15 +27,18 @@ The Tauri v2 window configuration has the required overlay primitives: `transpar
 
 Use a fixed top-centered shell whose top edge is flush with the screen edge. The collapsed state is a black rectangle/pill around the physical notch. The expanded state grows horizontally while retaining a black top band, two concave shoulder transitions, and rounded lower corners like the supplied second image.
 
-Recommended normalized path for the expanded shell (coordinates in the view box, `w` × `h`):
+Use one monotonic SVG path for the shell (coordinates in the view box, `w` × `h`) so the shoulder curves cannot self-cross. Let `r` be the lower corner radius, `xL`/`xR` the left/right inner shoulder x positions (`0 < xL < xR < w`), `yO` the outer shoulder y, and `yI` the inner shoulder y (`0 < yO < yI < h`). Construct this path:
 
-1. Move `(0, 0)` and line to `(w, 0)`.
-2. Line to `(w, h - r)`; quadratic curve to `(w - r, h)` for the lower-right corner.
-3. Line to `(r, h)`; quadratic curve to `(0, h - r)` for the lower-left corner.
-4. Line up to the right shoulder start `(0, s)` and use a cubic curve through `(0, s + c)` and `(m - c, t)` to `(m, t)`; mirror this curve on the right side.
-5. Close across the top.
+```text
+M 0 0 H w V (h-r)
+Q w h (w-r) h H r Q 0 h 0 (h-r) V yO
+C 0 (yO+c) (xL-c) (yI-c) xL yI
+H xR
+C (xR+c) (yI-c) w (yO+c) w yO
+V 0 Z
+```
 
-Here `m` is the inner shoulder width, `t` is the body top inset, `s` is the shoulder start, `c` controls the concavity, and `r` is the lower corner radius. Keep these as animatable scalar parameters rather than swapping between unrelated paths. For the collapsed state, set the body width to the measured notch width and shoulder depth to zero. The exact points are a starting geometry recommendation; the physical display measurement must win.
+The two cubic segments are traversed in opposite directions around the bottom boundary and remain within the shell bounds; `c` is clamped so control points stay between their adjacent endpoints. For the collapsed state, set `xL` and `xR` to the measured notch shoulders and reduce `yI-yO` toward zero. Keep these scalar parameters as the animatable data rather than swapping between unrelated paths. The exact points are a starting geometry recommendation; physical display measurements win.
 
 ### Animation
 
@@ -65,7 +68,7 @@ The initial requested slice only needs `idle`, `recording`, and `ready`; `thinki
 
 ### Hotkey and permissions
 
-Apple’s `NSEvent.addGlobalMonitorForEvents(matching:)` supports `NSFlagsChanged`, but key-related global monitoring requires Accessibility trust and is observation-only. Since the project already has a Tauri global-shortcut path, keep modifier handling in Rust/Tauri. The handler should maintain a two-bit latch (`controlDown`, `optionDown`), start recording on the first event where both are true, and stop on the first release where either becomes false. Debounce repeated `flagsChanged` events by checking the effective pair state rather than event count.
+Apple’s `NSEvent.addGlobalMonitorForEvents(matching:)` supports `NSFlagsChanged`, but key-related global monitoring requires Accessibility trust and is observation-only. The current A0 shortcut registration is a Control+Option+Space key-code shortcut; it cannot represent the requested modifier-only gesture by itself. The notch slice therefore needs a native macOS `flagsChanged` observer (with a local monitor for events delivered to the app itself, plus the global monitor for other apps) bridged into Rust/Tauri. The handler should maintain a two-bit latch (`controlDown`, `optionDown`), start recording on the first event where both are true, and stop on the first release where either becomes false. Debounce repeated `flagsChanged` events by checking the effective pair state rather than event count.
 
 If a future native monitor is needed, use `flagsChanged` only to observe modifier transitions and clearly surface the Accessibility permission requirement. Do not use a CGEvent tap for this MVP: it adds a separate permission and lifecycle path without improving the requested hold/release behavior.
 
