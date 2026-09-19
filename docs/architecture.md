@@ -99,7 +99,7 @@ flowchart TD
 | Read-back | Assistant speaks the parsed amount + recipient **before** any approval (guards against STT errors). A4 builds the sentence in TypeScript (`agent/src/speech.ts`) and hands the finished string to the Rust `speak` command; playback is non-blocking and utterances never overlap | ✅ (`backlog/2026-09-19-a4-speak-intent.md`) |
 
 ### 4.2 Agent core
-- **LLM:** **OpenCode Zen Go**, OpenAI-compatible, model `deepseek-v4.1-flash` (1M context, tool calling). ✅ decided (2026-09-19, owner). The endpoint is reached at `https://opencode.ai/zen/go/v1/chat/completions` with `Authorization: Bearer $OPENCODE_API_KEY`; it requires a per-conversation `x-opencode-session` header and a descriptive `User-Agent`. *Verified:* live curl on 2026-09-19 returns a correct `tool_calls` response for the Turkish command "Ahmete 5 USDC gönder".
+- **LLM:** **OpenCode Zen Go**, OpenAI-compatible, model `glm-5.3-flash` (tool calling, no reasoning tokens). ✅ decided (2026-09-19, owner). It replaced `deepseek-v4.1-flash` in step A5 (same correctness on the real task; median 1857 ms vs 2085 ms). The endpoint is reached at `https://opencode.ai/zen/go/v1/chat/completions` with `Authorization: Bearer $OPENCODE_API_KEY`; it requires a per-conversation `x-opencode-session` header and a descriptive `User-Agent`. *Verified:* live curl on 2026-09-19 returns a correct `tool_calls` response for the Turkish command "Ahmete 5 USDC gönder".
   - **Provider is swappable by construction.** The client (`agent/src/llm/openai.ts`) implements the narrow `AgentLlm` port; base URL, model id and key come only from `POLARIS_AGENT_BASE_URL`, `POLARIS_AGENT_MODEL`, `OPENCODE_API_KEY`. Switching to Groq or OpenRouter (both OpenAI-compatible) is a `.env` change — no code change. A `ScriptedLlm`/`MockLlm` keeps the test suite off the network.
   - **The key never enters the webview.** The endpoint sends no CORS headers, and the React shell must not hold the credential, so the webview calls a same-origin `/agent-api` path that the Vite dev server proxies to the provider and where it injects `Authorization` server-side (`app/vite.config.ts`). A built bundle therefore contains no secret; production would move that proxy into Rust. 🟡 (dev-proxy only)
 - **Loop:** system prompt (Stellar-specialised, safety rules) → tool-use loop → structured result to UI. Tools are grouped by risk tier (§6). Step A2 produces a validated `Intent` (e.g. `send_payment`) without executing it; the unsigned-XDR chain tools arrive in A5.
@@ -249,7 +249,7 @@ Threats and mitigations:
 | Shell | **Tauri v2** with a *thin Rust core* + TypeScript/React webview. Rationale: native press/release hotkey, key custody and signing outside the webview, Touch ID plugin exists, small footprint. **Not** because "Stellar uses Rust" — contracts are a separate project and app-side Stellar SDKs are JS-first. | ✅ (spike-gated) |
 | Fallback | If the spike fails (hotkey, mic, Touch ID, or macOS permissions in dev builds), switch to **Electron**: the TS brain is reused unchanged. | ✅ |
 | UI | React + TypeScript (Vite) | 🟡 |
-| LLM | OpenCode Zen Go (`deepseek-v4.1-flash`), OpenAI-compatible behind the `AgentLlm` port; swappable via env | ✅ |
+| LLM | OpenCode Zen Go (`glm-5.3-flash`), OpenAI-compatible behind the `AgentLlm` port; swappable via env | ✅ |
 | STT / TTS | see §4.1 | 🔲 / ✅ (live Fish + A4 spoken read-back) |
 | Contracts | Rust + `soroban-sdk`, deployed with Stellar CLI | ✅ |
 | Network | Stellar **testnet** only | ✅ |

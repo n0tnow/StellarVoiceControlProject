@@ -8,13 +8,19 @@
 import type { AgentLlm } from "./loop.ts";
 import { openAiOptionsFromEnv, processEnv, type AgentEnv } from "./llm/config.ts";
 import { OpenAiCompatibleLlm } from "./llm/openai.ts";
-import { noopTool } from "./tools/noop.ts";
 import { sendPaymentTool } from "./tools/payment.ts";
 import { createToolRegistry, type ToolRegistry } from "./tools/registry.ts";
 
-/** Every tool the demo agent exposes: the real intent tool plus the round-trip probe. */
+/**
+ * The production tool set: the real intent tool and nothing else.
+ *
+ * Step A5 trimmed the `noop` round-trip probe out of the default registry. Every
+ * registered tool is serialised into **every** model request, and `noop` was a
+ * demo artifact — it only added tokens (and reasoning) to real turns. It is still
+ * exported and used by `demo.ts` and the loop tests.
+ */
 export function createDefaultRegistry(): ToolRegistry {
-  return createToolRegistry().register(sendPaymentTool).register(noopTool);
+  return createToolRegistry().register(sendPaymentTool);
 }
 
 export interface AgentRuntime {

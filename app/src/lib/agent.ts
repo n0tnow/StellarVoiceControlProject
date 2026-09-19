@@ -24,7 +24,7 @@ export const AGENT_BASE_URL = "/agent-api";
 export const AGENT_MODEL =
   import.meta.env.POLARIS_AGENT_MODEL && import.meta.env.POLARIS_AGENT_MODEL.trim().length > 0
     ? import.meta.env.POLARIS_AGENT_MODEL.trim()
-    : "deepseek-v4.1-flash";
+    : "glm-5.3-flash";
 
 export interface AgentOutcome {
   transcript: string;

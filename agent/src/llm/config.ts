@@ -20,7 +20,13 @@ export const AGENT_API_KEY_ENV = "OPENCODE_API_KEY";
 
 /** OpenCode Zen Go — the owner-chosen provider (docs/architecture.md §4.2). */
 export const DEFAULT_AGENT_BASE_URL = "https://opencode.ai/zen/go/v1";
-export const DEFAULT_AGENT_MODEL = "deepseek-v4.1-flash";
+/**
+ * Fallback model when `POLARIS_AGENT_MODEL` is unset. `glm-5.3-flash` replaced
+ * `deepseek-v4.1-flash` in step A5: both were always correct on the real task,
+ * glm's median was lower (1857 ms vs 2085 ms) and it spends no reasoning tokens.
+ * The model stays env-driven — this is only the last-resort default.
+ */
+export const DEFAULT_AGENT_MODEL = "glm-5.3-flash";
 
 /** A descriptive User-Agent; some providers reject generic SDK defaults. */
 export const AGENT_USER_AGENT = "polaris/0.1";

@@ -7,7 +7,7 @@ import { openAiOptionsFromEnv } from "./config.ts";
 test("defaults to OpenCode Zen Go when the environment is empty", () => {
   const options = openAiOptionsFromEnv({});
   assert.equal(options.baseUrl, "https://opencode.ai/zen/go/v1");
-  assert.equal(options.model, "deepseek-v4.1-flash");
+  assert.equal(options.model, "glm-5.3-flash");
   assert.equal(options.apiKey, "");
   assert.equal(options.headers?.["User-Agent"], "polaris/0.1");
 });

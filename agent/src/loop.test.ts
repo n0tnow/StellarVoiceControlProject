@@ -7,6 +7,9 @@ import { AgentError } from "./errors.ts";
 import { createEventBus } from "./events.ts";
 import { runTurn, type AgentLlm, type LlmTurn } from "./loop.ts";
 import { createDefaultRegistry } from "./runtime.ts";
+import { noopTool } from "./tools/noop.ts";
+import { sendPaymentTool } from "./tools/payment.ts";
+import { createToolRegistry } from "./tools/registry.ts";
 
 /** Deterministic provider: returns the same scripted turn, with no network. */
 class ScriptedLlm implements AgentLlm {
@@ -100,11 +103,17 @@ test("more than one action at once is refused", async () => {
 });
 
 test("a non-approval tool still runs and feeds the round trip", async () => {
-  const { run } = harness(
-    { text: "calling noop", toolCalls: [{ name: "noop", input: { echo: "hello" } }] },
-    "please run the noop tool",
-  );
-  const result = await run();
+  // `noop` is not in the production registry any more (step A5 trimmed the demo
+  // probe out of every request); the loop's non-approval path is still real, so
+  // register it here explicitly.
+  const bus = createEventBus();
+  const registry = createToolRegistry().register(sendPaymentTool).register(noopTool);
+  const result = await runTurn({
+    transcript: "please run the noop tool",
+    registry,
+    llm: new ScriptedLlm({ text: "calling noop", toolCalls: [{ name: "noop", input: { echo: "hello" } }] }),
+    bus,
+  });
   assert.deepEqual(result.executedTools, ["noop"]);
   assert.equal(result.intent, undefined);
   assert.match(result.answer, /noop -> /);
