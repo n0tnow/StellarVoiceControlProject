@@ -24,6 +24,18 @@ for each other.
 Key decisions and the evidence for them are recorded in `notes.md` → *2026-09-19 — Monorepo
 Skeleton Landed*.
 
+Two file-set notes for the reviewer:
+
+- `contracts/polaris_guard/test_snapshots/*.json` **are** committed on purpose: the Soroban Rust
+  SDK writes a snapshot (events + final ledger state) for every test that uses an `Env`, and
+  those snapshots are the project's differential-test baselines
+  ([SDF guide](https://developers.stellar.org/docs/build/guides/testing/differential-tests-with-test-snapshots)).
+- `app/src-tauri/gen/schemas/*.json` are **generated** and must stay untracked. The existing
+  `.gitignore` pattern `src-tauri/gen/schemas/` was root-anchored and therefore never matched
+  `app/src-tauri/gen/schemas/`; it is fixed to `**/src-tauri/gen/schemas/` in this branch and
+  the four accidentally committed files were removed from the index. Since `.gitignore` must be
+  identical in every clone (`AGENTS.md` §9), the other copy of the repository needs the same fix.
+
 ## Unfinished (handed off)
 
 - **A0 (Owner A, P0):** global hotkey (press/release) + microphone capture to WAV, wired into
