@@ -30,6 +30,8 @@ export default defineConfig({
       // aliases so Vite never has to resolve them through node_modules.
       "@polaris/agent": `${import.meta.dirname}/../agent/src/index.ts`,
       "@polaris/interfaces": `${import.meta.dirname}/../interfaces/src/index.ts`,
+      // The A9 execution seam dispatches into Owner B's chain tools.
+      "@polaris/stellar": `${import.meta.dirname}/../stellar/src/index.ts`,
     },
   },
 

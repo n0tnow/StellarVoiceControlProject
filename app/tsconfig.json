@@ -8,7 +8,8 @@
     "paths": {
       "@/*": ["./src/*"],
       "@polaris/agent": ["../agent/src/index.ts"],
-      "@polaris/interfaces": ["../interfaces/src/index.ts"]
+      "@polaris/interfaces": ["../interfaces/src/index.ts"],
+      "@polaris/stellar": ["../stellar/src/index.ts"]
     }
   },
   "include": ["src", "vite.config.ts"]

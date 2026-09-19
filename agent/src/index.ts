@@ -11,6 +11,17 @@
 export { createEventBus, PolarisEventBus, type PolarisEventHandler } from "./events.ts";
 export { AgentError, isAgentError, toAgentError, type AgentErrorKind } from "./errors.ts";
 export {
+  createAutoApprovalPlaceholder,
+  executeIntent,
+  isNotImplementedError,
+  type ApprovalDecision,
+  type ChainToolSet,
+  type ExecuteIntentOptions,
+  type ExecutionOutcome,
+  type ExecutionStatus,
+  type IntentApprover,
+} from "./execution.ts";
+export {
   describeIntent,
   MockLlm,
   runTurn,
@@ -53,6 +64,8 @@ export {
   type IntentTool,
   type ToolContext,
 } from "./tools/registry.ts";
+// Read-only MCP client scaffolding (step A9): client + config + registry bridge.
+export * as mcp from "./mcp/index.ts";
 export { noopTool, type NoopInput, type NoopOutput } from "./tools/noop.ts";
 export {
   parseSendPayment,

@@ -1,0 +1,43 @@
+/**
+ * The shell's composition root for the A9 intent execution seam.
+ *
+ * `@polaris/agent` owns the *shape* of the path (approval gate → chain tool →
+ * outcome) and knows nothing about the chain package. This file is the one place
+ * that binds that shape to the real tools, so Owner B can replace an
+ * implementation inside `@polaris/stellar` without touching the seam, the agent
+ * core or the shell.
+ *
+ * Ownership boundary: the tools below are Owner B's. Do not change their
+ * behaviour here — this module only selects and injects them. The mapping is
+ * total over the current `IntentKind` union minus `raw_tx` (which has no
+ * dedicated tool and therefore settles as `unsupported`).
+ *
+ * The approver is the clearly named A9 placeholder (auto-approve), **not** Touch
+ * ID. Replacing it with the biometric gate is the only change needed to activate
+ * the real approval flow; see `agent/src/execution.ts` for the seam contract.
+ */
+import { createAutoApprovalPlaceholder, executeIntent, type ExecutionOutcome } from "@polaris/agent";
+import type { Intent } from "@polaris/interfaces";
+
+/** The single object to replace when Touch ID lands (separate milestone). */
+const approver = createAutoApprovalPlaceholder();
+
+/**
+ * Executes one approved intent down the single seam.
+ *
+ * The chain package is imported lazily, only when an intent actually exists: its
+ * SDK is large, and a voice turn that never reaches the chain must not pay for
+ * it at shell startup. Never throws — every failure (including Owner B's
+ * `NotImplementedError` stubs) comes back as a labelled `ExecutionOutcome`, so
+ * the notch can show a short message and settle instead of crashing or hanging.
+ */
+export async function executeApprovedIntent(intent: Intent): Promise<ExecutionOutcome> {
+  const { depositTry, guardPolicy, sendPayment, swap } = await import("@polaris/stellar");
+  const chainTools = {
+    send: sendPayment,
+    swap,
+    guard_policy: guardPolicy,
+    deposit: depositTry,
+  } as const;
+  return executeIntent(intent, { approver, chainTools });
+}
