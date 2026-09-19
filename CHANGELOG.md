@@ -7,6 +7,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ## [Unreleased]
 
+### Added
+- Step A0 — push-to-talk + notch overlay: a transparent, click-through, always-on-top AppKit
+  overlay at the physical notch (safe-area geometry, centered-pill fallback) driven by the
+  typed event stream.
+- Global `control+option+space` hold-to-talk hotkey (`tauri-plugin-global-shortcut`); hold
+  records, release stops. Release never sends or submits.
+- Microphone capture (`cpal`) written to a 16-bit PCM WAV (`hound`); microphone/permission
+  failures surface as the overlay `error` state.
+- New seam types (`CaptureState`, `CaptureRecording`, `CaptureStatus`, `NotchGeometry`) and
+  `PolarisEvent` variants `capture_status` / `audio_captured`; commands `capture_start`,
+  `capture_stop`, `capture_status`, `notch_geometry`.
+
+### Removed
+- Temporary `dev_self_test` command (replaced by the real hotkey + capture path).
+
 ## [0.1.0] — 2026-09-19
 
 ### Added

@@ -43,11 +43,21 @@
 > the window, the log pane, the event plumbing and `app_info` are already in place
 > (`dev_self_test` is the temporary stand-in for the hotkey path and must be deleted
 > when A0 lands).
+>
+> 2026-09-19 — **A0 landed** (`feat/a0-push-to-talk-notch`): the shell is now the notch
+> overlay, `control+option+space` holds/releases a `cpal` capture, and `dev_self_test` is
+> gone. Build/test/typecheck/clippy are green; end-to-end microphone capture still needs a
+> human hold-and-speak check. See the A0 report.
 
-#### A0 — Test harness 🔲
-- [ ] Minimal Tauri window: a "record" button (or hotkey) + a text log pane.
-- [ ] Purpose: every later step is tested by hand through this harness, no CLI hacks.
-- **Accept:** app runs, audio captured to a file, log pane prints events.
+#### A0 — Push-to-talk + notch overlay harness ✅
+> Design pivot (2026-09-19): the dashboard/log-pane harness was replaced by the notch
+> overlay from the design reference (`notch-design.md`: "Replace the A0 dashboard"). The
+> overlay's state *is* the harness — the typed event stream drives it directly.
+- [x] Notch overlay window (transparent, click-through, always-on-top, native AppKit geometry, all Spaces) driven purely by the `polaris-event` stream (2026-09-19, branch `feat/a0-push-to-talk-notch`).
+- [x] Global push-to-talk hotkey `control+option+space`: hold = record, release = stop (no send/submit).
+- [x] Microphone capture with `cpal` → 16-bit PCM WAV (`hound`); microphone/permission failures surface as the overlay `error` state.
+- [x] Temporary `dev_self_test` deleted; `capture_start` / `capture_stop` / `capture_status` / `notch_geometry` commands added.
+- **Accept:** app runs and the overlay is positioned from real AppKit geometry (verified: idle 199×36 pt, expanded 680×66 pt on the built-in display); holding the hotkey to produce a WAV is **not yet verified by a human** — see `backlog/2026-09-19-a0-push-to-talk-notch.md`.
 
 #### A1 — STT (speech → text) 🔲
 - [ ] Model choice (decide, record in notes.md): local `whisper.cpp` (Metal) first; cloud API fallback only if quality fails.

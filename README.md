@@ -4,8 +4,8 @@
 > assistant for Stellar (hackathon track: Genesis, 19–20 Sep 2026).
 >
 > This README is refreshed by a dedicated agent at the end of every milestone
-> (see `AGENTS.md` §6). It currently describes the **skeleton** stage: the structure is
-> in place and builds; the voice pipeline is not wired yet.
+> (see `AGENTS.md` §6). It currently reflects **step A0**: the notch overlay, the global
+> push-to-talk hotkey and microphone capture to WAV are wired; STT and the chain are not.
 
 | Where things stand | |
 |---|---|
@@ -28,8 +28,8 @@ screen, and can scaffold/develop a Stellar project by voice. Scope and non-goals
 interfaces/   @polaris/interfaces — the ONLY typed seam between owners (source-only pkg)
 agent/        @polaris/agent      — agent loop, tool registry, event bus        (Owner A)
 app/          @polaris/app        — Tauri v2 desktop shell: Rust core + React UI (Owner A)
-  src/            React 19 + Vite 8 + Tailwind 4 panel, event log pane
-  src-tauri/      Rust: window, typed event stream, (later) hotkey/audio/Touch ID
+  src/            React 19 + Vite 8 + Tailwind 4 — notch overlay (A0)
+  src-tauri/      Rust: notch overlay (AppKit), global hotkey, mic→WAV, typed event stream
 stellar/      @polaris/stellar    — anchor client, protocol integration, bindings (Owner B)
 contracts/    Soroban Cargo workspace: polaris_guard (spending policy + alias book) (Owner B)
 scripts/      setup / check / dev / icon generation
@@ -69,17 +69,17 @@ Long operations are wrapped in `caffeinate -i` by the scripts (`AGENTS.md` §4).
 
 **Wired**
 - The **typed event stream**: Rust (`app/src-tauri/src/events.rs`) emits `PolarisEvent`s on the
-  `polaris-event` channel; the UI subscribes through `app/src/lib/polaris.ts` and renders them
-  in the log pane. The wire shape (snake_case type tags, camelCase fields) is pinned by Rust
-  unit tests, and the same TypeScript union lives in `interfaces/`.
-- `app_info` (version/network in the header) and the panel shell with its log pane and status.
-- The agent skeleton: tool registry + `noop` tool + loop, runnable without an API key
-  (`MockLlm`).
+  `polaris-event` channel; the UI subscribes through `app/src/lib/polaris.ts`. The wire shape
+  (snake_case type tags, camelCase fields) is pinned by Rust unit tests, and the same
+  TypeScript union lives in `interfaces/`.
+- **A0 — push-to-talk + notch overlay**: a transparent, click-through, always-on-top overlay at
+  the physical notch (AppKit geometry), driven by `idle → recording → ready` events. Hold
+  `control+option+space` to record, release to stop; `cpal` writes a 16-bit PCM WAV and
+  microphone/permission failures surface as the overlay `error` state. Release never sends.
+- `app_info` (version/network) and the agent skeleton (tool registry + `noop` + `MockLlm`).
 - `polaris_guard` contract skeleton (owner auth, per-tx limit, alias book) with unit tests.
 
 **Not wired yet** (step order in `sprints.md`)
-- hotkey + microphone capture (`A0`) — the `Hold to talk` button is disabled on purpose and
-  `dev_self_test` is a temporary stand-in for the hotkey path,
 - speech-to-text (`A1`), the real Anthropic tool-use model (`A2`), speech output (`A3`),
   screen reading (`A4`), Touch ID approval + signing (`A5`),
 - `stellar/` is stubs only: every chain tool throws `NotImplementedError` (Owner B, Milestone 3).

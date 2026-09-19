@@ -92,4 +92,27 @@
   6. `.gitignore`-d files stay clone-local; `.gitignore` itself must be identical across all clones.
 - **Status:** decided
 
+## 2026-09-19 — A0: Push-to-Talk + Notch Overlay (decisions)
+- **Idea:** Implement step A0 as the notch-companion shell (not the skeleton dashboard): a
+  transparent always-on-top overlay at the physical notch, a global hold-to-talk hotkey, and
+  microphone capture to a WAV, all driven by the typed `PolarisEvent` stream.
+- **Discussion:** The design reference's `notch-design.md` says "Replace the A0 dashboard",
+  so the skeleton's log pane is no longer rendered; the overlay's state is the harness. The
+  task's claim that `audio_captured` "already exists on main" was wrong — `main` only had the
+  `hotkey` variant — so `capture_status` and `audio_captured` were both added.
+- **Decision:**
+  1. **Hotkey:** `control+option+space` via `tauri-plugin-global-shortcut` (Carbon supports the
+     Released event on macOS). The modifier-only Ctrl+Option gesture is a separate follow-up
+     needing a native `flagsChanged` observer + Accessibility permission.
+  2. **Capture:** `cpal` on a dedicated thread (avoids `Stream: Send` per-platform questions),
+     normalized to 16-bit PCM and written with `hound`; `stop` waits briefly for finalization
+     so release yields a final `ready`.
+  3. **`ready` is not a send.** Release only stops/lands the WAV; no submit path exists in A0.
+     The wire `ready` state persists for A1, while the overlay collapses after a 6 s dwell.
+  4. **Overlay geometry from AppKit** (`safeAreaInsets` / auxiliary top areas), main-thread
+     only, with a centered-pill fallback; display changes are caught by a 2 s UI poll.
+  5. **Version pairing:** objc2 crates pinned to the generation tauri 2.11.5 already links
+     (objc2 0.6.4 / app-kit 0.3.2 / foundation 0.3.2) — verified with `cargo tree -i objc2`.
+- **Status:** decided
+
 <!-- New notes are appended chronologically at the bottom. -->
