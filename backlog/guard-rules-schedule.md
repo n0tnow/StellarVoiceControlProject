@@ -157,11 +157,117 @@ Every deviation, precisely:
 | Caps: 25 active schedules per owner, 200 globally, 10 allowed assets | `list_due` and the rule scan are iterated per call; unbounded growth is a fee-griefing DoS (Raven security.md class #10). |
 | `create_schedule` takes `runs: u32` with `interval_secs == 0 ⇒ runs == 1` | The brief's one-shot marker needed an explicit consistency rule. |
 
+## Review round 1 — CHANGES-REQUESTED, all findings resolved
+
+Reviewer verdict on `bcac4b5`: one blocker, four majors, six minors. Both decisions
+flagged for an ack (error codes at 100+, skip-don't-catch-up) were **ACKed**. The
+review was correct on every point; B1 in particular found a real design flaw I had
+missed, and the fix changed the storage layout.
+
+| Finding | Resolution | Where |
+|---|---|---|
+| **B1 (blocker)** — global schedule cap is a permanent cross-tenant DoS: 8 funded accounts × 25 far-future schedules fill the shared list, only the attacker can cancel them, and with no admin or upgrade path the sole remedy is a new contract | **Fixed.** `MAX_ACTIVE_GLOBAL` and `DataKey::ActiveScheds` removed entirely. Per-owner cap (25) kept — it is the bound that actually protects anything and one tenant cannot aim it at another. The read is bounded instead of the write, via pagination. | `ae39f7d` |
+| **M1** — `ActiveScheds` is one global read-write entry, so unrelated tenants and the keeper all serialize on it | **Fixed by the same change.** The only shared entry left is `NextSchedId`, and only `create_schedule` writes it: the keeper never contends, and two owners collide only if they create schedules in the very same ledger. Cancels and runs now touch nothing shared. | `ae39f7d` |
+| **M2** — `auto_approve_limit` is per transaction; nothing caps payment count, so "auto-approve under 10" really means "up to 200/day unattended" | **Documented.** New *"What the rule actually promises"* section states that `daily_limit` is the agent's real mandate and that app copy must say so; recommends turning on `known_recipients_only`. Per-day count cap tracked below. | `cbce058` |
+| **M3** — 10 allowed assets but one cross-asset daily counter makes `daily_limit` meaningless across decimals | **Enforced in code.** `validate_rule` rejects `allowed_assets.len() > 1` (`InvalidRule`). `MAX_ALLOWED_ASSETS` stays as the structural bound for when `Spent(owner, asset)` lands. Documented. | `2bcf399` |
+| **M4** — `pay_owner` calls an unvalidated token, so `Paid`/`spent_today` are not proof value moved | **Documented, no code change.** A post-transfer balance check would cost two more cross-contract reads per payment and still not cover a token that lies about `balance`, so it buys less than it costs. The real fix is client-side and is now a stated requirement: resolve `asset` from the owner's own allowlist, never forward an agent-supplied address into `pay_owner`. | `cbce058` |
+| **m1** — TTL extended on write but never on read, so the hottest *read* entries archive | **Fixed.** `load_rule` and the executor lookup bump their entries. Both are reached only from payment paths, which already write, so the entry is in the read-write footprint and this cannot turn a read-only call into a write. | `2bcf399` |
+| **m2** — no test asserts any event | **Fixed.** `Paid` (both `via` values), `ScheduleCreated`, `ScheduleRun` and `ScheduleCancelled` are compared against their exact XDR, filtered to the guard's own events with `filter_by_contract`. Plus a test that a rejected payment emits nothing. | `ae39f7d` |
+| **m3** — `TooManySchedules` untested; no second owner anywhere in the suite | **Fixed.** `schedule_cap_is_per_owner_and_does_not_block_other_owners` fills owner A's 25 slots, asserts the 26th fails, shows owner B scheduling and running unaffected, and shows a cancel freeing exactly one slot. `two_owners_are_fully_isolated` covers rules, executors (rejected in both directions), spend counters, daily-limit exhaustion, alias books and schedule ownership. Cancel on an unknown id also added. | `ae39f7d` |
+| **m4** — error-floor test checks 2 of 17 variants | **Fixed.** All 17 listed explicitly, with a length assertion so adding a variant forces a deliberate edit, plus the exact 100/116 endpoints. | `ae39f7d` |
+| **m5** — `ScheduleRun.next_run_at` stale on the final run | **Not fixed — deliberate.** Correcting it means either losing the last-run timestamp or adding a `last_run_at` field, which is an ABI change rippling into the keeper (PR #9) and interfaces (PR #8) for a cosmetic gain. `active: false` disambiguates. Tracked below. | — |
+| **m6** — `demo.sh` busy-waits then sleeps 6s for the ledger | **Not fixed.** Fine for a demo; a retry loop is worth it only if this ever runs in CI. Tracked below. | — |
+
+### ABI diff (for the keeper, PR #9, and interfaces, PR #8)
+
+Only one breaking change, plus one addition:
+
+| Before | After |
+|---|---|
+| `list_due(limit: u32) -> Vec<u32>` | `list_due(cursor: u32, limit: u32) -> (Vec<u32>, u32)` |
+| — | `next_schedule_id() -> u32` (new) |
+
+`list_due` now bounds the **scan**, not the result: it examines at most `limit` ids
+(clamped to 100) starting at `cursor` and returns `(due_ids, next_cursor)`, where
+`next_cursor == 0` means the sweep reached the end of the id space. A keeper sweep is
+
+```
+cursor = 0
+loop { (ids, cursor) = list_due(cursor, 100); for id in ids { execute_schedule(id) }
+       if cursor == 0 { break } }
+```
+
+Over the CLI the tuple prints as `[[1],0]`. Everything else — `execute_schedule(id)`,
+the error codes, `Schedule`, `Rule`, every payment function — is unchanged. One
+behavioural change worth knowing: `set_rule` now rejects rules with more than one
+allowed asset (`InvalidRule` / #102).
+
+### Redeploy
+
+The guard has no upgrade entrypoint, so the fix is a new contract:
+
+| | |
+|---|---|
+| New contract | `CDIWQTYA7OBF2FKLLHQWYZ2Q2L4PAEBLLMFRXVY4R7MAM45LX7Q2R2XB` |
+| Superseded | `CB5CQHV6OK6AF5ANTE7YHJ6UPG5QAIPHB6UVLRLDKNQ22VEQOHU22RYY` — marked DEPRECATED in `DEPLOYED.md` with the reason |
+| Wasm | 23,261 bytes (was 22,367) |
+| Tests | **35 passed**, 0 failed; `cargo clippy --all-targets` clean |
+
+Demo re-run against the new contract — the load-bearing lines:
+
+```
+==> 4. Agent pays 3 (inside the mandate) — EXPECT SUCCESS
+📅 CDIWQ… Event: Paid (paid), … amount: "30000000", via: "executor"
+    settled; spent today: "30000000"
+
+==> 5. Agent pays 25 (over the mandate, inside the hard caps) — EXPECT REJECTION
+❌ error: transaction simulation failed: HostError: Error(Contract, #105)
+   0: [Diagnostic Event] contract:CDIWQ…, topics:[error, Error(Contract, #105)]
+   1: [Diagnostic Event] topics:[fn_call, CDIWQ…, pay_executor],
+      data:[GB3HO3WG…, GCLBGU2P…, GARXWVNC…, CC2V2R6J…, 250000000]
+    rejected on-chain: NeedsOwnerApproval (contract error #105)
+
+==> 6. Owner signs the same payment themselves — EXPECT SUCCESS
+📅 Event: Paid (paid), … amount: "250000000", via: "owner"
+
+==> 7. … calling it early — EXPECT ScheduleNotDue
+❌ error: … Error(Contract, #110)  ->  rejected on-chain: ScheduleNotDue
+
+==> 8. keeper (neither owner nor executor) triggers the due schedule
+    due schedules according to the contract (paginated scan from cursor 0):
+[[1],0]
+📅 Event: Paid (paid), … amount: "70000000", via: "schedule"
+📅 Event: ScheduleRun, id: 1, runs_left: 0, active: false
+
+==> Result
+    payee balance:     "730000000"
+    owner spent today: "350000000"
+Demo complete.
+```
+
+(The payee balance carries over from the superseded contract's demo run on the same
+asset; `spent_today` of 350000000 is this contract's own 3 + 25 + 7 PGUSD.)
+
+### Process note
+
+The reviewer's environment tip was right and worth repeating: `cargo` is not on the
+non-interactive `PATH` here, so every run in this round used
+`PATH=$HOME/.cargo/bin:$PATH` and I verified the reported test count each time
+(28 after the M3 commit, 35 after the B1 commit) rather than trusting a silent pass.
+
+I also initially committed B1, M3 and m1 together; that commit was reset and split
+into `2bcf399` (M3 + m1) and `ae39f7d` (B1/M1) before pushing, so the history is
+atomic as the constitution requires.
+
 ## Unfinished (handed off)
 
-- **The daily limit sums all assets into one budget.** It only reads correctly when
-  `allowed_assets` holds a single stablecoin. Per-asset daily budgets are a
-  follow-up; the storage key would become `Spent(owner, asset)`.
+- **Per-asset daily budgets (`Spent(owner, asset)`).** Until they land, `set_rule`
+  refuses more than one allowed asset (review M3), so the restriction is enforced
+  rather than merely documented — but a user who wants USDC *and* EURC needs this.
+- **A per-day transaction-count cap (review M2).** `auto_approve_limit` bounds the
+  size of one unattended payment, not how many the agent makes, so the honest
+  description of the agent's mandate is `daily_limit`. A count or velocity cap would
+  let the user say "at most 5 unattended payments a day" and mean it.
 - **No pause / emergency stop on the contract.** The user's kill switch today is
   revoking the SAC allowance or `revoke_executor`, both of which work — but Raven's
   checklist asks for an explicit pause on value-bearing contracts.
@@ -172,8 +278,18 @@ Every deviation, precisely:
 - **`remove_alias` shares one `Known` marker between aliases** pointing at the same
   address, so removing either un-trusts the recipient. Documented in the code; a
   refcount would fix it.
-- **`list_due` scans up to 200 entries per call.** Fine on testnet; if the keeper
-  ever polls at high frequency, a due-time-ordered index would be cheaper.
+- **Keeper sweep cost grows with ids ever created, not schedules still active.**
+  `list_due` scans a bounded id window (<=100 entries per call) and skips holes left
+  by cancels and completed runs, so someone creating throwaway schedules raises
+  polling cost — they cannot block scheduling, which is the tradeoff chosen in
+  review B1. A due-time-ordered index, or a keeper that remembers the lowest
+  still-active id, would cut it if it ever matters.
+- **`ScheduleRun.next_run_at` is stale on a schedule's final run** (review m5).
+  `active: false` disambiguates it, but an indexer reading the field alone is
+  misled. Fixing it properly means a `last_run_at` field — an ABI change touching
+  the keeper and interfaces, not worth it for this milestone.
+- **`demo.sh` busy-waits on the wall clock then sleeps 6s** for the ledger (review
+  m6). Fine interactively; needs a retry loop before it runs in CI.
 - **No fuzz / property tests.** Raven's testing.md covers both; the daily counter
   and the schedule advance arithmetic are the obvious candidates.
 - **README / architecture.md still describe the skeleton** (`per-tx limit + alias
@@ -236,5 +352,13 @@ three concrete places.
 | 5 | `codemode.skill.read("skills.stellar-dev.agentic-payments", ["two-usdc-addresses…", "testnet-setup-shared"])` | `USDC_TESTNET_ADDRESS = CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA`, issuer `GBBD47IF…`, the G-vs-C distinction, and the explicit statement that the Circle faucet is **web-only Captcha, no API** | Confirmed my locally derived USDC SAC matches the published constant, and justified the throwaway-issuer demo asset instead of waiting on the faucet. |
 | 6 | `codemode.skill.read(..., ["file:testing.md"])`, lines 11–119 | `mock_all_auths` hides missing `require_auth` — always pair with `env.auths()` assertions or `mock_auths`; `env.auths()` returns the **most recent invocation only** and resets on any later call, so assert immediately; `env.ledger().set_timestamp`; registering a real dependency contract | Directly produced the four real-auth tests, the "assert `env.auths()` immediately after the call" discipline, and the decision to register a real SAC in the fixture rather than stub the token. |
 
-Nothing needed was missing from these sources; no "not found in these sources"
-cases arose.
+### Round 2 — the B1/M1 redesign
+
+| # | Call | What came back | What it changed |
+|---|---|---|---|
+| 7 | `codemode.skill.read("skills.stellar-dev.smart-contracts", ["file:development.md"])`, re-read for the storage and fees sections | *"Every transaction declares its read/write footprint upfront; transactions touching the same read-write entry serialize, while fine-grained keys let unrelated transactions run in parallel"*, and the per-transaction ceilings table (**200 ledger entries read / 200 written**, 400M CPU instructions) | Confirmed M1's mechanism in the source the reviewer cited, and gave the hard number behind `MAX_DUE_SCAN = 100` — half the read ceiling, leaving headroom for the rest of the footprint. |
+| 8 | `stellarDocs.search_soroban_contract_docs` ×2 — footprint/parallel execution/contention, and bounded iteration + per-transaction entry limits | Both queries surfaced `/docs/build/guides/storage/storage-strategies`, a page I had not read in round 1 | Pointed me at the canonical guidance instead of inventing a layout. |
+| 9 | `stellarDocs.get_doc_page_sections("/docs/build/guides/storage/storage-strategies")` | **Strategy 8 — "Enumeration: build the index yourself"**, three variants. Variant (a) *append-only: counter + indexed keys* — *"Appending = write index n, bump counter. Enumeration = clients loop `all_pairs(i)` for i in 0..total — **pagination is pushed to the caller, which is the point: no single transaction ever needs the whole set**"*, with Soroswap's factory as the worked example. Also: *"No key iteration exists. An unbounded Vec eventually exceeds the 64 KiB entry cap, and O(n) rewrites eventually exceed transaction budgets."* | **Decided the redesign.** The new layout is Strategy 8(a) verbatim: monotonic `NextSchedId`, one `Schedule(id)` entry, and `list_due(cursor, limit)` pushing pagination to the keeper. It also justified *not* reaching for variant (b) (double mapping + swap-and-pop): removal is O(1) there, but it reintroduces a shared mutable index, which is exactly what B1 is about. Variant (c) (events + off-chain indexer) was rejected because the keeper must be able to discover work on-chain without trusting an indexer. |
+
+Nothing needed was missing from these sources in either round; no "not found in
+these sources" cases arose.
