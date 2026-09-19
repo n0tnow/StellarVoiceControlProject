@@ -78,7 +78,7 @@ note "payee     $PAYEE ($PAYEE_KEY)"
 # 1. Allowance — the off-contract half of the design.
 # ---------------------------------------------------------------------------
 # The guard never custodies funds; it spends through SEP-41 transfer_from with
-# itself as the spender. `expiration_ledger` is set ~30 days out (17280 ledgers a
+# itself as the spender. `live_until_ledger` is set ~30 days out (17280 ledgers a
 # day at ~5s each); revoking it (amount 0) is the user's instant kill switch.
 step "1. Owner approves the guard as a SEP-41 spender"
 RPC_URL="${RPC_URL:-https://soroban-testnet.stellar.org}"
