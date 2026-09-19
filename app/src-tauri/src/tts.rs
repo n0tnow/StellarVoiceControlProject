@@ -522,6 +522,10 @@ mod tests {
     /// MPEG payload, and the exact production `speak_and_log` path writes that
     /// payload to disk, plays it through `afplay`, and prints
     /// `polaris: tts in <ms> ms via fish`.
+    ///
+    /// Passing `POLARIS_E2E_TEXT` makes it speak a caller-supplied sentence — the
+    /// A4 end-to-end check uses this to speak the confirmation the TypeScript
+    /// formatter produced for a real intent (`npm run e2e:speak -w @polaris/agent`).
     #[test]
     #[ignore = "calls the live Fish Audio API and speaks aloud; run manually with --ignored --nocapture"]
     fn manual_live_fish_synthesises_mpeg_and_speaks() {
@@ -537,11 +541,19 @@ mod tests {
             "the live test needs FISH_AUDIO_API_KEY and POLARIS_TTS_REFERENCE_ID"
         );
 
-        let sentence = "Merhaba, this is Polaris. Onaylıyor musun?";
+        // The sentence the app would speak. A driver (the A4 `e2e:speak` script)
+        // passes the real intent confirmation in `POLARIS_E2E_TEXT`; without it
+        // the fixed sentence below is used, so the test still runs standalone.
+        let sentence = crate::env::var("POLARIS_E2E_TEXT")
+            .unwrap_or_else(|| "Merhaba, this is Polaris. Onaylıyor musun?".to_string());
+        println!(
+            "polaris: live Fish voice reference_id={} sentence={sentence:?}",
+            speaker.voice_id().unwrap_or("?")
+        );
 
         // 1. The raw payload: non-empty and genuinely MPEG.
         let audio = speaker
-            .synthesize(sentence)
+            .synthesize(&sentence)
             .expect("live Fish synthesis must succeed");
         assert!(
             !audio.is_empty(),
@@ -555,6 +567,6 @@ mod tests {
         );
 
         // 2. The production path: temp file -> `afplay` -> `tts in <ms> ms via fish`.
-        speak_and_log(&speaker, sentence).expect("live Fish playback must succeed");
+        speak_and_log(&speaker, &sentence).expect("live Fish playback must succeed");
     }
 }
