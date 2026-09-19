@@ -234,10 +234,13 @@ export function createSendPayment(deps: PaymentDeps): ChainTool {
 
     const now = deps.now ? deps.now() : new Date();
     const windowSeconds = deps.timeboundSeconds ?? 300;
+    // No lower time bound (`minTime: 0`): setting it to the client's wall clock
+    // made the payment fail with `tx_too_early` whenever the ledger close time
+    // lagged the client clock (observed on testnet). The upper bound is enough.
     const unsignedXdr = new TransactionBuilder(source, {
       fee: BASE_FEE,
       networkPassphrase: deps.networkPassphrase,
-      timebounds: { minTime: now, maxTime: new Date(now.getTime() + windowSeconds * 1000) },
+      timebounds: { minTime: 0, maxTime: new Date(now.getTime() + windowSeconds * 1000) },
     })
       .addOperation(Operation.payment({ destination: entry.address, asset: toSdkAsset(spec), amount }))
       .build()
