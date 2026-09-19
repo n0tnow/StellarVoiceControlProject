@@ -18,6 +18,8 @@ import { toRawUnits } from "../guard/amount.ts";
 import { buildGuardedPaymentSummary } from "../guard/describe.ts";
 import { asGuardClientError } from "../guard/errors.ts";
 import type { GuardClient } from "../guard/types.ts";
+import { requiresApprovalCard, resolveApprovalRoute } from "../approval/routing.ts";
+import { DEFAULT_APPROVAL_PROFILE, type ApprovalProfile } from "../approval/types.ts";
 import { resolveAlias, type AliasBook } from "./aliases.ts";
 import { toSdkAsset, type AssetRegistry, type AssetSpec } from "./assets.ts";
 import { buildPaymentSummary } from "./summary.ts";
@@ -95,6 +97,13 @@ export interface PaymentDeps {
   guard?: GuardClient;
   /** Asset code -> SAC contract id used by the guard (`{ USDC: "C..." }`). */
   guardAssetContracts?: Record<string, string>;
+  /**
+   * App-side approval preference (D10). Defaults to `always_ask`: the guarded
+   * route then always takes the owner-signed `pay_owner` path, even when the
+   * chain would allow the executor. `auto_under_limit` / `custom` defer to the
+   * chain's `chooseGuardedRoute` decision. The app can only be stricter.
+   */
+  approvalProfile?: ApprovalProfile;
   /** Injected clock for deterministic time bounds in tests. */
   now?: () => Date;
   /** Transaction validity window in seconds (default 300). */
@@ -372,12 +381,18 @@ async function guardedPayment(deps: PaymentDeps, intent: PaymentIntent): Promise
   }
 
   const amountRaw = toRawUnits(amount);
-  let route: "pay_executor" | "pay_owner";
+  let chainRoute: "pay_executor" | "pay_owner";
   try {
-    route = chooseGuardedRoute({ rule, executor, amountRaw, assetContractId, recipientKnown }).route;
+    chainRoute = chooseGuardedRoute({ rule, executor, amountRaw, assetContractId, recipientKnown }).route;
   } catch (e) {
     throw guardRefusal(e);
   }
+
+  // D10: the app-side profile can only narrow the chain decision. The default
+  // is `always_ask`, so `pay_executor` is never chosen unless the owner has
+  // explicitly enabled auto-pay.
+  const profile = deps.approvalProfile ?? DEFAULT_APPROVAL_PROFILE;
+  const route = resolveApprovalRoute(profile, chainRoute);
 
   let call: Awaited<ReturnType<GuardClient["payOwner"]>>;
   try {
@@ -398,5 +413,11 @@ async function guardedPayment(deps: PaymentDeps, intent: PaymentIntent): Promise
     assetCode: spec.code,
     ...(deps.explorerBase ? { explorerBase: deps.explorerBase } : {}),
   });
+  // State the path and whether a card is required; `pay_executor` is only ever
+  // reachable after the owner enabled auto-pay (see profile above).
+  summary.lines.push(
+    `Approval profile: ${profile.mode}`,
+    `Approval card required: ${requiresApprovalCard(route) ? "yes" : "no"}`,
+  );
   return { unsignedXdr: call.unsignedXdr, summary };
 }
