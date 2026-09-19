@@ -89,6 +89,8 @@
 - [ ] **C5. (PROPOSED)** Signing option: Rust approval gate + TypeScript signing/submission (option 1) for the demo; full Rust-native signer post-hackathon
 - [ ] **C6. (PROPOSED)** Standardise signing on XDR: `SigningService.sign(payloadHash)` → `signTransaction(xdr)` — needs Owner A agreement
 - [ ] **C7.** Guard client + keeper take the contract id as a parameter (e.g. `GUARD_CONTRACT_ID`), never hard-coded, so v0.1 and v0.2 (`polaris_guard_v2`) run side by side (D9)
+- [ ] **T1.** Approval policy + `enableAutoPay(draft)` builder (`always_ask` | `auto_under_limit`), profile→on-chain mapping, `disableAutoPay()` — `stellar/src/guard/` (PLANNED) (D10/D10b/D10c; see `docs/approval-and-scheduling.md` §3, §9)
+- [ ] **T2.** Schedule tools: `schedulePayment`, `cancelSchedule`, `listSchedules` ChainTools + explicit-timezone local→UTC helper (see `docs/approval-and-scheduling.md` §5, §9)
 
 ### Voice lane (Owner A — not blocking)
 - [ ] **V1. (PROPOSED)** Merge order of the `interfaces/src/index.ts` branches: `a0` → `a1-stt` → `a1-ondevice` → `a2` → `a3` → `docs/rule-types-and-decisions` (freeze the seam after `a0`)
@@ -121,6 +123,15 @@
 - [ ] Approval-card privacy variant + batch payroll card
 - [ ] Local encrypted transaction history (key custody open question)
 - [ ] Demo talking points (privacy limits, public deposit/withdraw leg)
+
+## Milestone 3c — Approval, scheduling & suggestions 🔲
+> Design and decisions: [`docs/approval-and-scheduling.md`](docs/approval-and-scheduling.md).
+> Work items T3–T6 (T1/T2 live in Milestone 2b). D10 is the always-ask default; D11 suggestions are
+> never auto-applied; D12 (keeper hosting) is PROPOSED.
+- [ ] **T3.** Suggestions engine: pure `suggest()` + fixtures + tests — `stellar/src/suggest/` (PLANNED), offline
+- [ ] **T4.** History readers: local encrypted history store + Horizon/`Paid` events reader
+- [ ] **T5.** UI (Owner A): Settings "Security" profiles, "Upcoming payments" list with Cancel, suggestions panel with Accept/Dismiss, auto-pay enable card
+- [ ] **T6.** Demo runbook completed after T1/T2/T5 (`docs/demo-runbook.md`)
 
 ## Milestone 4 — Delivery / Presentation 🔲
 > Deadline: 20 Sep 12:00. Bonuses (passkey wallet, P2P escrow, developer mode) ONLY after M4 items are done.

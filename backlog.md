@@ -58,6 +58,12 @@
 | 2026-09-19 | Doc-only fixes: `contracts/scripts/demo.sh:81` comment (F-09) + `stellar/src/keeper/README.md:146` error example (F-10) | docs worker (W-docs) | done in this PR | [`contracts/DEPLOYED.md`](contracts/DEPLOYED.md) §Known limitations | — |
 | 2026-09-19 | Cleanup of merged worktrees/branches | coordinating agent | planned | — | P3 |
 | 2026-09-19 | `.gitignore` `node_modules/` (trailing slash) does not match a `node_modules` **symlink** | coordinating agent | planned | [`backlog/contracts-audit-review.md`](backlog/contracts-audit-review.md) §4 | P3 |
+| 2026-09-19 | **T1 — approval policy + profiles**: `approvalPolicy` routing (`always_ask` \| `auto_under_limit`), profile→on-chain mapping, `enableAutoPay(draft)` (three unsigned calls + ONE combined summary), `disableAutoPay()` | Owner B | planned | [`docs/approval-and-scheduling.md`](docs/approval-and-scheduling.md) §3, §9 | P0 |
+| 2026-09-19 | **T2 — schedule tools**: `schedulePayment`, `cancelSchedule`, `listSchedules` ChainTools + explicit-timezone local→UTC helper | Owner B | planned | [`docs/approval-and-scheduling.md`](docs/approval-and-scheduling.md) §5, §9 | P0 |
+| 2026-09-19 | **T3 — suggestions engine**: pure `suggest()` + fixtures + tests (`stellar/src/suggest/`, PLANNED) | Owner B | planned | [`docs/approval-and-scheduling.md`](docs/approval-and-scheduling.md) §6, §9 | P2 |
+| 2026-09-19 | **T4 — history readers**: local encrypted history store + Horizon/`Paid` events reader | Owner B | planned | [`docs/approval-and-scheduling.md`](docs/approval-and-scheduling.md) §6, §9 | P2 |
+| 2026-09-19 | **T5 — UI**: Settings "Security" profiles, "Upcoming payments" list with Cancel, suggestions panel with Accept/Dismiss, auto-pay enable card | Owner A | planned | [`docs/approval-and-scheduling.md`](docs/approval-and-scheduling.md) §3–§5, §9 | P1 |
+| 2026-09-19 | **T6 — demo runbook**: keeper start/rehearse/verify, scheduled-payment demo, approval-profile demo | docs worker (W-docs) | skeleton in this PR; complete after T1/T2/T5 | [`docs/demo-runbook.md`](docs/demo-runbook.md) | P1 |
 
 ## Completed Tasks (Archive)
 

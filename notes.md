@@ -167,3 +167,35 @@
 - **Status:** decided
 
 <!-- New notes are appended chronologically at the bottom. -->
+
+## 2026-09-19 — D10/D10b/D10c: Approval Profiles & Auto-Pay
+- **Decision (D10):** default approval profile = **"Always ask"** — every money-out shows an approval
+  card (+ Touch ID); nothing is auto-approved at first start.
+- **Decision (D10b):** the user can later enable **auto-pay under a threshold** by settings OR voice
+  ("don't ask me for payments under 25 USDC"); payments ≤ threshold run via `pay_executor`
+  (agent-signed) without a card, above the threshold still ask.
+- **Decision (D10c):** enabling/loosening is never silent — a voice request creates a **draft** that is
+  read back and applied only after **ONE card + Touch ID**; tightening/disabling may be done by voice
+  with read-back and the lighter confirmation; the **app preference can only be STRICTER than the
+  chain, never looser**.
+- **Pointer:** [`docs/approval-and-scheduling.md`](docs/approval-and-scheduling.md) §2–§4.
+- **Status:** decided
+
+## 2026-09-19 — D11: Local Deterministic Smart Suggestions
+- **Decision (D11):** the app analyses the user's payment history and proposes changes (auto-pay
+  threshold, daily limit, recurring → schedule); suggestions are computed **locally and
+  deterministically** (statistics) and an LLM may only phrase them.
+- **Decision:** raw history never leaves the device — only aggregates, and only if the owner allows. A
+  suggestion is **never applied automatically**; it becomes a draft through the same read-back + card +
+  Touch ID flow.
+- **Pointer:** [`docs/approval-and-scheduling.md`](docs/approval-and-scheduling.md) §6.
+- **Status:** decided
+
+## 2026-09-19 — D12 (PROPOSED): Keeper Hosting for the Demo
+- **Proposed decision (D12, awaiting user confirmation):** keeper hosting for the demo = the **same
+  Mac** as the app (`npm run keeper -w @polaris/stellar`, wrapped in `caffeinate -i`); production path
+  = an always-on small server with multiple independent keepers.
+- **Note:** the user asked what "keeper hosting" means, so the docs must explain the keeper in plain
+  words.
+- **Pointer:** [`docs/approval-and-scheduling.md`](docs/approval-and-scheduling.md) §7.
+- **Status:** open (PROPOSED — needs user confirmation)

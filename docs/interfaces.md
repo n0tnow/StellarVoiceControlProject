@@ -117,6 +117,61 @@ description). If a private mode is requested and cannot be honoured, the request
 **never** downgraded to public (fail-closed). Full rules, voice/manual split, approval-card checklist
 and JSON examples: [`docs/confidential-payments.md`](confidential-payments.md).
 
+### 6.1 Reserved — approval profiles, scheduling & suggestions
+
+> ⚠️ **RESERVED — docs-only, not yet in `interfaces/src`.** The shapes below are the fixed target for
+> the approval/auto-pay/scheduling/suggestions work. They are **provisional**, must **not** be wired
+> into product code, and must be **coordinated with Owner A before touching `interfaces/src`**.
+> Design rationale and full flows: [`docs/approval-and-scheduling.md`](approval-and-scheduling.md).
+
+```ts
+// RESERVED. Approval profile selected by the user (settings or voice). D10/D10b/D10c.
+export interface ApprovalProfile {
+  profile: "always_ask" | "auto_under_limit" | "custom"; // default "always_ask"
+  autoApproveLimit?: string; // decimal string; only for auto_under_limit / custom
+  dailyLimit?: string;       // decimal string; the agent's real mandate
+  asset?: string;
+  knownRecipientsOnly?: boolean;
+  allowance?: { amount: string; liveUntilLedger: number };
+}
+
+// RESERVED. Combined multi-action approval summary (provisional). The auto-pay enable card
+// lists three owner calls (set_executor, set_rule, SAC approve) behind ONE card + Touch ID.
+// This is a PROVISIONAL extension of TxSummary — field name and shape to be confirmed with Owner A.
+export interface TxSummary {
+  // ...existing fields (title, lines, explorerUrl, estimatedFee, privacy)...
+  actions?: Array<{
+    index: number;
+    title: string;
+    call: "set_executor" | "set_rule" | "approve" | "revoke_executor" | "create_schedule" | "cancel_schedule" | string;
+    lines: string[];
+  }>;
+}
+
+// RESERVED. Locally computed suggestion (D11). NEVER auto-applied — becomes a draft that
+// goes through read-back + card + Touch ID. Only aggregate `evidence` may reach an LLM.
+export interface Suggestion {
+  id: string;
+  kind: "auto_pay_threshold" | "daily_limit" | "schedule_from_recurrence" | "tighten_dormant" | "unusual_payment_alert";
+  title: string;
+  rationale: string;
+  evidence: { windowDays: number; count: number; median: string; p90: string; max: string; /* ... */ };
+  proposedChange: unknown; // RuleDraft | ScheduleDraft | DisableAutoPay (see approval doc)
+  confidence: "low" | "medium" | "high";
+}
+
+// RESERVED Intent kinds — already drafted by PR #8 (docs/rule-types-and-decisions), not on `main`.
+//   "set_rule" | "schedule" | "cancel_schedule"
+// Draft shapes `RuleDraft` / `ScheduleDraft` (speech-derived, read back, then signed) are
+// owned by that work; see docs/approval-and-scheduling.md §3-§5.
+```
+
+**Semantics:** `profile` absent = `"always_ask"` (D10 default). The app-side preference may only be
+**stricter** than the on-chain rule, never looser. `TxSummary.actions` (provisional) renders the
+combined auto-pay enable card; `TxSummary` already exists as the Rust mirror
+`app/src-tauri/src/types.rs`. Intent kinds `set_rule` / `schedule` / `cancel_schedule` are reserved by
+PR #8 and are not on `main` yet.
+
 ## 7. Known drift
 
 From `backlog/2026-09-19-slice-gap-analysis.md` §A.1. Tracked, **not yet fixed**:
