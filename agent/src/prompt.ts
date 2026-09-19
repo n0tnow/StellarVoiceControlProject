@@ -57,13 +57,15 @@ export const POLARIS_SYSTEM_PROMPT = [
 ].join("\n");
 
 /**
- * Pins the recogniser-detected language into the system prompt (step A12).
+ * Passes the recogniser-detected language to the model as a hint (step A12,
+ * reframed in A14).
  *
- * Once STT tells us what the user spoke, the model should not have to guess: the
- * A11 bug was exactly a bad guess poisoning the reply. This appends one explicit
- * instruction naming the detected language. It is a no-op when detection is
- * unavailable, so a backend that cannot report a language still gets the
- * original prompt and the model's own report remains the fallback.
+ * A14 inverted the precedence: the model's judgement of the **transcript text**
+ * decides the reply language, because the A14 real run had Whisper return
+ * correct English text labelled `tr`. So this is now worded as a hint, not an
+ * order: the model is told what the recogniser guessed and is explicitly
+ * allowed to override it when the transcript reads as another language. It is
+ * a no-op when detection is unavailable.
  */
 export function withDetectedLanguage(system: string, language?: string): string {
   if (!language) {
@@ -72,8 +74,10 @@ export function withDetectedLanguage(system: string, language?: string): string 
   return [
     system,
     "",
-    `The recogniser detected the user's spoken language as "${language}".`,
-    `Reply in exactly that language and set the language field/tag to it.`,
+    `The recogniser guessed the user's spoken language as "${language}" from the audio.`,
+    `That guess is often wrong for short, code-switched commands — judge from the` +
+      ` transcript text instead, and set the language field/tag to the language the` +
+      ` text is actually written in.`,
   ].join("\n");
 }
 

@@ -5,6 +5,12 @@
  *   npm run e2e:speak -w @polaris/agent -- "hello can you hear me"  # answer
  *   POLARIS_E2E_WAV=/path/clip.wav npm run e2e:speak -w @polaris/agent
  *
+ * Step A14 adds an optional `POLARIS_E2E_STT_LANG` override so the owner's
+ * real failing case — correct English text that Whisper still labelled `tr` —
+ * can be reproduced without a microphone:
+ *
+ *   POLARIS_E2E_STT_LANG=tr npm run e2e:speak -w @polaris/agent -- "Can you send 400$ to Bilal?"
+ *
  * It chains the actual halves the app runs, with no stubs:
  *
  *   0. (A12, optional) when `POLARIS_E2E_WAV` is set, the real Groq STT backend
@@ -103,8 +109,10 @@ if (!wavPath && !argumentTranscript) {
 
 // Step A12: when an audio file is given, the real STT half runs first, so the
 // transcript AND its detected language come from the audio rather than argv.
+// Step A14: `POLARIS_E2E_STT_LANG` injects the STT label directly (no mic), so
+// the mislabel case can be reproduced: English text tagged `tr`.
 let transcript = argumentTranscript;
-let detectedLanguage: string | undefined;
+let detectedLanguage = process.env.POLARIS_E2E_STT_LANG?.trim() || undefined;
 if (wavPath) {
   console.error(`transcribing ${wavPath} through the real Groq STT backend…`);
   const stt = await transcribeAudio(wavPath);
@@ -112,6 +120,9 @@ if (wavPath) {
   detectedLanguage = stt.language;
   console.log(`stt: ${stt.ms} ms, detected language=${stt.language ?? "(unknown)"}`);
   console.log(`transcript: ${JSON.stringify(stt.text)}`);
+}
+if (detectedLanguage) {
+  console.error(`STT language hint handed to the agent: ${detectedLanguage}`);
 }
 
 

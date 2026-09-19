@@ -53,9 +53,11 @@ pub struct Transcription {
     /// on-device recognizer can only report the locale it was pinned to. `None`
     /// means "unknown" — it is never guessed here.
     ///
-    /// This is the value that must drive the reply language and the TTS voice:
-    /// it is measured from the audio, whereas the model's self-report is an
-    /// inference about its own output.
+    /// Since A14 this is a **hint**, not the decision: the model's judgement of
+    /// the transcript text decides the reply language and the TTS voice, because
+    /// Whisper's audio-level label was observed labelling correct English text
+    /// `tr`. The value is still worth carrying — it is passed to the model as a
+    /// hint and is the fallback when the model reports nothing.
     pub language: Option<String>,
 }
 
@@ -465,8 +467,12 @@ fn handle(
             // audio. The supersede can happen while this worker is blocked on
             // the backend, so re-check now, after transcription.
             if capture.is_current(&recording) {
+                // A14: `[lang …]` is the recogniser's audio-level GUESS and is
+                // only a hint — short, code-switched English is often tagged
+                // `tr`. The model's judgement of the text decides the reply
+                // language; the agent logs when the two disagree.
                 println!(
-                    "polaris: transcript in {elapsed_ms} ms (audio {} ms) via {} [lang {}]: {}",
+                    "polaris: transcript in {elapsed_ms} ms (audio {} ms) via {} [stt-lang hint {}]: {}",
                     recording.duration_ms,
                     backend.name(),
                     transcription.language.as_deref().unwrap_or("-"),

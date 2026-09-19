@@ -54,9 +54,9 @@ export interface AgentTurnOptions {
   toolContext?: Partial<ToolContext>;
   /**
    * The STT-detected language of the audio (step A12), as a BCP-47 tag. It is
-   * pinned into the prompt so the model answers in it, and it is the
-   * authoritative language for the reply and the TTS voice — the model's own
-   * report is only the fallback (`resolveTurnLanguage`).
+   * passed to the model as a **hint** in the prompt, and it is only the
+   * fallback for the reply/TTS language: the model's own assessment of the
+   * transcript text wins (`resolveTurnLanguage`, inverted in A14).
    */
   transcriptLanguage?: string;
 }
@@ -70,7 +70,7 @@ export interface AgentTurnResult {
   intentTool?: string;
   /** The reconciled turn language, forwarded to speech (steps A11/A12). */
   language?: string;
-  /** Which side decided `language`: the audio detector or the model. */
+  /** Which side decided `language`: the model or the audio detector. */
   languageSource?: "stt" | "model";
 }
 
@@ -112,13 +112,14 @@ export async function runTurn(options: AgentTurnOptions): Promise<AgentTurnResul
     bus.emit({ type: "agent_status", stage: "thinking" });
     const first = await llm.turn({ transcript, system, tools: registry.definitions() });
 
-    // A12: the audio-detected language is authoritative; the model's own report
-    // is only the fallback. Say which won when the two disagree.
+    // A14: the model's assessment of the transcript text is authoritative; the
+    // STT label is a hint kept as the fallback. Say which won when the two
+    // disagree, so the owner can see the detector's error rate.
     const language = resolveTurnLanguage(options.transcriptLanguage, first.language);
     if (language.disagreed) {
       console.warn(
         `language disagreement: STT detected "${language.detected}" but the model reported ` +
-          `"${language.reported}" — using the detected language (measured from the audio)`,
+          `"${language.reported}" — using the model's report (judged from the transcript text)`,
       );
     }
 

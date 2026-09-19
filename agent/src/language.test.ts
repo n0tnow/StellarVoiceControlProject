@@ -41,32 +41,42 @@ test("a language on a tool call input wins, and malformed inputs are ignored", (
   assert.equal(languageFromToolCalls([{ input: "a string" }, { input: { amount: "5" } }]), undefined);
 });
 
-test("the detected language wins over the model's report (step A12)", () => {
-  // The A11 bug: the model claimed English while the audio (and the garbled
-  // transcript) was actually Turkish — or the reverse. The detector reads the
-  // audio, so it decides.
+test("the model's report wins over the STT label (step A14)", () => {
+  // The A14 finding: Whisper labelled correct English text `tr`, so trusting
+  // the audio detector produced a Turkish reply to an English command.
   const decision = resolveTurnLanguage("tr-TR", "en");
-  assert.equal(decision.language, "tr-tr");
-  assert.equal(decision.source, "stt");
+  assert.equal(decision.language, "en");
+  assert.equal(decision.source, "model");
   assert.equal(decision.disagreed, true);
   assert.equal(decision.detected, "tr-tr");
   assert.equal(decision.reported, "en");
 });
 
-test("agreement keeps the detected language and is not a disagreement", () => {
-  const decision = resolveTurnLanguage("en-US", "en");
-  assert.equal(decision.language, "en-us");
-  assert.equal(decision.source, "stt");
-  assert.equal(decision.disagreed, false);
+test("the real A14 failing transcript answers in English (step A14)", () => {
+  // `transcript in 479 ms (audio 2560 ms) via stt [lang tr]: Can you send 400$ to Bilal?`
+  // — the text is plainly English while the STT label says Turkish. The model
+  // read the transcript and reported `en`; English must win for both the reply
+  // and the TTS voice.
+  const decision = resolveTurnLanguage("tr", "en");
+  assert.equal(decision.language, "en");
+  assert.equal(decision.source, "model");
+  assert.equal(decision.disagreed, true);
 });
 
-test("the model's report is the fallback only when nothing was detected", () => {
-  const decision = resolveTurnLanguage(undefined, "en");
+test("agreement keeps the model's report and is not a disagreement", () => {
+  const decision = resolveTurnLanguage("en-US", "en");
   assert.equal(decision.language, "en");
   assert.equal(decision.source, "model");
   assert.equal(decision.disagreed, false);
+});
+
+test("the STT label is the fallback only when the model reports nothing", () => {
+  const decision = resolveTurnLanguage("tr-TR", undefined);
+  assert.equal(decision.language, "tr-tr");
+  assert.equal(decision.source, "stt");
+  assert.equal(decision.disagreed, false);
   // Garbage on either side is not a language.
-  assert.deepEqual(resolveTurnLanguage("not a tag", undefined), {
+  assert.deepEqual(resolveTurnLanguage(undefined, "not a tag"), {
     source: "none",
     disagreed: false,
   });

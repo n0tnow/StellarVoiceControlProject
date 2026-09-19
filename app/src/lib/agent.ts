@@ -85,7 +85,7 @@ export interface AgentOutcome {
   executedTools: string[];
   /** Reconciled BCP-47 language of the turn (steps A11/A12); drives the voice. */
   language?: string;
-  /** Which side decided `language`: the audio detector or the model. */
+  /** Which side decided `language`: the model or the audio detector. */
   languageSource?: "stt" | "model";
   /** Measured end-to-end around `runTurn`, mirroring A1's latency line. */
   latencyMs: number;
@@ -142,8 +142,8 @@ export interface AgentTurnHooks {
  * the full detail. An intent is logged with its latency, like A1's transcript.
  *
  * `transcriptLanguage` is the STT-detected language of the audio (step A12). It
- * is pinned into the prompt and is the authoritative reply/voice language; the
- * agent core reconciles it against the model's own report.
+ * is passed to the model as a hint and is the fallback reply/voice language; the
+ * agent core lets the model's own report win (inverted in A14).
  *
  * The optional `hooks` only observe; they never change the turn's outcome. The
  * subscription is removed in `finally`, so a hook cannot leak across turns.

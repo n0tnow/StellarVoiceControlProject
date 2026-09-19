@@ -7,12 +7,16 @@
  * recogniser was pinned to `tr-TR`, so English speech was transcribed as garbled
  * Turkish and every downstream guess was poisoned (A12).
  *
- * Step A12 puts the **detected** language — measured from the audio by the STT
- * backend — in charge. `resolveTurnLanguage` is the one place the detected and
- * model-reported languages are reconciled: the detected language wins because it
- * is evidence about what the user actually said, while the model's report is an
- * inference about its own output. The model's report is only a fallback when the
- * backend could not detect a language at all.
+ * Step A12 put the **detected** language — measured from the audio by the STT
+ * backend — in charge. Step A14 inverts that: the owner's real run showed the
+ * detector is the weaker evidence. Whisper transcribed correct English text and
+ * still tagged it `tr`, because a Turkish speaker's short, code-switched
+ * utterances (names, currency symbols) are exactly where audio-level language ID
+ * fails. `resolveTurnLanguage` is the one place the two are reconciled, and the
+ * **model's assessment of the transcript now wins**: the transcript text is the
+ * better evidence of which language to answer in, while the STT label is an
+ * audio-level guess. The STT label is kept as a hint/tiebreaker and is used only
+ * when the model reports nothing.
  *
  * Two provider-agnostic rules carry a model's *own* decision out of its output
  * (kept from A11):
@@ -91,24 +95,27 @@ export function languageFromToolCalls(
 export interface LanguageDecision {
   /** The language used for the reply sentence and the TTS voice. */
   language?: string;
-  /** `stt` (detected from the audio) wins over `model` (reported) when both are known. */
+  /** `model` (judging the transcript text) wins over `stt` (the audio detector). */
   source: "stt" | "model" | "none";
   /** The normalized STT-detected language, when the backend reported one. */
   detected?: string;
   /** The normalized model-reported language, when the model reported one. */
   reported?: string;
-  /** True when both were known and differed; the detected language won. */
+  /** True when both were known and differed; the model's report won. */
   disagreed: boolean;
 }
 
 /**
- * Reconciles the STT-detected language with the model's self-report (step A12).
+ * Reconciles the STT-detected language with the model's self-report (steps
+ * A12/A14).
  *
- * Rule and rationale: **the detected language wins**. It is measured from the
- * audio the user actually spoke, whereas the model's report is an inference
- * about its own output and can be dragged wrong by a bad transcript (the exact
- * A11 failure). The model's report is used only when the backend detected
- * nothing (e.g. a recognizer that cannot report a language). `disagreed` is
+ * Rule and rationale (inverted in A14): **the model's report wins**. The model
+ * read the transcript text, and the transcript is the stronger evidence of which
+ * language to answer in — the A14 real run had Whisper return correct English
+ * text tagged `tr`, so trusting the audio label produced a Turkish reply to an
+ * English command. The STT label is still kept: it is passed to the model as a
+ * hint in the prompt, and it is the fallback when the model reports nothing
+ * (e.g. a provider that ignores the language instruction). `disagreed` is
  * surfaced so the caller can log which side won and why rather than silently
  * picking one. The comparison is on the **base** language (`en-US` vs `en` is
  * agreement, not a disagreement), because the region never changes the voice.
@@ -123,17 +130,17 @@ export function resolveTurnLanguage(
   const reportedBase = languageBase(normalizedReported);
   const disagreed =
     detectedBase !== undefined && reportedBase !== undefined && detectedBase !== reportedBase;
-  if (normalizedDetected !== undefined) {
+  if (normalizedReported !== undefined) {
     return {
-      language: normalizedDetected,
-      source: "stt",
-      detected: normalizedDetected,
-      ...(normalizedReported !== undefined ? { reported: normalizedReported } : {}),
+      language: normalizedReported,
+      source: "model",
+      ...(normalizedDetected !== undefined ? { detected: normalizedDetected } : {}),
+      reported: normalizedReported,
       disagreed,
     };
   }
-  if (normalizedReported !== undefined) {
-    return { language: normalizedReported, source: "model", reported: normalizedReported, disagreed: false };
+  if (normalizedDetected !== undefined) {
+    return { language: normalizedDetected, source: "stt", detected: normalizedDetected, disagreed: false };
   }
   return { source: "none", disagreed: false };
 }

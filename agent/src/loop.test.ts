@@ -197,31 +197,33 @@ class CapturingLlm implements AgentLlm {
   }
 }
 
-test("the STT-detected language wins over the model's report (step A12)", async () => {
-  const llm = new CapturingLlm({ text: "Tamam.", toolCalls: [], language: "en" });
+test("the model's report wins over the STT label (step A14)", async () => {
+  const llm = new CapturingLlm({ text: "I can hear you.", toolCalls: [], language: "en" });
   const result = await runTurn({
-    transcript: "merhaba",
+    transcript: "Can you send 400$ to Bilal?",
     registry: createDefaultRegistry(),
     llm,
     bus: createEventBus(),
-    transcriptLanguage: "tr-TR",
+    transcriptLanguage: "tr",
   });
-  // The audio was Turkish; the model's own "en" is discarded.
-  assert.equal(result.language, "tr-tr");
-  assert.equal(result.languageSource, "stt");
-  // The detected language is pinned into the prompt handed to the provider.
-  assert.match(llm.system ?? "", /detected the user's spoken language as "tr-TR"/);
-});
-
-test("the model's report is used only when STT detected nothing", async () => {
-  const result = await runTurn({
-    transcript: "hello",
-    registry: createDefaultRegistry(),
-    llm: new ScriptedLlm({ text: "Hi.", toolCalls: [], language: "en" }),
-    bus: createEventBus(),
-  });
+  // The A14 real run: Whisper tagged correct English text `tr`; the model read
+  // the transcript and reported `en`, which is what the turn must use.
   assert.equal(result.language, "en");
   assert.equal(result.languageSource, "model");
+  // The STT label is still handed to the model as a hint it may override.
+  assert.match(llm.system ?? "", /recogniser guessed the user's spoken language as "tr"/);
+});
+
+test("the STT label is used only when the model reports nothing", async () => {
+  const result = await runTurn({
+    transcript: "merhaba",
+    registry: createDefaultRegistry(),
+    llm: new ScriptedLlm({ text: "Tamam.", toolCalls: [] }),
+    bus: createEventBus(),
+    transcriptLanguage: "tr-TR",
+  });
+  assert.equal(result.language, "tr-tr");
+  assert.equal(result.languageSource, "stt");
 });
 
 test("a provider failure propagates and emits an error event", async () => {
