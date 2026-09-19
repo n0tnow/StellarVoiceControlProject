@@ -38,6 +38,12 @@ pub enum PolarisEvent {
     Hotkey {
         state: HotkeyState,
     },
+    /// Accessibility trust for the modifier-only Control+Option gesture (step
+    /// A0 follow-up). `trusted: false` disables that gesture by design and
+    /// leaves the Control+Option+Space shortcut as the only trigger.
+    HotkeyPermission {
+        trusted: bool,
+    },
     /// Full capture snapshot on every transition (step A0). The UI's overlay is
     /// driven from this alone, so it must be emitted on *every* state change.
     CaptureStatus {
@@ -81,6 +87,7 @@ impl PolarisEvent {
     pub fn kind(&self) -> &'static str {
         match self {
             Self::Hotkey { .. } => "hotkey",
+            Self::HotkeyPermission { .. } => "hotkey_permission",
             Self::CaptureStatus { .. } => "capture_status",
             Self::AudioCaptured { .. } => "audio_captured",
             Self::Transcript { .. } => "transcript",
@@ -129,6 +136,12 @@ mod tests {
             json,
             r#"{"type":"tx_submitted","hash":"abc","explorerUrl":"https://stellar.expert/x"}"#
         );
+    }
+
+    #[test]
+    fn hotkey_permission_matches_the_ts_union() {
+        let json = serde_json::to_string(&PolarisEvent::HotkeyPermission { trusted: false }).unwrap();
+        assert_eq!(json, r#"{"type":"hotkey_permission","trusted":false}"#);
     }
 
     #[test]

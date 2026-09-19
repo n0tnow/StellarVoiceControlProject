@@ -2519,6 +2519,8 @@ dependencies = [
 name = "polaris-app"
 version = "0.1.0"
 dependencies = [
+ "block2",
+ "core-foundation",
  "cpal",
  "hound",
  "objc2",

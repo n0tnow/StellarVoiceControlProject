@@ -129,6 +129,12 @@ export type AgentStage = "thinking" | "tool_call" | "awaiting_approval" | "done"
 
 export type PolarisEvent =
   | { type: "hotkey"; state: HotkeyState }
+  /**
+   * Accessibility trust for the modifier-only Control+Option gesture. `trusted:
+   * false` disables that gesture by design and leaves Control+Option+Space as
+   * the only trigger.
+   */
+  | { type: "hotkey_permission"; trusted: boolean }
   | { type: "capture_status"; status: CaptureStatus }
   | { type: "audio_captured"; path: string; durationMs: number }
   | { type: "transcript"; text: string; final: boolean }

@@ -2,7 +2,12 @@ import { useEffect, useState, type CSSProperties } from "react";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import type { CaptureStatus, NotchGeometry } from "@polaris/interfaces";
 
-import { getCaptureStatus, getNotchGeometry, listenPolarisEvents } from "@/lib/polaris";
+import {
+  getCaptureStatus,
+  getHotkeyPermission,
+  getNotchGeometry,
+  listenPolarisEvents,
+} from "@/lib/polaris";
 
 const FALLBACK_GEOMETRY: NotchGeometry = {
   idleWidth: 216,
@@ -30,6 +35,13 @@ const GEOMETRY_POLL_MS = 2000;
 const RECONNECT_MS = 3000;
 
 /**
+ * How long the one-time "Accessibility needed" hint stays expanded after the
+ * overlay connects. The macOS consent dialog is the primary, non-modal signal;
+ * this is the in-shell echo of it.
+ */
+const PERMISSION_HINT_MS = 8000;
+
+/**
  * Polaris notch overlay (step A0).
  *
  * The shell is a pure function of the `capture_status` event stream: idle ->
@@ -43,6 +55,8 @@ export default function App() {
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
+  const [hotkeyTrusted, setHotkeyTrusted] = useState<boolean | null>(null);
+  const [permissionHint, setPermissionHint] = useState(false);
 
   useEffect(() => {
     let disposed = false;
@@ -59,15 +73,21 @@ export default function App() {
           if (event.type === "capture_status") {
             receivedStatus = true;
             setStatus(event.status);
+          } else if (event.type === "hotkey_permission") {
+            setHotkeyTrusted(event.trusted);
           }
         });
         if (disposed) {
           unlisten();
           return;
         }
-        const snapshot = await getCaptureStatus();
+        const [snapshot, trusted] = await Promise.all([
+          getCaptureStatus(),
+          getHotkeyPermission(),
+        ]);
         if (!disposed) {
           if (!receivedStatus) setStatus(snapshot);
+          setHotkeyTrusted(trusted);
           setConnected(true);
           setConnectionError(null);
         }
@@ -114,29 +134,48 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [status]);
 
+  // One-time, non-modal echo of the macOS Accessibility consent dialog. The
+  // system dialog is the primary signal; this expands the shell briefly so the
+  // user sees that Control+Option is unavailable and the shortcut still works.
+  useEffect(() => {
+    if (!connected || hotkeyTrusted !== false) {
+      setPermissionHint(false);
+      return;
+    }
+    setPermissionHint(true);
+    const timer = setTimeout(() => setPermissionHint(false), PERMISSION_HINT_MS);
+    return () => clearTimeout(timer);
+  }, [connected, hotkeyTrusted]);
+
   const state = connectionError ? "error" : status.state;
   const visual = state === "ready" && collapsed ? "idle" : state;
-  const expanded = visual !== "idle" || !connected;
+  // One-time hint echo of the macOS Accessibility dialog; only replaces the
+  // idle pill, never a real recording/ready/error state.
+  const showPermissionHint =
+    permissionHint && connected && hotkeyTrusted === false && state === "idle";
+  const expanded = visual !== "idle" || !connected || showPermissionHint;
   const error = connectionError ?? status.error;
   const durationMs = status.recording?.durationMs ?? 0;
 
-  const label =
-    state === "recording"
+  const label = showPermissionHint
+    ? "Enable hold-to-talk"
+    : state === "recording"
       ? "Listening"
       : state === "ready"
         ? "Ready to send"
         : state === "error"
           ? "Recording unavailable"
           : "Connecting";
-  const detail =
-    connectionError
+  const detail = showPermissionHint
+    ? "System Settings › Privacy & Security › Accessibility"
+    : connectionError
       ? "Reconnecting…"
       : state === "error"
-        ? "Hold ⌃⌥ Space to retry"
+        ? "Hold ⌃⌥ to retry, or ⌃⌥ Space"
         : state === "ready"
-          ? `${(durationMs / 1000).toFixed(1)}s · Hold ⌃⌥ Space to re-record`
+          ? `${(durationMs / 1000).toFixed(1)}s · Hold ⌃⌥ to re-record`
           : state === "recording"
-            ? "Release ⌃⌥ Space when you are done"
+            ? "Release ⌃ or ⌥ when you are done"
             : "Starting up…";
 
   const style = {
@@ -157,7 +196,7 @@ export default function App() {
         aria-label={
           expanded
             ? `${label}. ${detail}`
-            : "Polaris ready. Hold Control, Option and Space to record."
+            : "Polaris ready. Hold Control and Option to record, or hold Control, Option and Space."
         }
       >
         <div className="notch-content" aria-hidden={!expanded}>
@@ -181,7 +220,7 @@ export default function App() {
       >
         {expanded
           ? `${label}. ${detail}. ${error ?? ""}`
-          : "Ready. Hold Control, Option and Space to record. Release to prepare your recording."}
+          : "Ready. Hold Control and Option to record, or Control, Option and Space. Release to prepare your recording."}
       </span>
     </main>
   );

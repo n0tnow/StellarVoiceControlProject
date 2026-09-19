@@ -27,6 +27,15 @@ export async function getCaptureStatus(): Promise<CaptureStatus> {
   return invoke<CaptureStatus>("capture_status");
 }
 
+/**
+ * Accessibility trust for the modifier-only gesture. Read on startup because
+ * the matching `hotkey_permission` event is emitted during Rust setup, before
+ * the webview listener attaches.
+ */
+export async function getHotkeyPermission(): Promise<boolean> {
+  return invoke<boolean>("hotkey_permission");
+}
+
 /** Programmatic capture start — the global hotkey drives the same engine. */
 export async function captureStart(): Promise<CaptureStatus> {
   return invoke<CaptureStatus>("capture_start");
@@ -91,6 +100,17 @@ export function describeEvent(event: PolarisEvent): Omit<LogLine, "id" | "at"> {
         origin: "rust",
         title: event.state === "down" ? "Hotkey pressed" : "Hotkey released",
         tone: "accent",
+      };
+    case "hotkey_permission":
+      return {
+        origin: "rust",
+        title: event.trusted
+          ? "Hold-to-talk enabled (Control+Option)"
+          : "Hold-to-talk needs Accessibility access",
+        detail: event.trusted
+          ? undefined
+          : "Control+Option is disabled; Control+Option+Space still works",
+        tone: event.trusted ? "ok" : "warn",
       };
     case "capture_status":
       return {

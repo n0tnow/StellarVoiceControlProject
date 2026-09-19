@@ -38,5 +38,11 @@ objc2-app-kit = { version = "0.3", features = ["NSScreen", "NSWindow"] }
 # `NSGeometry` carries NSPoint/NSRect/NSSize/NSEdgeInsets; `NSEnumerator`
 # unlocks NSArray::iter, used to scan screens for the notched display.
 objc2-foundation = { version = "0.3", features = ["NSEnumerator", "NSGeometry"] }
+# Modifier-only Control+Option hold: an `NSEvent` flagsChanged monitor pair
+# needs the Objective-C block runtime (`block2`, already a default feature of
+# objc2-app-kit for NSEvent) and a CoreFoundation dictionary for the
+# Accessibility consent prompt.
+block2 = "0.6"
+core-foundation = "0.10"
 
 # Step A5 will add: security-framework (Keychain) + objc2-local-authentication (Touch ID).
