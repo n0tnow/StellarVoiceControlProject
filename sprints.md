@@ -37,6 +37,10 @@
 > acceptance test passes and is demoed. Each step is its own branch + PR + review.
 
 ### M2 — Progress log
+> 2026-09-19 — **A0 landed (code)** (`feat/a0-harness`): push-to-talk is real now — hotkey
+> (Ctrl+Option+Space) or button → `cpal` capture → WAV in app-data `recordings/` →
+> `audio_captured` event in the log pane. Acceptance demo pending; A1 (whisper.cpp STT) is
+> next and reads exactly these WAV files.
 > 2026-09-19 — **Skeleton landed** (`feat/monorepo-skeleton`): all four layers exist and
 > build (`make check`), and the shell already carries the typed `polaris-event` stream
 > from Rust to the log pane. Because of that, **A0 shrinks to audio capture + hotkey**:
@@ -44,10 +48,11 @@
 > (`dev_self_test` is the temporary stand-in for the hotkey path and must be deleted
 > when A0 lands).
 
-#### A0 — Test harness 🔲
-- [ ] Minimal Tauri window: a "record" button (or hotkey) + a text log pane.
-- [ ] Purpose: every later step is tested by hand through this harness, no CLI hacks.
+#### A0 — Test harness ✅ (code complete — manual demo pending)
+- [x] Minimal Tauri window: a "record" button (or hotkey) + a text log pane.
+- [x] Purpose: every later step is tested by hand through this harness, no CLI hacks.
 - **Accept:** app runs, audio captured to a file, log pane prints events.
+  > 2026-09-19 — implemented on `feat/a0-harness`: global hotkey **Ctrl+Option+Space** (user-configurable later, default in `audio::DEFAULT_HOTKEY`) + button fallback, `cpal` → WAV in the OS app-data `recordings/`, new additive `audio_captured` seam event, temporary `dev_self_test` deleted. Unit tests (WAV round trip, duration math, wire shape) + typecheck + vite build + cargo check green. **The manual GUI acceptance demo (hold → speak → release → file + log lines) is still owed by the user; A1 must not start before it.**
 
 #### A1 — STT (speech → text) 🔲
 - [ ] Model choice (decide, record in notes.md): local `whisper.cpp` (Metal) first; cloud API fallback only if quality fails.

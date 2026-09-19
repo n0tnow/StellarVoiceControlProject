@@ -7,6 +7,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ## [Unreleased]
 
+### Added
+- Step A0 harness: global push-to-talk hotkey **Ctrl+Option+Space** (default; fully
+  user-configurable in a later settings step), hold-to-talk button fallback, microphone
+  capture to 16-bit WAV via `cpal` + `hound` (files in the OS app-data `recordings/` dir),
+  and the additive `audio_captured` `PolarisEvent` variant (seam doc bumped to v0.2).
+- `NSMicrophoneUsageDescription` for the bundled macOS app.
+
+### Changed
+- The temporary `dev_self_test` command was removed now that real push-to-talk exists;
+  the UI's recording indicator is driven by wire events, not local state alone.
+
 ## [0.1.0] — 2026-09-19
 
 ### Added

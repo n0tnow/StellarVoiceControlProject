@@ -65,6 +65,10 @@ python3 scripts/generate-icons.py --check   # verify the committed icon set
 
 Long operations are wrapped in `caffeinate -i` by the scripts (`AGENTS.md` §4).
 
+> First `make dev` run: macOS asks for **microphone permission**. Dev builds run unbundled,
+> so the prompt is attributed to your terminal app — grant it once. The bundled app carries
+> `NSMicrophoneUsageDescription` in its `Info.plist`.
+
 ## What is wired today (and what is not)
 
 **Wired**
@@ -72,15 +76,18 @@ Long operations are wrapped in `caffeinate -i` by the scripts (`AGENTS.md` §4).
   `polaris-event` channel; the UI subscribes through `app/src/lib/polaris.ts` and renders them
   in the log pane. The wire shape (snake_case type tags, camelCase fields) is pinned by Rust
   unit tests, and the same TypeScript union lives in `interfaces/`.
+- **Push-to-talk (step A0)**: hold the global hotkey **Ctrl+Option+Space** (default — a
+  user-facing hotkey picker comes later) or hold the in-app button. Each push records the
+  microphone via `cpal` and writes a 16-bit WAV to the OS app-data `recordings/` directory
+  (never the repo); the resulting `audio_captured` event shows path + duration in the log pane.
 - `app_info` (version/network in the header) and the panel shell with its log pane and status.
 - The agent skeleton: tool registry + `noop` tool + loop, runnable without an API key
   (`MockLlm`).
 - `polaris_guard` contract skeleton (owner auth, per-tx limit, alias book) with unit tests.
 
 **Not wired yet** (step order in `sprints.md`)
-- hotkey + microphone capture (`A0`) — the `Hold to talk` button is disabled on purpose and
-  `dev_self_test` is a temporary stand-in for the hotkey path,
-- speech-to-text (`A1`), the real Anthropic tool-use model (`A2`), speech output (`A3`),
+- speech-to-text (`A1`) — will transcribe exactly the WAV files A0 produces,
+- the real Anthropic tool-use model (`A2`), speech output (`A3`),
   screen reading (`A4`), Touch ID approval + signing (`A5`),
 - `stellar/` is stubs only: every chain tool throws `NotImplementedError` (Owner B, Milestone 3).
 

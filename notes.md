@@ -66,6 +66,19 @@
 - **Follow-ups (docs):** `docs/architecture.md` facts to correct: Raven ownership/canonical host, `skills.*` family missing from the MCP catalog list, LumenLoop auth, Scout tool count, SEP-38 field names, SEP-6 amount units.
 - **Status:** open (follow-ups: deadline/criteria verification, architecture.md corrections)
 
+## 2026-09-19 — Step A0: Push-to-Talk Harness (hotkey + mic)
+- **Idea:** Land the A0 harness so every later step is demoed through a real push-to-talk path instead of a self-test stub: hold a global hotkey (or the on-screen button), speak, release, and see the recording land as a log line.
+- **Discussion:** Implemented on `feat/a0-harness` directly by the coordinating agent (same as the skeleton, per the user's standing instruction). The seam grew by one additive variant (`audio_captured`), which per `docs/interfaces.md` §5 requires Owner B's eyes in PR review — flagged in the PR body and the doc header.
+- **Decision:**
+  1. **Default hotkey: Ctrl+Option+Space** (`ctrl+alt+space`). Product direction recorded for later: **everything must become user-configurable** (hotkey picker, voice, model, …) — out of scope for the hackathon vertical slice; the constant lives in one place (`audio::DEFAULT_HOTKEY`) so the settings UI can replace it.
+  2. **`tauri-plugin-global-shortcut` 2.3.2**, registered Rust-side in `setup` via `on_shortcut` (no JS-side capability needed). `Pressed`/`Released` map to begin/finish capture — real hold-to-talk, not tap-to-toggle.
+  3. **`cpal` 0.18.2 + `hound` 3.5.1**: samples buffered in memory (i16), WAV written on release with the device's native rate/channels. Downmix/resample to 16 kHz mono is deliberately deferred to A1 (whisper.cpp wants that format and does its own handling).
+  4. **Recordings live outside the repo**: OS app-data dir `/recordings/polaris-<epoch-ms>.wav`. The absolute path travels to the UI in the new `audio_captured` event and becomes A1's input.
+  5. **Button is a first-class fallback**: `capture_start`/`capture_stop` commands mirror the hotkey path; `begin_capture` is idempotent so hotkey and button can race safely.
+  6. **Safety valves**: 120 s sample cap (stuck-recording guard), "not recording" on release is silently ignored (quick taps), stream errors are logged to stderr, capture failures surface as `error` events — the UI never crashes on a dead mic.
+  7. **TCC**: a partial `app/src-tauri/Info.plist` (auto-merged by Tauri) carries `NSMicrophoneUsageDescription` for bundled builds. Dev builds run unbundled, so macOS attributes the mic prompt to the terminal — expected; grant it once. (First attempt used an inline map in `tauri.conf.json` — the schema wants a *path*, caught by `cargo check`.)
+- **Status:** decided (code verified by tests/build; manual GUI acceptance demo pending — A1 must not start before it)
+
 ## 2026-09-19 — Monorepo Skeleton Landed (first code)
 - **Idea:** Land the first code in the repository: the monorepo skeleton for all layers, so both owners can start their step-by-step tracks (M2 A0–A5 for Owner A, chain work for Owner B) without waiting on each other.
 - **Discussion:** Done directly by the coordinating agent in one worktree (`feat/monorepo-skeleton`) instead of parallel workers — the two-person async review workflow (§notes 2026-09-19) still applies: one branch, one PR, one review. The skeleton had to be *verifiable*, not empty folders: every layer typechecks/builds, and the shell already carries the typed event stream end to end.

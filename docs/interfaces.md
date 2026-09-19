@@ -1,9 +1,11 @@
 # Polaris — Team Interfaces
 
-> **Draft v0.1 (2026-09-19).** This is the contract between the two owners:
+> **Draft v0.2 (2026-09-19).** This is the contract between the two owners:
 > **Owner A — Brain & Shell** (`app/`, `agent/`): Tauri shell, hotkey, voice pipeline, agent core, approval UI.
 > **Owner B — Chain** (`stellar/`, `contracts/`): anchor client, protocol integration, Soroban contracts, signing service.
 > These TypeScript types are the ONLY seam. Change them only by agreement in PR review.
+>
+> Changelog: v0.2 — additive `PolarisEvent` variant `audio_captured` (step A0, Owner A; awaiting Owner B's review).
 
 ## 1. `Intent` — structured value-moving request
 
@@ -61,6 +63,7 @@ export type PolarisEvent =
   | { type: "approval_request"; intent: Intent; summary: ChainToolResult["summary"]; payloadHash: string }
   | { type: "approval_result"; payloadHash: string; approved: boolean }
   | { type: "tx_submitted"; hash: string; explorerUrl: string }
+  | { type: "audio_captured"; path: string; durationMs: number }
   | { type: "error"; message: string };
 ```
 
