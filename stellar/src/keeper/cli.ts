@@ -16,7 +16,9 @@ import { jsonLogger, type LogLevel } from "./log.ts";
 
 async function main(argv: string[]): Promise<number> {
   const once = argv.includes("--once");
-  const level = (process.env.KEEPER_LOG_LEVEL ?? "info") as LogLevel;
+  const requested = process.env.KEEPER_LOG_LEVEL?.trim().toLowerCase();
+  const levels: LogLevel[] = ["debug", "info", "warn", "error"];
+  const level = levels.find((l) => l === requested) ?? "info";
   const log = jsonLogger({ minLevel: level });
 
   let cfg;

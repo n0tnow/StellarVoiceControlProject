@@ -60,3 +60,6 @@ export interface SubmitResult {
 export async function submitSignedTx(signedXdr: string): Promise<SubmitResult> {
   throw new NotImplementedError(`submitSignedTx (${signedXdr.length} chars of XDR)`);
 }
+
+/** Off-chain keeper that triggers due `polaris_guard` schedules (untrusted; see src/keeper/README.md). */
+export * as keeper from "./keeper/index.ts";
