@@ -129,4 +129,65 @@ describe("resequenceEnvelope", () => {
     const parsed = TransactionBuilder.fromXDR(reseq, TESTNET) as Transaction;
     expect(parsed.sequence).toBe("501");
   });
+
+  it("bounds a hanging loadAccount with NetworkTimeout (review #1)", async () => {
+    const { kp, signedXdr } = signed();
+    await expect(
+      resequenceEnvelope(signedXdr, TESTNET, kp.publicKey(), () => new Promise<never>(() => {}), 10),
+    ).rejects.toThrowError(/loadAccount did not complete within 10 ms/);
+  });
+});
+
+describe("uniform timeouts (review non-blocking #1)", () => {
+  it("bounds a hanging sendTransaction with NetworkTimeout", async () => {
+    const { signedXdr } = signed();
+    const server = {
+      sendTransaction: () => new Promise<never>(() => {}),
+    } as unknown as StellarRpc.Server;
+    const res = await submitSoroban(server, signedXdr, { networkPassphrase: TESTNET, callTimeoutMs: 10 });
+    expect(res.status).toBe("FAILED");
+    expect(res.error?.name).toBe("NetworkTimeout");
+    expect(res.error?.kind).toBe("rpc");
+  });
+
+  it("bounds a hanging getTransaction with NetworkTimeout", async () => {
+    const { signedXdr, hash } = signed();
+    const server = {
+      sendTransaction: async () => ({ status: "PENDING", hash, latestLedger: 1 }),
+      getTransaction: () => new Promise<never>(() => {}),
+    } as unknown as StellarRpc.Server;
+    const res = await submitSoroban(server, signedXdr, {
+      networkPassphrase: TESTNET,
+      callTimeoutMs: 10,
+      sleep: noSleep,
+    });
+    expect(res.error?.name).toBe("NetworkTimeout");
+  });
+
+  it("bounds a hanging Horizon submitTransaction with NetworkTimeout", async () => {
+    const { signedXdr } = signed();
+    const horizon = {
+      submitTransaction: () => new Promise<never>(() => {}),
+    } as unknown as Horizon.Server;
+    const res = await submitClassic(horizon, signedXdr, { networkPassphrase: TESTNET, callTimeoutMs: 10 });
+    expect(res.error?.name).toBe("NetworkTimeout");
+  });
+
+  it("reports OperationTimeout once the whole-operation deadline passes", async () => {
+    const { signedXdr, hash } = signed();
+    let now = 0;
+    const server = {
+      sendTransaction: async () => ({ status: "PENDING", hash, latestLedger: 1 }),
+      getTransaction: async () => ({ status: "NOT_FOUND" }),
+    } as unknown as StellarRpc.Server;
+    const res = await submitSoroban(server, signedXdr, {
+      networkPassphrase: TESTNET,
+      sleep: noSleep,
+      now: () => (now += 1000),
+      waitMs: 10_000_000,
+      operationTimeoutMs: 10,
+    });
+    expect(res.status).toBe("FAILED");
+    expect(res.error?.name).toBe("OperationTimeout");
+  });
 });

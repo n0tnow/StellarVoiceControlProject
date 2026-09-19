@@ -35,11 +35,6 @@ export interface KeysFile {
 const SECRET_RE = /^S[A-Z2-7]{55}$/;
 const PUBLIC_RE = /^G[A-Z2-7]{55}$/;
 
-/** Always mask a secret in any output. */
-export function maskSecret(): string {
-  return "S****";
-}
-
 /** Generate one fresh keypair. */
 export function generateKey(): KeyMaterial {
   const kp = Keypair.random();
@@ -54,11 +49,21 @@ export function loadOrCreateKeys(path: string, opts: { reset?: boolean } = {}): 
   if (!opts.reset && existsSync(path)) {
     const parsed = JSON.parse(readFileSync(path, "utf8")) as KeysFile;
     validateKeys(parsed);
+    // Review COR-2: repair (and fail loudly on) wrong permissions on load, not
+    // just on write, so a pre-existing `keys.json` can never stay world-readable.
+    repairPermissions(path);
     return parsed;
   }
   const file = newKeysFile();
   writeKeys(path, file);
   return file;
+}
+
+/** Enforce dir `0700` / file `0600`; throws if either cannot be repaired. */
+export function repairPermissions(path: string): void {
+  const dir = dirname(path);
+  chmodSync(dir, 0o700);
+  chmodSync(path, 0o600);
 }
 
 export function newKeysFile(now: () => Date = () => new Date()): KeysFile {

@@ -1,11 +1,10 @@
-import { mkdtempSync, rmSync, statSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   KEY_ROLES,
   keypairOf,
   loadOrCreateKeys,
-  maskSecret,
   newKeysFile,
   publicAddresses,
   writeKeys,
@@ -56,11 +55,20 @@ describe("key store", () => {
     expect(after.asset).toBeUndefined();
   });
 
-  it("exposes only public addresses and masks secrets", () => {
+  it("exposes only public addresses", () => {
     const file = loadOrCreateKeys(path);
     const addresses = publicAddresses(file);
     expect(Object.keys(addresses).sort()).toEqual([...KEY_ROLES].sort());
     expect(Object.values(addresses).every((a) => /^G/.test(a))).toBe(true);
-    expect(maskSecret()).toBe("S****");
+  });
+
+  it("repairs wrong permissions on load (review COR-2)", () => {
+    const target = join(dir, "repair", "keys.json");
+    writeKeys(target, newKeysFile());
+    chmodSync(join(dir, "repair"), 0o777);
+    chmodSync(target, 0o644);
+    loadOrCreateKeys(target);
+    expect(statSync(join(dir, "repair")).mode & 0o777).toBe(0o700);
+    expect(statSync(target).mode & 0o777).toBe(0o600);
   });
 });

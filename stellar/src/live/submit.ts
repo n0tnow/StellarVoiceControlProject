@@ -10,6 +10,12 @@
  * codes >= 100, token/host codes < 100), so a live rejection reads the same as
  * an offline one. A submitted transaction is never lost: the hash is derived
  * from the signed envelope and returned in every result.
+ *
+ * Every network call is hard-bounded (`NETWORK_CALL_TIMEOUT_MS`, review item
+ * #1) and the whole submission honours an operation deadline
+ * (`DEFAULT_OPERATION_TIMEOUT_MS`); both surface as typed timeout errors and,
+ * for callers that only read `SubmitResult.error`, as `rpc`-kind
+ * classifications named `NetworkTimeout` / `OperationTimeout`.
  */
 import { Horizon, Transaction, TransactionBuilder, rpc as StellarRpc } from "@stellar/stellar-sdk";
 import type { xdr } from "@stellar/stellar-sdk";
@@ -20,6 +26,11 @@ import {
   type ClassifiedError,
 } from "../keeper/errors.ts";
 import { asArray, field, variant } from "../keeper/xdr-compat.ts";
+import {
+  DEFAULT_OPERATION_TIMEOUT_MS,
+  NETWORK_CALL_TIMEOUT_MS,
+  withNetworkTimeout,
+} from "./timeout.ts";
 
 export interface SubmitResult {
   hash: string;
@@ -36,6 +47,10 @@ export interface SubmitOptions {
   /** Hard cap on how long to wait for a final status. */
   waitMs?: number;
   pollMs?: number;
+  /** Hard cap on any single network call (default 30 s). */
+  callTimeoutMs?: number;
+  /** Hard cap on the whole submit+wait operation (default 120 s). */
+  operationTimeoutMs?: number;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
 }
@@ -55,6 +70,13 @@ function parseSigned(signedXdr: string, networkPassphrase: string): Transaction 
   return parsed;
 }
 
+/** A typed timeout as a `ClassifiedError` (`kind: "rpc"`). */
+function timeoutClassified(err: unknown): ClassifiedError {
+  const name = err instanceof Error ? err.name : "Timeout";
+  const message = err instanceof Error ? err.message : String(err);
+  return { kind: "rpc", name, message };
+}
+
 /** Send a signed Soroban envelope and poll until SUCCESS/FAILED or the deadline. */
 export async function submitSoroban(
   server: StellarRpc.Server,
@@ -65,13 +87,19 @@ export async function submitSoroban(
   const hash = hashOf(tx);
   const now = opts.now ?? Date.now;
   const sleep = opts.sleep ?? realSleep;
-  const deadline = now() + (opts.waitMs ?? DEFAULT_WAIT_MS);
+  const callTimeoutMs = opts.callTimeoutMs ?? NETWORK_CALL_TIMEOUT_MS;
+  const waitMs = opts.waitMs ?? DEFAULT_WAIT_MS;
+  const opMs = opts.operationTimeoutMs ?? DEFAULT_OPERATION_TIMEOUT_MS;
+  const startedAt = now();
+  const waitDeadline = startedAt + waitMs;
+  const opDeadline = startedAt + opMs;
 
   let sent: StellarRpc.Api.SendTransactionResponse;
   try {
-    sent = await server.sendTransaction(tx);
+    sent = await withNetworkTimeout(server.sendTransaction(tx), "sendTransaction", callTimeoutMs);
   } catch (e) {
-    return { hash, ledger: 0, status: "FAILED", resultXdrSummary: "send failed", error: classifyThrown(e) };
+    const error = isClassifiedTimeout(e) ? timeoutClassified(e) : classifyThrown(e);
+    return { hash, ledger: 0, status: "FAILED", resultXdrSummary: error.name, error };
   }
 
   switch (sent.status) {
@@ -93,7 +121,13 @@ export async function submitSoroban(
   }
 
   for (;;) {
-    const res = await server.getTransaction(hash);
+    let res: StellarRpc.Api.GetTransactionResponse;
+    try {
+      res = await withNetworkTimeout(server.getTransaction(hash), "getTransaction", callTimeoutMs);
+    } catch (e) {
+      const error = isClassifiedTimeout(e) ? timeoutClassified(e) : classifyThrown(e);
+      return { hash, ledger: 0, status: "FAILED", resultXdrSummary: error.name, error };
+    }
     switch (String(res.status)) {
       case "SUCCESS": {
         const ok = res as StellarRpc.Api.GetSuccessfulTransactionResponse;
@@ -105,11 +139,19 @@ export async function submitSoroban(
         return { hash, ledger: failed.ledger, status: "FAILED", resultXdrSummary: error.name, error };
       }
       default: {
-        if (now() >= deadline) {
+        if (now() >= waitDeadline) {
           const error: ClassifiedError = {
             kind: "rpc",
             name: "WaitTimeout",
-            message: `no final status for ${hash} within ${opts.waitMs ?? DEFAULT_WAIT_MS} ms`,
+            message: `no final status for ${hash} within ${waitMs} ms`,
+          };
+          return { hash, ledger: 0, status: "FAILED", resultXdrSummary: error.name, error };
+        }
+        if (now() >= opDeadline) {
+          const error: ClassifiedError = {
+            kind: "rpc",
+            name: "OperationTimeout",
+            message: `submitting ${hash} exceeded the operation deadline of ${opMs} ms`,
           };
           return { hash, ledger: 0, status: "FAILED", resultXdrSummary: error.name, error };
         }
@@ -127,12 +169,15 @@ export async function submitClassic(
 ): Promise<SubmitResult> {
   const tx = parseSigned(signedXdr, opts.networkPassphrase);
   const hash = hashOf(tx);
+  const callTimeoutMs = opts.callTimeoutMs ?? NETWORK_CALL_TIMEOUT_MS;
   try {
-    const res = await horizon.submitTransaction(tx);
+    const res = await withNetworkTimeout(horizon.submitTransaction(tx), "submitTransaction", callTimeoutMs);
     return { hash: res.hash, ledger: res.ledger, status: "SUCCESS", resultXdrSummary: "SUCCESS" };
   } catch (e) {
     const codes = horizonResultCodes(e);
-    const error = classifyThrown(codes ? new Error(codes) : e);
+    const error = isClassifiedTimeout(e)
+      ? timeoutClassified(e)
+      : classifyThrown(codes ? new Error(codes) : e);
     return { hash, ledger: 0, status: "FAILED", resultXdrSummary: codes ?? error.name, error };
   }
 }
@@ -150,12 +195,22 @@ export async function resequenceEnvelope(
   networkPassphrase: string,
   source: string,
   loadAccount: (address: string) => Promise<{ sequenceNumber(): string }>,
+  callTimeoutMs: number = NETWORK_CALL_TIMEOUT_MS,
 ): Promise<string> {
-  const tx = parseSigned(unsignedXdr, networkPassphrase);
-  const account = await loadAccount(source);
+  const account = await withNetworkTimeout(loadAccount(source), "loadAccount", callTimeoutMs);
   const next = BigInt(account.sequenceNumber()) + 1n;
+  return setSequence(unsignedXdr, networkPassphrase, next);
+}
+
+/**
+ * Set an explicit sequence number on an unsigned envelope (used by the manual
+ * tool to give each step of a multi-step flow its own sequence *before* the
+ * approval card renders it, so the card shows the exact XDR that gets signed).
+ */
+export function setSequence(unsignedXdr: string, networkPassphrase: string, sequence: bigint): string {
+  const tx = parseSigned(unsignedXdr, networkPassphrase);
   const envelope = tx.toEnvelope() as unknown as { value: { tx: { seqNum: bigint } } };
-  envelope.value.tx.seqNum = next;
+  envelope.value.tx.seqNum = sequence;
   return new Transaction(envelope as unknown as xdr.TransactionEnvelope, networkPassphrase).toXDR();
 }
 
@@ -163,11 +218,16 @@ export async function resequenceEnvelope(
 export async function fetchSorobanTx(
   server: StellarRpc.Server,
   hash: string,
+  callTimeoutMs: number = NETWORK_CALL_TIMEOUT_MS,
 ): Promise<StellarRpc.Api.GetTransactionResponse> {
-  return server.getTransaction(hash);
+  return withNetworkTimeout(server.getTransaction(hash), "getTransaction", callTimeoutMs);
 }
 
 // ── result decoding ─────────────────────────────────────────────────────────
+
+function isClassifiedTimeout(err: unknown): boolean {
+  return err instanceof Error && (err.name === "NetworkTimeout" || err.name === "OperationTimeout");
+}
 
 function describeSendError(sent: StellarRpc.Api.SendTransactionResponse): ClassifiedError {
   const code = variant(field(sent.errorResult, "result"));

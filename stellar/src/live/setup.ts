@@ -46,6 +46,9 @@ function plan(config: LiveConfig, reset: boolean): string {
     `  results dir      ${config.resultsDir}`,
     `  asset            ${E2E_DEFAULTS.assetCode}`,
     `  mint to owner    ${E2E_DEFAULTS.mintAmount}`,
+    "",
+    "  --reset overwrites the previous throwaway keys.json (new keys; the stored",
+    "  asset record is dropped). No backup is kept; these are throwaway keys only.",
   ].join("\n");
 }
 
