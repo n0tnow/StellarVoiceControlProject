@@ -61,6 +61,12 @@ interface BackoffEntry {
 interface PendingTx {
   hash: string;
   expiresAt: number;
+  /**
+   * Which transaction this hash belongs to. A resolved `restore` never means
+   * "the schedule ran": it only means the archived entries are back, so the id
+   * is made eligible again instead of being logged as executed.
+   */
+  purpose: "execute" | "restore";
 }
 
 function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
@@ -233,8 +239,14 @@ export class Keeper {
         return;
       }
       case "pending":
-        this.pending.set(id, { hash: result.hash, expiresAt: result.expiresAt });
+        this.pending.set(id, { hash: result.hash, expiresAt: result.expiresAt, purpose: "execute" });
         this.log("warn", { event: "pending", id, hash: result.hash, status: "PENDING" });
+        return;
+      case "restore_pending":
+        // The restore tx is in flight; execute_schedule has NOT run. Keep the id
+        // pending (no resubmission) and let resolvePending classify it later.
+        this.pending.set(id, { hash: result.hash, expiresAt: result.expiresAt, purpose: "restore" });
+        this.log("warn", { event: "restore_pending", id, hash: result.hash, status: "PENDING" });
         return;
       case "failed":
         this.registerFailure(id, result.error);
@@ -265,7 +277,58 @@ export class Keeper {
       }
       if (res.kind === "pending") continue;
       this.pending.delete(id);
+      if (p.purpose === "restore") {
+        await this.handleRestoreResolution(id, res);
+        continue;
+      }
       await this.handle(id, res);
+    }
+  }
+
+  /**
+   * A restore tx settled. SUCCESS only means the archived entries are back; the
+   * schedule itself has not run yet, so this must never log `executed`. The id is
+   * left eligible and the same tick (or a later one) will execute it normally.
+   * A failed/rejected restore is a real failure and is backed off as usual.
+   */
+  private async handleRestoreResolution(id: number, res: ExecResult): Promise<void> {
+    switch (res.kind) {
+      case "success":
+        this.log("info", {
+          event: "restore_confirmed",
+          id,
+          hash: res.hash,
+          status: "SUCCESS",
+          ledger: res.ledger,
+        });
+        return;
+      case "failed":
+        this.registerFailure(id, res.error);
+        this.log("error", {
+          event: "restore_failed",
+          id,
+          hash: res.hash,
+          status: "FAILED",
+          error: res.error,
+          retryInMs: this.retryIn(id),
+        });
+        return;
+      case "rejected":
+        this.registerFailure(id, res.error);
+        this.log(levelFor(res.error.kind), {
+          event: "restore_rejected",
+          id,
+          hash: res.hash,
+          status: "REJECTED",
+          error: res.error,
+          retryInMs: this.retryIn(id),
+        });
+        return;
+      case "pending":
+      case "restore_pending":
+      case "dry_run":
+        // Defensive: checkPending only ever returns success/failed/rejected/pending.
+        return;
     }
   }
 

@@ -61,6 +61,13 @@ export type ExecResult =
   | { kind: "rejected"; error: ClassifiedError; hash?: string }
   /** Submitted, final status still unknown; check again with `checkPending`. */
   | { kind: "pending"; hash: string; expiresAt: number }
+  /**
+   * A `RestoreFootprint` was submitted but has no final status yet. Distinct
+   * from `pending` on purpose: the schedule has NOT run, so a later SUCCESS
+   * resolves to "entries restored", never to a false `executed` (the keeper
+   * re-executes the schedule instead).
+   */
+  | { kind: "restore_pending"; hash: string; expiresAt: number }
   /** Dry run: the simulation succeeded, nothing was signed or sent. */
   | { kind: "dry_run"; note?: string };
 
@@ -187,6 +194,11 @@ export class SorobanChain implements KeeperChain {
     if (Api.isSimulationRestore(sim)) {
       if (opts.dryRun) return { kind: "dry_run", note: "would restore archived entries first" };
       const restored = await this.restore(sim.restorePreamble);
+      // A pending restore is not a pending execution: report it separately so a
+      // later SUCCESS is never logged as `executed` (the schedule still has to run).
+      if (restored.kind === "pending") {
+        return { kind: "restore_pending", hash: restored.hash, expiresAt: restored.expiresAt };
+      }
       if (restored.kind !== "success") return restored;
       tx = await this.buildExecuteTx(id);
       sim = await this.rpc.simulateTransaction(tx);
@@ -214,15 +226,8 @@ export class SorobanChain implements KeeperChain {
     }
 
     const assembled = assembleTransaction(tx, sim).build();
-    if (Number(assembled.fee) > this.opts.maxFeeStroops) {
-      return {
-        kind: "rejected",
-        error: {
-          kind: "keeper_funds",
-          name: "FeeAboveCap",
-          message: `fee ${assembled.fee} stroops exceeds KEEPER_MAX_FEE_STROOPS=${this.opts.maxFeeStroops}`,
-        },
-      };
+    if (this.feeAboveCap(assembled)) {
+      return { kind: "rejected", error: feeAboveCapError(assembled.fee, this.opts.maxFeeStroops) };
     }
 
     if (opts.dryRun) return { kind: "dry_run" };
@@ -253,8 +258,19 @@ export class SorobanChain implements KeeperChain {
       .addOperation(Operation.restoreFootprint({}))
       .setTimeout(this.opts.txTimeoutSeconds)
       .build();
+    // `preamble.transactionData` (and thus its resourceFee) is RPC-supplied and
+    // attacker-controllable. Enforce the same total-fee cap as the execute path
+    // BEFORE signing, or the keeper could be tricked into paying an unbounded fee.
+    if (this.feeAboveCap(tx)) {
+      return { kind: "rejected", error: feeAboveCapError(tx.fee, this.opts.maxFeeStroops) };
+    }
     tx.sign(this.opts.keypair);
     return this.submitAndWait(tx);
+  }
+
+  /** The total fee a signed envelope will pay, including any resource fee (exact integer compare). */
+  private feeAboveCap(tx: Transaction): boolean {
+    return BigInt(tx.fee) > BigInt(this.opts.maxFeeStroops);
   }
 
   /** sendTransaction, then poll getTransaction until a final status or the deadline. */
@@ -321,6 +337,14 @@ export class SorobanChain implements KeeperChain {
 }
 
 // ── result decoding helpers ─────────────────────────────────────────────────
+
+function feeAboveCapError(fee: string, cap: number): ClassifiedError {
+  return {
+    kind: "keeper_funds",
+    name: "FeeAboveCap",
+    message: `fee ${fee} stroops exceeds KEEPER_MAX_FEE_STROOPS=${cap}`,
+  };
+}
 
 function describeSendError(sent: StellarRpc.Api.SendTransactionResponse): ClassifiedError {
   const code = variant(field(sent.errorResult, "result"));

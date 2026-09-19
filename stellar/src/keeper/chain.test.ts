@@ -323,6 +323,44 @@ test("archived entries: restore first, then re-simulate and execute", async () =
   assert.equal(Number(rpc.sent[0]!.fee), 100 + 900, "restore fee = base fee + resource fee, counted once");
 });
 
+test("refuses to sign a restore above the fee cap (the RPC-supplied resource fee is untrusted)", async () => {
+  const { rpc, chain } = setup({ maxFeeStroops: 900 });
+  const restoreSim = okSim(xdr.ScVal.scvVoid(), {
+    restorePreamble: { minResourceFee: "900", transactionData: new SorobanDataBuilder().setResourceFee(900) },
+  });
+  rpc.sims = [restoreSim];
+  const res = await chain.execute(3, { dryRun: false });
+  assert.equal(res.kind === "rejected" && res.error.kind, "keeper_funds");
+  assert.equal(res.kind === "rejected" && res.error.name, "FeeAboveCap");
+  assert.equal(rpc.sent.length, 0, "nothing was signed or submitted");
+});
+
+test("a restore at exactly the cap is still allowed", async () => {
+  const { rpc, chain } = setup({ maxFeeStroops: 1000 });
+  const restoreSim = okSim(xdr.ScVal.scvVoid(), {
+    restorePreamble: { minResourceFee: "900", transactionData: new SorobanDataBuilder().setResourceFee(900) },
+  });
+  rpc.sims = [restoreSim, okSim(xdr.ScVal.scvVoid(), { transactionData: new SorobanDataBuilder().setResourceFee(900) })];
+  rpc.sendResponses = [{ status: "PENDING", hash: "h" }];
+  rpc.txResponses = [ok(11)];
+  const res = await chain.execute(3, { dryRun: false });
+  assert.equal(res.kind, "success");
+  assert.equal(rpc.sent.length, 2);
+});
+
+test("an unresolved restore is reported as restore_pending, not as a pending execution", async () => {
+  const { rpc, chain } = setup();
+  const restoreSim = okSim(xdr.ScVal.scvVoid(), {
+    restorePreamble: { minResourceFee: "900", transactionData: new SorobanDataBuilder().setResourceFee(900) },
+  });
+  rpc.sims = [restoreSim];
+  rpc.sendResponses = [new Error("socket hang up")];
+  const res = await chain.execute(3, { dryRun: false });
+  assert.equal(res.kind, "restore_pending");
+  assert.equal(res.kind === "restore_pending" && res.hash, Buffer.from(rpc.sent[0]!.hash()).toString("hex"));
+  assert.equal(rpc.sent.length, 1, "only the restore was submitted; execute_schedule never ran");
+});
+
 test("dry-run over archived entries reports the restore without spending anything", async () => {
   const { rpc, chain } = setup();
   rpc.sims = [

@@ -127,6 +127,42 @@ test("a pending (unresolved) tx blocks resubmission until it resolves", async ()
   assert.ok(logs.some((l) => l.event === "executed" && l.hash === "PH"));
 });
 
+test("a resolved restore is never logged as executed; the schedule is re-executed instead", async () => {
+  const { chain, keeper, logs } = harness();
+  chain.due = [9];
+  chain.script.set(9, [
+    { kind: "restore_pending", hash: "RH", expiresAt: 0 },
+    { kind: "success", hash: "EH", ledger: 78 },
+  ]);
+  await keeper.tick();
+  assert.deepEqual(keeper.state().pending, [9]);
+  assert.ok(logs.some((l) => l.event === "restore_pending" && l.hash === "RH"));
+  assert.ok(!logs.some((l) => l.event === "executed"), "the restore landing is not an execution");
+
+  chain.pendingResult = { kind: "success", hash: "RH", ledger: 77 };
+  const s = await keeper.tick();
+  assert.equal(s.executed, 1, "the schedule runs in the same tick the restore settles");
+  assert.equal(chain.executeCalls.length, 2);
+  assert.ok(logs.some((l) => l.event === "restore_confirmed" && l.hash === "RH"));
+  assert.ok(!logs.some((l) => l.event === "executed" && l.hash === "RH"));
+  assert.ok(logs.some((l) => l.event === "executed" && l.hash === "EH"));
+  assert.deepEqual(keeper.state().pending, []);
+});
+
+test("a failed restore is backed off as a restore failure, not as an executed schedule", async () => {
+  const { chain, keeper, logs } = harness();
+  chain.due = [9];
+  chain.script.set(9, [{ kind: "restore_pending", hash: "RH", expiresAt: 0 }]);
+  await keeper.tick();
+  chain.pendingResult = { kind: "failed", hash: "RH", error: { kind: "tx_expired", name: "txTooLate", message: "x" } };
+  await keeper.tick();
+  assert.ok(logs.some((l) => l.event === "restore_failed" && l.hash === "RH"));
+  assert.ok(!logs.some((l) => l.event === "executed" || l.event === "failed"));
+  assert.deepEqual(keeper.state().pending, []);
+  assert.deepEqual(keeper.state().backedOff, [9]);
+  assert.equal(chain.executeCalls.length, 1, "not re-attempted while backed off");
+});
+
 test("contract refusals back off per id, exponentially, without touching other ids", async () => {
   const { chain, keeper, logs, advance } = harness();
   chain.due = [1, 2];
