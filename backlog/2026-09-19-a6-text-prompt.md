@@ -189,3 +189,141 @@ No file outside the task's ownership list was modified.
 Human verification with a real keyboard: double-tap Control, type, submit with the speaker switch
 both on and off; confirm the sheet grows from the notch and collapses on Esc/✕, and that the
 toggle survives a restart. Then review + merge, coordinating with `feat/a5-notch-shell`.
+
+---
+
+## Review round 1 — response to `backlog/2026-09-19-a6-review.md`
+
+- **Date:** 2026-09-19
+- **Reviewer verdict:** REQUEST CHANGES (1 BLOCKER, several MAJOR)
+- **Disposition below:** every BLOCKER/MAJOR addressed; MINOR/NIT items either fixed or explicitly
+  deferred. Reviewer line numbers were verified against the real code first — one finding (4.3's
+  claim that `setText("")` should have been there) was a genuine gap, and one claim was re-scoped
+  because the report misread the intended behaviour (noted inline).
+
+### BLOCKER
+
+**R1.1 — `.is-open` had no CSS rule, so the sheet never animated (4.1). — FIXED.**
+Verified: `prompt.css` defined `.prompt-sheet { height: var(--sheet-height, 0px) }` and no
+`.is-open` selector; `PromptPanel` toggled the class for nothing. The closed state now sets
+`height: 0`, `.prompt-sheet.is-open { height: var(--sheet-height, 0px) }`, so open animates
+0 → measured and close animates measured → 0. `COLLAPSE_MS` (240 ms) still matches the CSS
+`--prompt-motion`, so `prompt_hide` fires after the collapse completes. The same edit carries the
+notch-aware corner radius (see R1.7).
+
+### MAJOR
+
+**R1.2 — false-positive double-tap from rapid Control chords (`Ctrl+C`, tmux `Ctrl+B`) (1.1). —
+FIXED (this was the most important finding).**
+Verified: the detector only consumed `flagsChanged`; a non-modifier key press never reached it, so
+two quick `Ctrl+C` presses looked exactly like two bare Control taps.
+Fix, end to end:
+- `hotkey_flags.rs` now observes `NSEventMask::FlagsChanged | NSEventMask::KeyDown` on the same
+  global+local monitor pair (`OBSERVED_MASK`) and adds `add_key_observer`. The monitor callbacks
+  branch on `event.r#type()`: a `KeyDown` calls `notify_key_observers()` and, for the local
+  monitor, returns the event pointer unchanged (key-downs are observed, never swallowed).
+- `CtrlTap` gains `on_key_press()`: a key pressed **while Control is down** poisons the attempt the
+  same way a foreign modifier does (clears `press_started`, `first_tap_release`,
+  `awaiting_second`; sets `contaminated`), and the poison clears once Control is released. A key
+  pressed with Control up (ordinary typing between taps) does **not** poison.
+- `prompt_window::start_tap_driver` forwards both signals as one ordered `TapInput` stream into
+  the tap thread, applying `on_key_press` in user order.
+- Tests: `a_key_pressed_while_control_is_down_invalidates_the_sequence` (the reported scenario,
+  two chords inside `TAP_GAP`) and
+  `a_key_press_with_control_up_is_ordinary_typing_and_does_not_invalidate`.
+
+**R1.3 — tautological `a_long_control_hold_is_not_a_tap` (1.2). — FIXED.**
+Verified the report's reasoning: the old assertion placed the follow-up tap at `t0 + 1s`, far past
+`TAP_GAP`, so it proved nothing. The test now sends a tap at `hold_release + 100 ms` (inside
+`TAP_GAP`), asserts it does **not** fire, then a third tap that **does** fire — proving the
+rejected hold left `first_tap_release` empty and the machine rearmed. The same
+"inside-`TAP_GAP`" pattern was added to the contamination test (report finding 1.3.1).
+
+**R1.4 — `SAMPLE_OBSERVERS` mutex held across observer callbacks (2.1). — FIXED.**
+Verified the old loop called `observer(sample)` while holding the guard. Observers are now stored
+as `Arc<dyn Fn … >`; `notify_*` clones the registry list under the lock, releases it, then runs
+the callbacks. Re-entrant `add_sample_observer` no longer deadlocks — covered by
+`a_sample_observer_can_register_another_observer`, which would hang before the fix.
+
+**R1.5 — observer panic unwinds across the Objective-C boundary (2.2). — FIXED.**
+Every observer body now runs inside `std::panic::catch_unwind`. The containment is factored into a
+private `notify_all<T, F>` so it is testable against a local list without touching the global
+registry; `notify_all_contains_a_panicking_observer` proves a panic in one observer is contained
+and later observers still run.
+
+**R1.6 — `emit(Open)` raced `run_on_main_thread` (3.2). — FIXED.**
+Verified: `show()` emitted outside the main-thread closure, before `place`/`show`/`set_focus`.
+`emit(Open)` now happens inside the closure, after `set_focus`. `setup` and `resize` were also
+checked: both already sequence their `place` through `run_on_main_thread`, so no other racy emit
+remains.
+
+**R1.7 — notch-less screens covered the menu bar with a square-topped sheet (3.1). — FIXED.**
+Verified `safeAreaInsets().top == 0` on notch-less displays and the fallback path. `place()` now
+derives `notched` from `safeAreaInsets().top > 0`; when there is no notch the top edge is pinned
+to `screen.visibleFrame()`'s top (below the menu bar, Spotlight-like) instead of the screen top.
+The value is published to the panel on the `open` event (`PromptEvent.notched`, omitted on close),
+and `PromptPanel` adds `is-notched`, so the CSS squares the top corners only when the sheet really
+sits under a cutout. Tested by `an_open_event_carries_the_notch_flag`.
+
+**R1.8 — answer taller than `MAX_WINDOW_HEIGHT` was clipped with no scroll (4.2 / 1.6). — FIXED.**
+`.prompt-answer` now has `max-height: 480px; overflow-y: auto` (plus thin scrollbar and
+`overscroll-behavior: contain`). The 480 px budget is deliberately under the 720 pt native cap so
+the bar, input and padding always fit.
+
+**R1.9 — height not clamped to the screen (3.3). — FIXED.**
+Verified `height.clamp(MIN, MAX)` ignored the display. `place()` now clamps against
+`(top - frame.origin.y - 40).max(MIN_WINDOW_HEIGHT)`, so a short or vertically scaled display
+cannot push the window off the bottom.
+
+**R1.10 — non-macOS stub used unclamped `PROMPT_WIDTH` (3.4). — FIXED.**
+Verified: the stub clamped `width` locally then passed `PROMPT_WIDTH` to `LogicalSize`. It now
+passes the clamped `width`.
+
+### MINOR / NIT (addressed beyond the required BLOCKER/MAJOR set)
+
+**R1.11 — test coverage gaps (1.3). — FIXED.** Added
+`command_and_shift_also_contaminate_the_sequence`, `a_long_second_tap_does_not_fire`,
+`a_foreign_modifier_during_the_second_press_breaks_the_pair`, and the two key-press tests.
+
+**R1.12 — input/answer not cleared on reopen (4.3). — FIXED.** `openPanel()` now clears `text`
+and `result` unless a turn is still in flight, so a reopened panel starts clean. `submit()` still
+leaves the submitted text in place while the answer is on screen (intentional: the user can re-run
+or edit it).
+
+**R1.13 — permanent observer allocation without unregistration (2.3). — DEFERRED (documented).**
+`add_sample_observer`/`add_key_observer` are process-lifetime by design; the prompt driver
+registers exactly once from `setup`. An unregister token was not added because it would be unused
+and would complicate the ordering guarantees. The doc comments now state the lifetime contract
+explicitly.
+
+### Review items verified as already correct (unchanged)
+
+- **1.4 gesture collision:** re-verified. `CtrlTap` still poisons on Option/Command/Shift and
+  `gesture.rs` is untouched; a double-Control sequence never asserts `pair_down()`.
+- **3.5 runtime errors/unwraps:** still zero `unwrap`/`expect` outside `#[cfg(test)]`; clippy
+  `-D warnings` is clean.
+- **4.4 XSS / localStorage:** unchanged and still clean (JSX text nodes, `try/catch` storage).
+
+### Gates after round 1
+
+```
+npm run typecheck            → clean (interfaces, agent, stellar, app)
+npm --prefix app run build   → ✓ built (prompt.css 3.23 kB, prompt.js 4.30 kB)
+cargo test                   → 111 passed; 0 failed; 2 ignored
+cargo clippy --all-targets -- -D warnings → clean
+```
+
+`cargo test` grew from 103 to 111: +5 `ctrl_tap` cases, +2 `notify_all`/re-entrancy cases,
++1 `prompt_window` notch-serialization case.
+
+## Files touched in round 1
+
+- `app/src-tauri/src/ctrl_tap.rs` — `on_key_press`, rule 4 doc, fixed tautological test, new tests
+- `app/src-tauri/src/hotkey_flags.rs` — key-down observers, lock-release snapshot, `catch_unwind`,
+  tests
+- `app/src-tauri/src/prompt_window.rs` — ordered key stream, in-closure `emit(Open)`, notch /
+  menu-bar placement, height clamp, stub width, notch event flag + test
+- `app/src/prompt/PromptPanel.tsx` — notch flag, stale-content reset
+- `app/src/prompt/prompt.css` — `.is-open` animation, notch corner radius, answer scroll
+- `backlog/2026-09-19-a6-text-prompt.md` — this section
+- `backlog/2026-09-19-a6-review.md` — the reviewer's report, committed for the record

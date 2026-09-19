@@ -23,14 +23,16 @@
 }
 
 .prompt-sheet {
-  /* Measured by the panel and reported to Rust, which sizes the window to it.
-     The sheet's own height animates to the same value, so the reveal reads as
-     the sheet expanding downward from the notch. */
+  /* The sheet animates its own height between 0 and the measured value; Rust
+     sizes the native window to the measured height, so the reveal reads as the
+     sheet expanding downward from the top edge. The measured height is carried
+     as `--sheet-height` and only applied in the open state — the closed state
+     must collapse to 0 or the open/close transition has nothing to animate. */
   --prompt-motion: 240ms;
   --prompt-ease: cubic-bezier(0.32, 0.72, 0, 1);
   pointer-events: auto;
   width: 100%;
-  height: var(--sheet-height, 0px);
+  height: 0;
   overflow: hidden;
   background: #060608;
   border-radius: 0 0 22px 22px;
@@ -38,6 +40,21 @@
     inset 0 1px 0 #ffffff12,
     0 22px 48px #000000a8;
   transition: height var(--prompt-motion) var(--prompt-ease);
+}
+
+.prompt-sheet.is-open {
+  height: var(--sheet-height, 0px);
+}
+
+/* A display without a hardware notch cannot hide square top corners behind a
+   cutout, so the panel rounds all four corners instead (the notch flag arrives
+   on the `open` event and the panel adds `is-notched` when it is set). */
+.prompt-sheet.is-notched {
+  border-radius: 0 0 22px 22px;
+}
+
+.prompt-sheet:not(.is-notched) {
+  border-radius: 22px;
 }
 
 .prompt-inner {
@@ -170,11 +187,20 @@
 }
 
 .prompt-answer {
+  /* The native window is capped at 720 pt (`MAX_WINDOW_HEIGHT` in
+     `prompt_window.rs`). Anything taller must scroll here or it is clipped
+     outside the window frame. 240px is a conservative budget for the bar,
+     input and padding above the answer. */
+  max-height: 480px;
+  overflow-y: auto;
   padding-top: 10px;
   border-top: 1px solid #ffffff12;
   color: var(--color-notch-text);
   font-size: 13px;
   line-height: 1.45;
+  scrollbar-width: thin;
+  scrollbar-color: #ffffff24 transparent;
+  overscroll-behavior: contain;
 }
 
 .prompt-thinking {

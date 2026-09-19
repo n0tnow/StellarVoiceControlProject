@@ -4,8 +4,15 @@
 //! [`crate::gesture`] owns the microphone. Typed input needs a *different*
 //! gesture that costs no extra key and cannot be confused with that hold. A
 //! double tap of Control alone fits: it is physically reachable, it is not a
-//! system shortcut on its own, and the app only observes `flagsChanged` (see
-//! [`crate::hotkey_flags`]), so Control is never swallowed.
+//! system shortcut on its own, and the app only *observes* modifiers and
+//! key-downs (see [`crate::hotkey_flags`]) — it never swallows them.
+//!
+//! A bare `flagsChanged` view is not enough on its own: `Ctrl+C`, tmux's
+//! `Ctrl+B`, or `Ctrl+A Ctrl+K` deliver only the Control press/release to the
+//! modifier monitor, so two ordinary Control chords look exactly like two bare
+//! taps. The ordered `keyDown` observation ([`CtrlTap::on_key_press`]) supplies
+//! the missing bit: a non-modifier key pressed while Control is down marks that
+//! press as a chord, never a tap.
 //!
 //! Like [`crate::gesture`], this module is deliberately pure: it takes a
 //! [`ModifierSample`] plus a timestamp and returns **one bit** — "a double tap
@@ -23,7 +30,12 @@
 //!    Control+Option is VoiceOver's modifier and the whole point of the gesture
 //!    is to stay clear of it. Everything must be released before a new sequence
 //!    can start.
-//! 4. **No retrigger without a full cycle.** A detected double tap fully resets
+//! 4. **A Control chord is not a tap.** A non-modifier key pressed while
+//!    Control is down (`Ctrl+C`, tmux's `Ctrl+B`, `Ctrl+A Ctrl+K`) poisons the
+//!    press exactly like a foreign modifier; see [`CtrlTap::on_key_press`].
+//!    This is what keeps ordinary terminal/editor shortcuts from opening the
+//!    prompt.
+//! 5. **No retrigger without a full cycle.** A detected double tap fully resets
 //!    the machine; the next one needs two fresh taps.
 //!
 //! Fn (the Globe key) is intentionally *not* handled: the existing masked
@@ -138,6 +150,27 @@ impl CtrlTap {
         self.first_tap_release = Some(now);
         false
     }
+
+    /// Applies one non-modifier key-down from the shared monitor pair.
+    ///
+    /// A key pressed while Control is down means the Control press is part of a
+    /// chord (`Ctrl+C` to interrupt, tmux's `Ctrl+B`, `Ctrl+A Ctrl+K`, …), not a
+    /// bare tap. `flagsChanged` alone cannot see that key, so without this the
+    /// two look identical and two quick Control chords would open the prompt.
+    ///
+    /// Only a key pressed *while Control is held* poisons the attempt: a key
+    /// with Control up is ordinary typing and must not disable the gesture. The
+    /// poison follows the same path as a foreign modifier and clears once every
+    /// key is released.
+    pub fn on_key_press(&mut self) {
+        if !self.control_down {
+            return;
+        }
+        self.contaminated = true;
+        self.press_started = None;
+        self.first_tap_release = None;
+        self.awaiting_second = false;
+    }
 }
 
 #[cfg(test)]
@@ -205,17 +238,25 @@ mod tests {
         let t0 = Instant::now();
 
         assert!(!machine.on_modifiers(ctrl(true), t0));
+        let hold_release = t0 + MAX_TAP_HOLD + Duration::from_millis(1);
         assert!(
-            !machine.on_modifiers(ctrl(false), t0 + MAX_TAP_HOLD + Duration::from_millis(1)),
+            !machine.on_modifiers(ctrl(false), hold_release),
             "a hold longer than MAX_TAP_HOLD must be rejected"
         );
 
-        // The rejected hold must not seed a sequence either.
-        assert!(!machine.on_modifiers(ctrl(true), t0 + Duration::from_secs(1)));
-        assert!(!machine.on_modifiers(
-            ctrl(false),
-            t0 + Duration::from_secs(1) + TAP
-        ));
+        // The rejected hold must not seed a sequence. A fresh tap begun *inside*
+        // TAP_GAP of the hold's release must not pair with it — this only holds
+        // if the hold really left `first_tap_release` empty.
+        let (fired, release) = tap(&mut machine, hold_release + Duration::from_millis(100));
+        assert!(
+            !fired,
+            "a tap within TAP_GAP of a rejected hold must not complete a pair"
+        );
+
+        // That tap *did* become the new first tap, so its partner fires: the
+        // machine was rearmed rather than permanently poisoned.
+        let (fired, _) = tap(&mut machine, release + Duration::from_millis(100));
+        assert!(fired, "the machine must rearm after the rejected hold");
     }
 
     #[test]
@@ -226,7 +267,20 @@ mod tests {
         let t0 = Instant::now();
         assert!(!machine.on_modifiers(ctrl(true), t0));
         assert!(!machine.on_modifiers(sample(true, true, false, false), t0));
-        assert!(!machine.on_modifiers(sample(false, false, false, false), t0 + TAP));
+        let contaminated_release = t0 + TAP;
+        assert!(!machine.on_modifiers(sample(false, false, false, false), contaminated_release));
+
+        // The contaminated press must not have seeded a sequence: a fresh tap
+        // begun within TAP_GAP of its release must not pair with it.
+        let (fired, release) = tap(&mut machine, contaminated_release + Duration::from_millis(60));
+        assert!(
+            !fired,
+            "a tap after a contaminated press must not complete a pair"
+        );
+
+        // Fully released, a fresh pair works again.
+        let (fired, _) = tap(&mut machine, release + Duration::from_millis(60));
+        assert!(fired, "the machine must rearm after the contamination clears");
 
         // Option appearing *between* the two taps also poisons the pair.
         let mut machine = CtrlTap::default();
@@ -239,6 +293,95 @@ mod tests {
         // With everything released, a fresh pair works again.
         let (fired, _) = tap(&mut machine, release + Duration::from_millis(60));
         assert!(fired);
+    }
+
+    #[test]
+    fn command_and_shift_also_contaminate_the_sequence() {
+        for foreign in [sample(true, false, true, false), sample(true, false, false, true)] {
+            let mut machine = CtrlTap::default();
+            let t0 = Instant::now();
+            assert!(!machine.on_modifiers(ctrl(true), t0));
+            assert!(!machine.on_modifiers(foreign, t0));
+            let release = t0 + TAP;
+            assert!(!machine.on_modifiers(ctrl(false), release));
+            // Nothing was seeded: a tap inside TAP_GAP does not pair.
+            let (fired, _) = tap(&mut machine, release + Duration::from_millis(60));
+            assert!(
+                !fired,
+                "Command/Shift contamination must invalidate the sequence"
+            );
+        }
+    }
+
+    #[test]
+    fn a_long_second_tap_does_not_fire() {
+        let mut machine = CtrlTap::default();
+        let t0 = Instant::now();
+
+        let (fired, release) = tap(&mut machine, t0);
+        assert!(!fired);
+
+        // The second press begins in time but is held past MAX_TAP_HOLD: it is
+        // a hold, so the release must not complete the pair.
+        let start = release + Duration::from_millis(80);
+        assert!(!machine.on_modifiers(ctrl(true), start));
+        assert!(!machine.on_modifiers(ctrl(false), start + MAX_TAP_HOLD + Duration::from_millis(1)));
+    }
+
+    #[test]
+    fn a_foreign_modifier_during_the_second_press_breaks_the_pair() {
+        let mut machine = CtrlTap::default();
+        let t0 = Instant::now();
+
+        let (fired, release) = tap(&mut machine, t0);
+        assert!(!fired);
+
+        let start = release + Duration::from_millis(80);
+        assert!(!machine.on_modifiers(ctrl(true), start));
+        // Shift arrives mid-second-press: the pair is dead.
+        assert!(!machine.on_modifiers(sample(true, false, false, true), start));
+        assert!(!machine.on_modifiers(ctrl(false), start + TAP));
+    }
+
+    #[test]
+    fn a_key_pressed_while_control_is_down_invalidates_the_sequence() {
+        // Ctrl+C twice: each chord is Control down, key down, Control up. The
+        // modifier samples look like two bare taps, so the key-down must break
+        // both the pending first tap and the second press.
+        let mut machine = CtrlTap::default();
+        let t0 = Instant::now();
+
+        // First chord: Control down, C down, Control up.
+        assert!(!machine.on_modifiers(ctrl(true), t0));
+        machine.on_key_press();
+        let chord_release = t0 + TAP;
+        assert!(
+            !machine.on_modifiers(ctrl(false), chord_release),
+            "a chord is not a tap"
+        );
+
+        // Second chord begins inside TAP_GAP of the first release and would
+        // otherwise pair. The key-down must kill it again.
+        let start = chord_release + Duration::from_millis(80);
+        assert!(!machine.on_modifiers(ctrl(true), start));
+        machine.on_key_press();
+        assert!(
+            !machine.on_modifiers(ctrl(false), start + TAP),
+            "two quick Control chords must never open the prompt"
+        );
+    }
+
+    #[test]
+    fn a_key_press_with_control_up_is_ordinary_typing_and_does_not_invalidate() {
+        let mut machine = CtrlTap::default();
+        let t0 = Instant::now();
+
+        // Typing between two bare taps must not disturb the gesture.
+        let (fired, release) = tap(&mut machine, t0);
+        assert!(!fired);
+        machine.on_key_press();
+        let (fired, _) = tap(&mut machine, release + Duration::from_millis(120));
+        assert!(fired, "typing with Control up must not block the double tap");
     }
 
     #[test]

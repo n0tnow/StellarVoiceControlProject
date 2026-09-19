@@ -342,3 +342,29 @@
 - **Status:** implemented on `feat/a6-text-prompt`; merge coordination with
   `feat/a5-notch-shell` noted in `backlog/2026-09-19-a6-text-prompt.md` (no
   shared files; only the window-level constant may deserve a shared helper).
+
+### 2026-09-19 — A6 review round 1: the double-tap needed the key-down signal
+- **The bug the review caught, and why it was real:** `flagsChanged` does *not*
+  fire for ordinary key presses. Two quick `Ctrl+C` presses (a stubborn process),
+  tmux `Ctrl+B` twice, or `Ctrl+A Ctrl+K` therefore reach the detector as a clean
+  `control true → false → true → false` — indistinguishable from two deliberate
+  bare taps. With Accessibility granted, that opened the prompt mid-terminal.
+- **The fix (decision):** observe `NSEventMask::KeyDown` on the **same** global +
+  local monitor pair and feed an ordered `on_key_press()` into `CtrlTap`. A key
+  pressed **while Control is down** poisons the attempt exactly like a foreign
+  modifier; a key with Control up (ordinary typing between taps) does not. The
+  monitor keeps observing only — the local callback still returns the event
+  pointer unchanged, so key state is never swallowed. This is the general
+  solution; raising `MAX_TAP_HOLD` or requiring timing tweaks would only narrow
+  the window, not close it.
+- **Other review findings fixed in the same round:** `.prompt-sheet.is-open`
+  height rule (the sheet never actually animated), release the observer-registry
+  lock before running callbacks, `catch_unwind` around every observer (panic
+  unwinding across the Objective-C block is UB), emit `open` from inside
+  `run_on_main_thread` after focus, pin the top edge to `visibleFrame` and round
+  the top corners on notch-less displays, clamp height to the screen, scroll the
+  answer, clear stale input on reopen, clamp the non-macOS stub width.
+- **Verification:** 111 Rust tests (from 103), TS typecheck + Vite build green,
+  clippy `-D warnings` clean. Reviewer report committed at
+  `backlog/2026-09-19-a6-review.md`; point-by-point response in
+  `backlog/2026-09-19-a6-text-prompt.md` §"Review round 1".

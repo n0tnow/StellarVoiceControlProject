@@ -57,6 +57,12 @@ const DEFAULT_HEIGHT: f64 = 220.0;
 #[cfg(target_os = "macos")]
 const PROMPT_WINDOW_LEVEL: isize = 25;
 
+/// Startup geometry: whether the resolved screen has a hardware notch, so the
+/// panel can round its top corners when it is *not* tucked under a cutout.
+/// Unknown until shown, so the panel defaults to square and receives `true`
+/// once the window has actually been placed.
+static NOTCHED: Mutex<bool> = Mutex::new(false);
+
 /// The last height the panel reported, reused when the window reopens.
 static CONTENT_HEIGHT: Mutex<f64> = Mutex::new(DEFAULT_HEIGHT);
 
@@ -73,6 +79,10 @@ pub enum PromptAction {
 #[serde(rename_all = "camelCase")]
 pub struct PromptEvent {
     pub action: PromptAction,
+    /// Whether the host screen has a hardware notch. Absent on close; the
+    /// panel only needs it to round the top corners on notch-less displays.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notched: Option<bool>,
 }
 
 /// Positions the prompt window and starts the double-Control driver. Called
@@ -106,9 +116,15 @@ pub fn toggle(app: &AppHandle) {
 
 /// Shows, focuses and announces the panel. Returns once the show has been
 /// scheduled on the main thread.
+///
+/// `open` is emitted from *inside* the main-thread block, after the window is
+/// placed, shown and focused. `run_on_main_thread` is asynchronous, so
+/// emitting outside it would race: the webview could animate and focus its
+/// textarea before the native window had even taken focus.
 pub fn show(app: &AppHandle) -> Result<(), String> {
     let height = current_height();
     let handle = app.clone();
+    let emit_handle = app.clone();
     app.run_on_main_thread(move || {
         if let Err(error) = place(&handle, height) {
             eprintln!("polaris: could not place the prompt window: {error}");
@@ -123,10 +139,9 @@ pub fn show(app: &AppHandle) -> Result<(), String> {
         if let Err(error) = window.set_focus() {
             eprintln!("polaris: could not focus the prompt window: {error}");
         }
+        emit(&emit_handle, PromptAction::Open);
     })
-    .map_err(|error| error.to_string())?;
-    emit(app, PromptAction::Open);
-    Ok(())
+    .map_err(|error| error.to_string())
 }
 
 /// Hides the panel. Called by the webview after the collapse animation.
@@ -156,7 +171,12 @@ pub fn resize(app: &AppHandle, height: f64) -> Result<(), String> {
 
 /// Pushes one prompt action to the webview. Failures are logged, never fatal.
 fn emit(app: &AppHandle, action: PromptAction) {
-    if let Err(error) = app.emit(PROMPT_EVENT_NAME, PromptEvent { action }) {
+    let notched = match NOTCHED.lock() {
+        Ok(guard) => *guard,
+        Err(poisoned) => *poisoned.into_inner(),
+    };
+    let notched = (action == PromptAction::Open).then_some(notched);
+    if let Err(error) = app.emit(PROMPT_EVENT_NAME, PromptEvent { action, notched }) {
         eprintln!("polaris: failed to emit the prompt event: {error}");
     }
 }
@@ -168,20 +188,45 @@ fn current_height() -> f64 {
     }
 }
 
-/// Forwards every masked modifier sample into the tap machine's own thread.
+/// Forwards every masked modifier sample and every key-down into the tap
+/// machine's own thread.
+///
+/// A `flagsChanged` sample cannot see an ordinary key press, so the machine
+/// also needs the ordered key-down signal to tell a Control chord (`Ctrl+C`,
+/// tmux's `Ctrl+B`) from a deliberate bare tap. Both are forwarded as one
+/// ordered stream so `CtrlTap` applies them in the order the user typed.
 fn start_tap_driver(app: AppHandle) {
-    let (sender, receiver) = std::sync::mpsc::channel::<ModifierSample>();
-    hotkey_flags::add_sample_observer(move |sample| {
-        // The AppKit callback must stay cheap; the machine runs on its own thread.
-        let _ = sender.send(sample);
+    enum TapInput {
+        Modifiers(ModifierSample),
+        KeyPressed,
+    }
+
+    let (sender, receiver) = std::sync::mpsc::channel::<TapInput>();
+    hotkey_flags::add_sample_observer({
+        let sender = sender.clone();
+        move |sample| {
+            // The AppKit callback must stay cheap; the machine runs on its own
+            // thread.
+            let _ = sender.send(TapInput::Modifiers(sample));
+        }
+    });
+    hotkey_flags::add_key_observer(move || {
+        let _ = sender.send(TapInput::KeyPressed);
     });
 
     let spawned = std::thread::Builder::new()
         .name("polaris-prompt-taps".into())
         .spawn(move || {
             let mut machine = CtrlTap::default();
-            while let Ok(sample) = receiver.recv() {
-                if machine.on_modifiers(sample, Instant::now()) {
+            while let Ok(input) = receiver.recv() {
+                let fired = match input {
+                    TapInput::Modifiers(sample) => machine.on_modifiers(sample, Instant::now()),
+                    TapInput::KeyPressed => {
+                        machine.on_key_press();
+                        false
+                    }
+                };
+                if fired {
                     toggle(&app);
                 }
             }
@@ -222,19 +267,43 @@ fn place(app: &AppHandle, height: f64) -> Result<(), Box<dyn std::error::Error +
         .or_else(|| screens.firstObject())
         .ok_or("no display available")?;
     let frame = screen.frame();
+    // A display with no hardware notch has `safeAreaInsets().top == 0`. The
+    // window must then hang *below* the menu bar, like Spotlight, instead of
+    // covering it; on a notched display it stays flush with the screen top so
+    // it reads as if it grew out of the cutout. `visibleFrame` is the frame
+    // minus the menu bar and Dock, which is exactly the "below the menu bar"
+    // line the overlay's absence of a notch requires.
+    let notched = screen.safeAreaInsets().top > 0.0;
+    let visible = screen.visibleFrame();
+    let top = if notched {
+        frame.origin.y + frame.size.height
+    } else {
+        visible.origin.y + visible.size.height
+    };
+
     let width = PROMPT_WIDTH.clamp(320.0, (frame.size.width - 40.0).max(320.0));
+    // Never let a tall answer push the window off the bottom on a short or
+    // scaled display.
+    let height = height.clamp(
+        MIN_WINDOW_HEIGHT,
+        (top - frame.origin.y - 40.0).max(MIN_WINDOW_HEIGHT),
+    );
 
     // AppKit's origin is bottom-left: `top - height` keeps the top edge pinned
-    // to the screen top while the window grows downward.
+    // to the top line while the window grows downward.
     let desired = NSRect::new(
         NSPoint::new(
             frame.origin.x + (frame.size.width - width) / 2.0,
-            frame.origin.y + frame.size.height - height,
+            top - height,
         ),
         NSSize::new(width, height),
     );
     if native.frame() != desired {
         native.setFrame_display(desired, true);
+    }
+    match NOTCHED.lock() {
+        Ok(mut current) => *current = notched,
+        Err(poisoned) => *poisoned.into_inner() = notched,
     }
     Ok(())
 }
@@ -247,18 +316,19 @@ fn place(app: &AppHandle, height: f64) -> Result<(), Box<dyn std::error::Error +
     let monitor = window
         .current_monitor()?
         .or(window.primary_monitor()?);
+    let mut width = PROMPT_WIDTH;
     if let Some(monitor) = monitor {
         let scale = monitor.scale_factor();
         let position = monitor.position();
         let size = monitor.size();
         let monitor_width = f64::from(size.width) / scale;
-        let width = PROMPT_WIDTH.clamp(320.0, (monitor_width - 40.0).max(320.0));
+        width = PROMPT_WIDTH.clamp(320.0, (monitor_width - 40.0).max(320.0));
         window.set_position(tauri::LogicalPosition::new(
             f64::from(position.x) / scale + (monitor_width - width) / 2.0,
             f64::from(position.y) / scale,
         ))?;
     }
-    window.set_size(tauri::LogicalSize::new(PROMPT_WIDTH, height))?;
+    window.set_size(tauri::LogicalSize::new(width, height))?;
     Ok(())
 }
 
@@ -270,13 +340,29 @@ mod tests {
     fn prompt_event_serializes_as_camel_case_action() {
         let json = serde_json::to_string(&PromptEvent {
             action: PromptAction::Open,
+            notched: None,
         })
         .unwrap();
         assert_eq!(json, r#"{"action":"open"}"#);
         let json = serde_json::to_string(&PromptEvent {
             action: PromptAction::Close,
+            notched: None,
         })
         .unwrap();
         assert_eq!(json, r#"{"action":"close"}"#);
+    }
+
+    #[test]
+    fn an_open_event_carries_the_notch_flag() {
+        let json = serde_json::to_string(&PromptEvent {
+            action: PromptAction::Open,
+            notched: Some(false),
+        })
+        .unwrap();
+        assert_eq!(json, r#"{"action":"open","notched":false}"#);
+        assert!(
+            !json.contains("notched\":null"),
+            "a missing notch flag must be omitted, not serialized as null"
+        );
     }
 }

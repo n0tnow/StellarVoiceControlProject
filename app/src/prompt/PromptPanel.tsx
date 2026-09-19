@@ -34,6 +34,8 @@ import { speakTurnResult } from "@/lib/speech";
 const PROMPT_EVENT_NAME = "polaris-prompt";
 interface PromptEvent {
   action: "open" | "close";
+  /** Present on `open`; whether the host screen has a hardware notch. */
+  notched?: boolean;
 }
 
 /** localStorage key for the speaker switch. `"off"` is the only opt-out value. */
@@ -65,6 +67,7 @@ function storeSpeakerPreference(on: boolean): void {
 
 export function PromptPanel() {
   const [expanded, setExpanded] = useState(false);
+  const [notched, setNotched] = useState(true);
   const [sheetHeight, setSheetHeight] = useState(0);
   const [text, setText] = useState("");
   const [thinking, setThinking] = useState(false);
@@ -106,6 +109,12 @@ export function PromptPanel() {
       clearTimeout(hideTimer.current);
       hideTimer.current = null;
     }
+    // A reopened panel must not show the previous question and answer; a turn
+    // still in flight is left untouched.
+    if (!busyRef.current) {
+      setText("");
+      setResult(null);
+    }
     // Measure synchronously: the panel may open before the observer's first
     // callback, and opening an unmeasured sheet would animate to nothing.
     const measured = innerRef.current?.getBoundingClientRect().height ?? 0;
@@ -132,6 +141,9 @@ export function PromptPanel() {
     void listen<PromptEvent>(PROMPT_EVENT_NAME, (message) => {
       if (disposed) return;
       if (message.payload.action === "open") {
+        if (typeof message.payload.notched === "boolean") {
+          setNotched(message.payload.notched);
+        }
         openPanel();
       } else {
         closePanel();
@@ -214,7 +226,7 @@ export function PromptPanel() {
   return (
     <main className="prompt-root" onKeyDown={onRootKeyDown}>
       <section
-        className={`prompt-sheet ${expanded ? "is-open" : ""}`}
+        className={`prompt-sheet ${expanded ? "is-open" : ""} ${notched ? "is-notched" : ""}`}
         style={style}
         aria-label="Ask Polaris"
       >
