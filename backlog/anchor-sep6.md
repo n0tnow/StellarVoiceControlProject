@@ -4,7 +4,7 @@
 - **Worker/Agent:** W4 (Claude Sonnet 5); round-2 hardening by W4b (L2 implementer)
 - **Branch/Worktree:** `feat/anchor-sep6` @ `.worktrees/anchor-sep6`
 - **PR:** https://github.com/n0tnow/StellarVoiceControlProject/pull/11 (draft, `feat/anchor-sep6` -> `main`)
-- **Status (round 3):** round-1 findings 1-6 closed; round-2 review residuals N1-N3, N5-N7, N9 fixed and covered by tests; 111/111 anchor tests green; typecheck green; plain `node` loads the package. N4 (backlog index) and N8 (test-runner agreement with PR #9) are coordinator-owned follow-ups.
+- **Status (round 3 + main sync):** round-1 findings 1-6 closed; round-2 review residuals N1-N3, N5-N7, N9 fixed and covered by tests; branch synced with `main` (PRs #9 keeper, #10 guard) with the five shared files resolved and combined test wiring (N8 closed); 111/111 anchor + 67/67 keeper tests green; typecheck green; plain `node` loads the package. N4 (backlog index) remains a coordinator-owned follow-up.
 
 ## Completed
 
@@ -87,17 +87,36 @@ residuals (finding 4) plus a few small items:
 | N7 EnvSigner barrel | removed from `anchor/index.ts`; test-only entry point `stellar/src/anchor/testing.ts` exported as `@polaris/stellar/anchor/testing` | barrel test |
 | N9 withdrawTry path | documented: pass the returned `unsignedXdr` back to `submitSignedTx` so the hash check applies | doc-only |
 | N4 backlog index | coordinator-owned docs pass (instructed NOT to touch `backlog.md` here) | — |
-| N8 test-runner agreement | deferred: PR #9 is still open/draft. This branch keeps `test` = anchor-only (`test:anchor`); when #9 lands, keep its `test` and wire `test:anchor` into `scripts/check.sh` — needs the coordinator's call | — |
+| N8 test-runner agreement | resolved in the main sync: `stellar/package.json` `test` = `test:keeper && test:anchor`; `scripts/check.sh` runs the combined suite | `npm test` (keeper 67/67 + anchor 111/111) |
 
 Same-class adjacent fix: the SEP-1 discovery narration no longer echoes raw
 endpoint paths (`sep1.ts`, sanitised and capped at 120 chars).
+
+## Sync with main (PRs #9 keeper, #10 guard)
+
+`origin/main` (`259dbe9`) was merged into the branch before merge; the five shared files were resolved so both suites live side by side:
+
+| File | Resolution |
+|---|---|
+| `stellar/package.json` | `test` = `test:keeper && test:anchor`; `test:keeper` = `node --test "src/keeper/**/*.test.ts"`, `test:anchor` unchanged; keeper's `keeper`/`keeper:once` scripts and `engines` kept from main; anchor's `exports["./anchor/testing"]`, `anchor:e2e`, `smol-toml`, `vitest` kept. Main's broad `src/**/*.test.ts` glob was dropped: it would feed the vitest anchor suite to `node --test`. |
+| `stellar/tsconfig.json` | both sides added the same options (`types: ["node"]`, `allowImportingTsExtensions`, `erasableSyntaxOnly`); the union is identical and `erasableSyntaxOnly: true` is kept. |
+| `stellar/src/index.ts` | anchor's `depositTry`/`withdrawTry`/`submitSignedTx`/`SubmitResult` re-exports and `export * as anchor` kept; `export * as keeper` added from main; main's obsolete `submitSignedTx`/`SubmitResult` stubs dropped (superseded by `anchor/chainTools.ts`; keeper does not import them). |
+| `.env.example` | union: anchor block (`POLARIS_ANCHOR_HOME_DOMAIN`, `POLARIS_TEST_SECRET`) + keeper block (`KEEPER_*`, `GUARD_CONTRACT_ID`, `SOROBAN_RPC_URL`, `NETWORK_PASSPHRASE`); every value empty, no secrets. |
+| `package-lock.json` | regenerated with a root `npm install` after the package.json resolution; diff vs main is +293/-1 (anchor deps only). |
+
+N8 closed: `scripts/check.sh` now runs `caffeinate -i npm test -w @polaris/stellar` between the workspace typecheck and the shell build; `set -euo pipefail` makes either suite's failure fail the script.
+
+Evidence after the merge (`caffeinate -i`):
+* `npm test` (from `stellar/`): keeper **67/67 pass, 0 skipped**, anchor **111/111 pass** (5 files). The conditional drift-guard test no longer skips because `contracts/polaris_guard/src/lib.rs` is now in-tree (guard PR #10 merged).
+* `GUARD_SRC=../../guard-rules/contracts/polaris_guard/src/lib.rs npm run test:keeper`: **67/67 pass**.
+* `GUARD_SRC=/nonexistent/lib.rs npm run test:keeper`: **66 pass + 1 skip** (the conditional path still works when the contract source is absent).
+* `npm run check` and `npm run typecheck`: green for all four workspaces.
 
 ## Unfinished (handed off)
 * Real signer (Rust/Touch ID) not connected; `Signer` is the plug point (the other team). `docs/interfaces.md` `SigningService.sign(payloadHash)` does not match `Signer.signTransaction(xdr)`; an adapter or an interface decision is needed.
 * Firm SEP-38 quotes (`POST /quote`) and `deposit-exchange`/`withdraw-exchange`; indicative quotes only, no `quote_id` locking.
 * Zero-XLM production path (sponsored reserves, fee bumps): Friendbot only, per `docs/architecture.md` §4.3.
 * Withdraw `dest` (bank details) and SEP-12 field collection: only wired as parameters; a voice flow to ask the user for KYC fields is not built.
-* `make check` runs typecheck only; `npm test -w @polaris/stellar` is not yet part of `scripts/check.sh` (I left that file alone; one line to add).
 * `depositTry` needs a live account and network calls (quote, Horizon, SEP-10 GET); it is only unit-tested against fakes plus manually via the e2e flow, not through the agent.
 
 ## Blockers
@@ -117,10 +136,9 @@ None.
 5. `PolarisEvent`: add `{ type: "explain"; step: string; what: string; why: string }` so the UI/TTS can render the explain-log through the existing event stream.
 
 ## Suggested Next Step
-1. Review and merge this PR (squash), then the coordinator cuts no tag (no milestone yet).
+1. Reviewer re-verifies the merge resolution, then the coordinator squash-merges this PR; no tag yet (no milestone).
 2. Interfaces owner takes the five requested changes above; then wire `configureAnchor({ signer })` in the agent with the Touch-ID signer and let the agent call `AnchorSession` steps, speaking each `explain` record.
-3. Add `npm test -w @polaris/stellar` to `scripts/check.sh`.
-4. Decide whether the demo shows the zero-XLM path (sponsored reserve) since a real user has no XLM after an on-ramp.
+3. Decide whether the demo shows the zero-XLM path (sponsored reserve) since a real user has no XLM after an on-ramp.
 
 ## Raven calls
 1. **Asked** `search`: "SEP-6 deposit withdraw anchor transfer server". **Came back:** `stellarDocs.search_anchor_sep_docs` (SEP-1/6/10/12/38, but also lists SEP-24/31 in its description), `search_wallet_dapp_docs`, `skills.stellar-dev.standards`. **Changed:** chose these three as my sources; ignored every SEP-24/31 result.
