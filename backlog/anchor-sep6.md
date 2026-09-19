@@ -3,7 +3,7 @@
 - **Date:** 2026-09-19
 - **Worker/Agent:** W4 (Claude Sonnet 5)
 - **Branch/Worktree:** `feat/anchor-sep6` @ `.worktrees/anchor-sep6`
-- **PR:** see the draft PR opened from `feat/anchor-sep6` to `main` on origin (link in the coordinator hand-off)
+- **PR:** https://github.com/n0tnow/StellarVoiceControlProject/pull/11 (draft, `feat/anchor-sep6` -> `main`)
 
 ## Completed
 
