@@ -78,6 +78,17 @@ directly: no stage is entered before its triggering event (nothing reaches
 `speaking` before `speech_started`; `listening` only from `recording`; a
 `speech_finished` before playback started cannot end a turn).
 
+### 1c. A TTS failure still settles promptly
+
+Honest ordering has one consequence: when both TTS backends fail, Rust now emits
+only `speech_status: idle` (no `Speaking`), so the previous "idle ends the turn"
+path is gone. `SpeechQueue.enqueue` gained an optional per-utterance `onError`,
+and `App.tsx` passes a hook that settles the turn with the short label
+`Voice error` — guarded by the session id, so a stale failure from a superseded
+turn cannot fail a newer one. The 60 s watchdog remains the last resort, but this
+is the normal path now. Pinned by two new queue tests (per-utterance hook fires
+only for its own utterance; a dropped superseded utterance never reports).
+
 ---
 
 ## 2. Intent execution seam (infrastructure only)
@@ -228,7 +239,7 @@ from A8); the *ordering* is proven.
 | `npm run typecheck` | clean (interfaces, agent, stellar, app) |
 | `npm run build` | clean; initial JS 241 kB min, chain chunk 578 kB lazy |
 | `npm test -w @polaris/app` | **12/12** (was 9) |
-| `npm test -w @polaris/agent` | **56/56** (was 40) |
+| `npm test -w @polaris/agent` | **58/58** (was 40) |
 | `caffeinate -i cargo test` | **107 passed, 2 ignored** (was 104/2) |
 | `caffeinate -i cargo clippy --all-targets` | clean |
 | `npm test -w @polaris/stellar` | 67 + 111 pass (untouched, no regression) |

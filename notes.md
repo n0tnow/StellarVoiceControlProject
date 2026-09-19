@@ -447,7 +447,7 @@
      `readOnlyHint: false` **and** carry `readOnlyHint: true` or an operator
      allowlist — re-checked at call time. Tests use a loopback fake server. The
      webview wiring is deliberately left out (CORS/packaging) and said so.
-- **Verification:** app 9→12 tests, agent 40→56, cargo 104→107 passed / 2 ignored,
+- **Verification:** app 9→12 tests, agent 40→58, cargo 104→107 passed / 2 ignored,
   clippy + typecheck + build clean, stellar 178 pass untouched. Live runs pasted
   in the report: real LLM → intent → placeholder gate → `sendPayment` stub →
   `Chain not wired` (stage order `listening → thinking ×4 → failed`), and real
