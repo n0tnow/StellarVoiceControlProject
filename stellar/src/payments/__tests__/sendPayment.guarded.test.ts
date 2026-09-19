@@ -38,6 +38,11 @@ function guardedDeps(rpc: FakeGuardRpc, over: Partial<PaymentDeps> = {}): Paymen
     route: "guarded",
     guard: guardClient(rpc),
     guardAssetContracts: { USDC: ASSET_SAC },
+    // Preserve this file's chain-routing expectations: the app default is now
+    // `always_ask` (D10), so these fixtures opt into `auto_under_limit` to keep
+    // exercising `chooseGuardedRoute` itself. The new default is covered in
+    // sendPayment.approval.test.ts.
+    approvalProfile: { mode: "auto_under_limit" },
     ...over,
   });
 }

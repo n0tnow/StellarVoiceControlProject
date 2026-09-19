@@ -59,5 +59,8 @@ export * as keeper from "./keeper/index.ts";
 /** Owner/executor-side `polaris_guard` client, SAC allowance helper and routing policy (contract id is a parameter). */
 export * as guard from "./guard/index.ts";
 
+/** App-side approval policy: profiles, auto-pay drafts, classification, read-back and the enable/disable builders (D10). */
+export * as approval from "./approval/index.ts";
+
 /** Schedule tools: unsigned `create_schedule`/`cancel_schedule` + "Upcoming payments" view models + time helpers. */
 export * as schedule from "./schedule/index.ts";
