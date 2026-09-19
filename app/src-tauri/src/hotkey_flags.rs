@@ -26,6 +26,58 @@
 //! (`AXIsProcessTrusted`); the local monitor does not. See
 //! `docs/reports/2026-09-19-modifier-only-hotkey.md` §4.
 
+use std::sync::Mutex;
+
+use crate::gesture::ModifierSample;
+
+/// Extra, permanent sample observers, fed every masked `flagsChanged` sample
+/// next to the push-to-talk driver.
+///
+/// Step A6's double-Control prompt detector needs the same events as the
+/// Control+Option latch but must not disturb it. Rather than register a second
+/// AppKit monitor (the object returned by `add*Monitor…` *is* the
+/// subscription), the one monitor pair fans out to every observer here. The
+/// hotkey driver keeps using its own channel; these are additive and never
+/// change the gesture's semantics.
+type SampleObserver = Box<dyn Fn(ModifierSample) + Send + 'static>;
+
+static SAMPLE_OBSERVERS: Mutex<Vec<SampleObserver>> = Mutex::new(Vec::new());
+
+/// Registers a callback invoked for every masked modifier sample, for the
+/// process lifetime. Must stay cheap: it runs on the AppKit monitor callback's
+/// thread, so it should only forward the sample (e.g. into a channel).
+pub fn add_sample_observer<F>(observer: F)
+where
+    F: Fn(ModifierSample) + Send + 'static,
+{
+    match SAMPLE_OBSERVERS.lock() {
+        Ok(mut observers) => observers.push(Box::new(observer)),
+        // A previous observer panicked while the lock was held; the data is not
+        // corrupt, so recover it rather than losing the registration.
+        Err(poisoned) => poisoned.into_inner().push(Box::new(observer)),
+    }
+}
+
+/// Forwards one masked sample to every registered observer.
+///
+/// Only the macOS monitor callbacks call this; other hosts keep the function so
+/// the module's API stays uniform, hence the explicit allow there.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn notify_sample_observers(sample: ModifierSample) {
+    match SAMPLE_OBSERVERS.lock() {
+        Ok(observers) => {
+            for observer in observers.iter() {
+                observer(sample);
+            }
+        }
+        Err(poisoned) => {
+            for observer in poisoned.into_inner().iter() {
+                observer(sample);
+            }
+        }
+    }
+}
+
 #[cfg(target_os = "macos")]
 mod imp {
     use std::ptr::NonNull;
@@ -36,6 +88,8 @@ mod imp {
     use objc2_app_kit::{NSEvent, NSEventMask, NSEventModifierFlags};
 
     use crate::gesture::ModifierSample;
+
+    use super::notify_sample_observers;
 
     /// Keeps both `flagsChanged` subscriptions alive for the app's lifetime.
     pub struct FlagsMonitor {
@@ -86,7 +140,10 @@ mod imp {
             // SAFETY: AppKit hands us a valid NSEvent for the duration of the
             // call; we only read its modifier flags.
             let flags = unsafe { event.as_ref() }.modifierFlags();
-            global_callback(sample(flags));
+            let masked = sample(flags);
+            global_callback(masked);
+            // Step A6: the same sample drives the double-Control detector.
+            notify_sample_observers(masked);
         });
         let global = NSEvent::addGlobalMonitorForEventsMatchingMask_handler(
             NSEventMask::FlagsChanged,
@@ -101,7 +158,9 @@ mod imp {
         let local_block = RcBlock::new(move |event: NonNull<NSEvent>| -> *mut NSEvent {
             // SAFETY: see the global block above.
             let flags = unsafe { event.as_ref() }.modifierFlags();
-            on_sample(sample(flags));
+            let masked = sample(flags);
+            on_sample(masked);
+            notify_sample_observers(masked);
             event.as_ptr()
         });
         // SAFETY: the closure returns the same non-null event pointer it was
