@@ -18,7 +18,7 @@
 //!   permission must show up in the overlay, not crash the shell.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
@@ -361,6 +361,8 @@ fn record_to_wav(path: &Path, stop: std::sync::mpsc::Receiver<()>) -> Result<u64
 
     let stream_failure = Arc::new(AtomicBool::new(false));
     let stream_error = Arc::new(Mutex::new(None::<String>));
+    // Counted, not fatal — see the error callback in `build_stream`.
+    let xruns = Arc::new(AtomicUsize::new(0));
 
     let built = match sample_format {
         cpal::SampleFormat::F32 => build_stream::<f32>(
@@ -369,6 +371,7 @@ fn record_to_wav(path: &Path, stop: std::sync::mpsc::Receiver<()>) -> Result<u64
             samples_tx.clone(),
             Arc::clone(&stream_failure),
             Arc::clone(&stream_error),
+            Arc::clone(&xruns),
         ),
         cpal::SampleFormat::I16 => build_stream::<i16>(
             &device,
@@ -376,6 +379,7 @@ fn record_to_wav(path: &Path, stop: std::sync::mpsc::Receiver<()>) -> Result<u64
             samples_tx.clone(),
             Arc::clone(&stream_failure),
             Arc::clone(&stream_error),
+            Arc::clone(&xruns),
         ),
         cpal::SampleFormat::U16 => build_stream::<u16>(
             &device,
@@ -383,6 +387,7 @@ fn record_to_wav(path: &Path, stop: std::sync::mpsc::Receiver<()>) -> Result<u64
             samples_tx.clone(),
             Arc::clone(&stream_failure),
             Arc::clone(&stream_error),
+            Arc::clone(&xruns),
         ),
         other => Err(format!("unsupported microphone sample format: {other:?}")),
     };
@@ -425,6 +430,14 @@ fn record_to_wav(path: &Path, stop: std::sync::mpsc::Receiver<()>) -> Result<u64
         .join()
         .map_err(|_| "the WAV writer thread panicked".to_string())?;
 
+    let glitches = xruns.load(Ordering::Relaxed);
+    if glitches > 0 {
+        eprintln!(
+            "polaris: recording finished with {glitches} audio glitch(es); \
+             some frames were dropped but the take was kept"
+        );
+    }
+
     if let Some(error) = stream_error.lock().unwrap_or_else(|error| error.into_inner()).take() {
         return Err(error);
     }
@@ -448,6 +461,17 @@ fn wav_spec(config: &cpal::StreamConfig) -> hound::WavSpec {
         bits_per_sample: 16,
         sample_format: hound::SampleFormat::Int,
     }
+}
+
+/// Whether a cpal stream error ends the recording.
+///
+/// `Xrun` is CoreAudio's `kAudioDeviceProcessorOverload`: the device missed its
+/// deadline and dropped frames, which happens under ordinary system load and
+/// leaves the stream running. Everything else — a lost device, a rerouted
+/// stream, an invalidated config — means the take cannot be trusted, and the
+/// WAV header would no longer describe what is being written.
+fn is_fatal_stream_error(kind: cpal::ErrorKind) -> bool {
+    kind != cpal::ErrorKind::Xrun
 }
 
 /// Owns the WAV writer on a dedicated thread so the realtime capture callback
@@ -481,6 +505,7 @@ fn build_stream<T>(
     samples: std::sync::mpsc::SyncSender<Vec<i16>>,
     failed: Arc<AtomicBool>,
     error: Arc<Mutex<Option<String>>>,
+    xrun_count: Arc<AtomicUsize>,
 ) -> Result<cpal::Stream, String>
 where
     T: cpal::SizedSample,
@@ -492,6 +517,7 @@ where
 
     let data_failure = Arc::clone(&failed);
     let error_callback = error;
+    let xruns = xrun_count;
     device
         .build_input_stream(
             config,
@@ -512,6 +538,23 @@ where
                 }
             },
             move |error| {
+                // `Xrun` is CoreAudio's `kAudioDeviceProcessorOverload`: the device
+                // could not be serviced in time and some frames were dropped. It
+                // fires for reasons outside this process too — heavy system load,
+                // another app monopolising the device — and the stream keeps
+                // running afterwards. Treating it as fatal is what made a single
+                // scheduling hiccup destroy a whole recording. Count it, keep
+                // recording, and report it only if it becomes pathological.
+                if !is_fatal_stream_error(error.kind()) {
+                    let dropped = xruns.fetch_add(1, Ordering::Relaxed) + 1;
+                    if dropped == 1 {
+                        eprintln!(
+                            "polaris: audio glitch (CoreAudio processor overload); \
+                             dropping frames but continuing to record"
+                        );
+                    }
+                    return;
+                }
                 if let Ok(mut guard) = error_callback.try_lock() {
                     *guard = Some(format!("audio stream error: {error}"));
                 }
@@ -531,6 +574,25 @@ mod tests {
     fn test_capture(dir: PathBuf) -> Capture {
         let (ready, _receiver) = std::sync::mpsc::channel();
         Capture::new(dir, ready)
+    }
+
+    /// Regression guard: a single CoreAudio processor overload used to abort the
+    /// whole recording, so one scheduling hiccup under load lost the take and
+    /// left the overlay showing "Mic error". An `Xrun` means frames were
+    /// dropped, not that the stream died.
+    #[test]
+    fn only_non_xrun_stream_errors_are_fatal() {
+        assert!(!is_fatal_stream_error(cpal::ErrorKind::Xrun));
+        for kind in [
+            cpal::ErrorKind::DeviceNotAvailable,
+            cpal::ErrorKind::StreamInvalidated,
+            cpal::ErrorKind::DeviceChanged,
+            cpal::ErrorKind::UnsupportedConfig,
+            cpal::ErrorKind::BackendError,
+            cpal::ErrorKind::Other,
+        ] {
+            assert!(is_fatal_stream_error(kind), "{kind:?} must end the take");
+        }
     }
 
     #[test]
