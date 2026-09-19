@@ -556,3 +556,60 @@
   the STT locale decision, and confirmation templates only for `tr`/`en`.
 - **Status:** implemented on `feat/a11-anthropic-and-language`; pushed, no PR.
   `backlog/2026-09-20-a11-anthropic-and-language.md`.
+
+---
+
+## 2026-09-20 — A12: detected language end to end, and a hard cap on what gets spoken
+
+- **Context:** the owner's English command was answered in Turkish by an English
+  voice. A11 had made the model *report* a language and left the real root cause
+  as an owner decision: the on-device recogniser is pinned to one locale, so it
+  cannot identify the language at all. `stellar/` and `contracts/` were not
+  touched.
+- **Root cause (confirmed):** `SFSpeechRecognizer` was fixed to `tr-TR`; English
+  audio was phoneticised as Turkish, so the transcript — and everything after it —
+  was poisoned. Not a model or TTS bug.
+- **Decisions:**
+  1. **The detected language is the authority.** `Transcription.language` carries
+     it, the `transcript` event forwards it (`language: string | null` on the seam),
+     and `resolveTurnLanguage` reconciles it with the model's self-report: the
+     **detected** language wins because it is measured from the audio, while the
+     model's report is an inference and can be dragged wrong by a bad transcript.
+     Disagreement is logged with the winner and why; the comparison is on the
+     **base** language (`en-US` vs `en` is agreement). The detected language is
+     pinned into the prompt and keys the per-language TTS voice.
+  2. **Groq's `verbose_json` is the detector.** `whisper-large-v3-turbo` returns
+     `language` only with `verbose_json` (the A11 `json` format did not). Rust
+     normalises Groq's language *names* and Apple's *locales* to one BCP-47 shape
+     (`normalize_detected_language`); an unmapped name is `None`, never a guess.
+  3. **The default backend flips to Groq.** It is the one that makes the demo
+     correct for both languages, at the cost of the audio leaving the Mac — which
+     the startup line states. On-device stays selectable
+     (`POLARIS_STT_BACKEND=ondevice`, audio never leaves, single-locale) and its
+     line now says so too. A typo still warns and falls back loudly.
+  4. **The parallel on-device idea is not shipped.** Two recognisers
+     (`tr-TR` + `en-US`) picking the higher confidence is mechanically possible
+     (Apple exposes per-segment `confidence`), but the value is a fit within one
+     locale's model, not a cross-locale likelihood — a Turkish recogniser fed
+     English audio is still confident. It is also unmeasurable here: the probe
+     aborts with `SIGABRT` (exit 134) from a bare `cargo test` binary because TCC
+     needs `NSSpeechRecognitionUsageDescription` in a bundle. Kept as an ignored
+     harness, not shipped. Refusing to ship a coin flip is the honest outcome.
+  5. **Cap what gets spoken, at both ends.** The prompt demands one or two short
+     sentences; `capSpokenText` (`MAX_SPOKEN_CHARS = 120`, applied in `spokenText`)
+     enforces it in code, cutting at the last sentence boundary, else the last word
+     boundary (`…`), never mid-word. This is the biggest latency win available:
+     the same answer went from `tts in 20280 ms` (311 chars) to `4325 ms`
+     (36 chars).
+- **Verification:** real audio→STT→agent→Fish for both languages with the
+  coordinator's sample files — EN: detected `en`, English answer, Ethan voice,
+  39-char confirmation; TR: detected `tr`, Turkish answer, pinned voice, 48 chars.
+  App 19, agent 91→100, cargo 118/3→120/5, typecheck/build/clippy clean. Full
+  outputs in `backlog/2026-09-20-a12-language-detection.md`.
+- **Still open:** the owner's `.env` selects Anthropic and `claude-sonnet-5`
+  currently rejects the request (`HTTP 400: temperature is deprecated for this
+  model`) — a pre-existing A11 issue outside this task; the runs forced the
+  OpenAI-compatible model. The in-app mic run still needs a human. Confirmation
+  templates remain tr/en only.
+- **Status:** implemented on `feat/a12-language-detection`; pushed, no PR.
+  `backlog/2026-09-20-a12-language-detection.md`.
