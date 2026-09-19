@@ -9,6 +9,10 @@ const FALLBACK_GEOMETRY: NotchGeometry = {
   idleHeight: 34,
   expandedWidth: 680,
   expandedHeight: 66,
+  pillTopRadius: 4,
+  pillBottomRadius: 9,
+  shellEarRadius: 6,
+  shellBottomRadius: 14,
 };
 
 const IDLE_STATUS: CaptureStatus = { state: "idle", recording: null, error: null };
@@ -140,6 +144,10 @@ export default function App() {
     "--idle-height": `${geometry.idleHeight}px`,
     "--expanded-width": `${geometry.expandedWidth}px`,
     "--expanded-height": `${geometry.expandedHeight}px`,
+    "--pill-top-radius": `${geometry.pillTopRadius}px`,
+    "--pill-bottom-radius": `${geometry.pillBottomRadius}px`,
+    "--shell-ear-radius": `${geometry.shellEarRadius}px`,
+    "--shell-bottom-radius": `${geometry.shellBottomRadius}px`,
   } as CSSProperties;
 
   return (

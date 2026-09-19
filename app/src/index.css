@@ -73,37 +73,55 @@
   pointer-events: none;
 }
 
+/* Registered so the concave "ear" radius can be transitioned: the pseudo
+   elements below inherit it, so their box and their gradient radius animate in
+   lockstep instead of popping in at the end of the expansion. */
+@property --ear {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 0px;
+}
+
 .notch {
-  --shoulder: 18px;
+  /* Resting pill: the measured hardware cutout. Its top corners are tighter
+     than its bottom corners (notchbay.com measures ~4 pt vs ~8 pt), and every
+     radius arrives from Rust through the custom properties below. */
+  --ear: 0px;
+  --top-radius: var(--pill-top-radius);
+  --bottom-radius: var(--pill-bottom-radius);
   position: relative;
   flex-shrink: 0;
   width: var(--idle-width);
   height: var(--idle-height);
   background: #000;
-  border-radius: 0 0 25px 25px;
+  border-radius: var(--top-radius) var(--top-radius) var(--bottom-radius)
+    var(--bottom-radius);
   transition:
     width 300ms cubic-bezier(0.22, 1, 0.36, 1),
-    height 300ms cubic-bezier(0.22, 1, 0.36, 1);
+    height 300ms cubic-bezier(0.22, 1, 0.36, 1),
+    border-radius 300ms cubic-bezier(0.22, 1, 0.36, 1),
+    --ear 300ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 /* The transparent quarter circles preserve the screen behind the concave
    shoulders. Both pseudo-elements sit in the screen above the shell's top edge,
-   so they must stay visually outside the black body. */
+   so they must stay visually outside the black body. `--ear` is 0 while idle,
+   which is exactly what lets the resting shape coincide with the cutout. */
 .notch::before,
 .notch::after {
   content: "";
   position: absolute;
   top: 0;
-  width: var(--shoulder);
-  height: var(--shoulder);
+  width: var(--ear);
+  height: var(--ear);
 }
 
 .notch::before {
   right: 100%;
   background: radial-gradient(
     circle at 0 100%,
-    transparent calc(var(--shoulder) - 0.5px),
-    #000 var(--shoulder)
+    transparent calc(var(--ear) - 0.5px),
+    #000 var(--ear)
   );
 }
 
@@ -111,12 +129,17 @@
   left: 100%;
   background: radial-gradient(
     circle at 100% 100%,
-    transparent calc(var(--shoulder) - 0.5px),
-    #000 var(--shoulder)
+    transparent calc(var(--ear) - 0.5px),
+    #000 var(--ear)
   );
 }
 
 .notch.is-expanded {
+  /* The shell grows out of the cutout: the top edge stays flush with the screen
+     edge through the concave ears, while the convex bottom corners loosen. */
+  --ear: var(--shell-ear-radius);
+  --top-radius: 0px;
+  --bottom-radius: var(--shell-bottom-radius);
   width: var(--expanded-width);
   height: var(--expanded-height);
 }

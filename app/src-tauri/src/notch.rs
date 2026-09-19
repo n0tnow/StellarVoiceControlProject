@@ -27,6 +27,10 @@ const OVERLAY_WINDOW_LEVEL: isize = 25;
 
 /// The `notch_geometry` command payload, mirrored as `NotchGeometry` in
 /// `@polaris/interfaces`.
+///
+/// Dimensions and radii are AppKit points. The radii are **derived** from the
+/// measured safe area (see [`radii_for`]) rather than hardcoded in CSS, so the
+/// silhouette tracks the display instead of the 14" reference numbers.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NotchGeometry {
@@ -34,14 +38,76 @@ pub struct NotchGeometry {
     pub idle_height: f64,
     pub expanded_width: f64,
     pub expanded_height: f64,
+    /// Convex radius of the resting pill's top corners (hardware cutout, ~4 pt).
+    pub pill_top_radius: f64,
+    /// Convex radius of the resting pill's bottom corners (hardware cutout, ~8 pt).
+    pub pill_bottom_radius: f64,
+    /// Concave "ear" radius that melts the expanded shell into the screen edge.
+    pub shell_ear_radius: f64,
+    /// Convex radius of the expanded shell's bottom corners.
+    pub shell_bottom_radius: f64,
+}
+
+/// Corner radii for both shell states, in AppKit points.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Radii {
+    pill_top: f64,
+    pill_bottom: f64,
+    shell_ear: f64,
+    shell_bottom: f64,
+}
+
+/// `f64::clamp` is not const on the pinned toolchain, and the fallback has to be
+/// a `const`, so carry a tiny const-callable version.
+const fn clamp(value: f64, min: f64, max: f64) -> f64 {
+    if value < min {
+        min
+    } else if value > max {
+        max
+    } else {
+        value
+    }
+}
+
+/// Scales the corner radii to the measured cutout.
+///
+/// The fractions come from two measured references: the hardware cutout's top
+/// corners are ~4 pt and its bottom corners ~8 pt (notchbay.com), while
+/// boring.notch's `NotchShape` defaults to a 6 pt concave ear and a 14 pt convex
+/// bottom. Deriving them from the measured height keeps a 16" display (38 pt
+/// cutout) from reusing the 14" numbers; the clamps stop a degenerate screen
+/// report from inverting the silhouette.
+const fn radii_for(idle_height: f64, expanded_height: f64) -> Radii {
+    Radii {
+        pill_top: clamp(idle_height * 0.125, 3.0, 5.0),
+        pill_bottom: clamp(idle_height * 0.25, 7.0, 10.0),
+        shell_ear: clamp(expanded_height * 0.09, 5.0, 8.0),
+        shell_bottom: clamp(expanded_height * 0.21, 12.0, 18.0),
+    }
+}
+
+/// Idle pill size for a notched display: **exactly** the measured cutout.
+///
+/// The earlier revision shipped `housing + 20` wide and `safe_top + 4` tall,
+/// which is why the black shape never aligned with the hardware and read as a
+/// separate blob.
+fn idle_cutout_size(housing: f64, safe_top: f64) -> (f64, f64) {
+    (housing.max(0.0), safe_top)
 }
 
 /// Centred-pill fallback for displays without a camera housing.
-pub const FALLBACK: NotchGeometry = NotchGeometry {
-    idle_width: 216.0,
-    idle_height: 34.0,
-    expanded_width: 680.0,
-    expanded_height: 66.0,
+pub const FALLBACK: NotchGeometry = {
+    let radii = radii_for(34.0, 66.0);
+    NotchGeometry {
+        idle_width: 216.0,
+        idle_height: 34.0,
+        expanded_width: 680.0,
+        expanded_height: 66.0,
+        pill_top_radius: radii.pill_top,
+        pill_bottom_radius: radii.pill_bottom,
+        shell_ear_radius: radii.shell_ear,
+        shell_bottom_radius: radii.shell_bottom,
+    }
 };
 
 /// Configures and reveals the overlay. Runs from `setup`, i.e. on the main
@@ -101,8 +167,12 @@ fn configure(app: &AppHandle) -> Result<NotchGeometry, Box<dyn std::error::Error
         // The gap between the two auxiliary areas is the camera housing.
         let left = screen.auxiliaryTopLeftArea();
         let right = screen.auxiliaryTopRightArea();
-        let housing = (right.origin.x - (left.origin.x + left.size.width)).max(0.0);
-        ((housing + 20.0).max(180.0), safe_top + 4.0)
+        let housing = right.origin.x - (left.origin.x + left.size.width);
+        // Match the cutout exactly. The menu bar paints ~5 pt deeper than the
+        // physical housing (notchbay.com), but the system already draws that
+        // strip for us; painting black into it is what made the overlay read as
+        // a blob in light mode, so the resting pill stops at `safe_top`.
+        idle_cutout_size(housing, safe_top)
     } else {
         (FALLBACK.idle_width, FALLBACK.idle_height)
     };
@@ -110,6 +180,7 @@ fn configure(app: &AppHandle) -> Result<NotchGeometry, Box<dyn std::error::Error
     let outer_width = WINDOW_WIDTH.min(frame.size.width);
     let expanded_width = 680.0_f64.max(idle_width + 380.0).min(outer_width - 40.0);
     let expanded_height = 66.0_f64.max(idle_height + 20.0);
+    let radii = radii_for(idle_height, expanded_height);
 
     let window = app
         .get_webview_window(WINDOW_LABEL)
@@ -142,6 +213,10 @@ fn configure(app: &AppHandle) -> Result<NotchGeometry, Box<dyn std::error::Error
         idle_height,
         expanded_width,
         expanded_height,
+        pill_top_radius: radii.pill_top,
+        pill_bottom_radius: radii.pill_bottom,
+        shell_ear_radius: radii.shell_ear,
+        shell_bottom_radius: radii.shell_bottom,
     })
 }
 
@@ -162,10 +237,51 @@ fn configure(app: &AppHandle) -> Result<NotchGeometry, Box<dyn std::error::Error
 }
 
 // Compile-time invariants: the pill must be smaller than the expanded shell,
-// and the outer window must be able to host the widest expanded shell.
+// the outer window must be able to host the widest expanded shell, and the
+// radii must describe a valid (non-inverted) silhouette.
 const _: () = {
     assert!(FALLBACK.idle_width < FALLBACK.expanded_width);
     assert!(FALLBACK.idle_height < FALLBACK.expanded_height);
     assert!(FALLBACK.expanded_width <= WINDOW_WIDTH);
     assert!(FALLBACK.expanded_height <= WINDOW_HEIGHT);
+    assert!(FALLBACK.pill_top_radius > 0.0);
+    assert!(FALLBACK.pill_bottom_radius > FALLBACK.pill_top_radius);
+    assert!(FALLBACK.shell_ear_radius > 0.0);
+    assert!(FALLBACK.shell_bottom_radius > FALLBACK.shell_ear_radius);
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn idle_pill_is_the_measured_cutout_not_inflated() {
+        // Measured on the built-in 14" display: the auxiliary areas leave a
+        // 179 pt housing and `safeAreaInsets.top` is 32 pt. The old code
+        // returned 199 x 36 here.
+        assert_eq!(idle_cutout_size(179.0, 32.0), (179.0, 32.0));
+    }
+
+    #[test]
+    fn idle_size_never_goes_negative_on_a_degenerate_report() {
+        assert_eq!(idle_cutout_size(-12.0, 32.0), (0.0, 32.0));
+    }
+
+    #[test]
+    fn radii_track_the_measured_heights() {
+        let radii = radii_for(32.0, 66.0);
+        assert!((radii.pill_top - 4.0).abs() < f64::EPSILON);
+        assert!((radii.pill_bottom - 8.0).abs() < f64::EPSILON);
+        assert!((radii.shell_ear - 5.94).abs() < 0.01);
+        assert!((radii.shell_bottom - 13.86).abs() < 0.01);
+    }
+
+    #[test]
+    fn fallback_radii_match_the_shared_derivation() {
+        let radii = radii_for(FALLBACK.idle_height, FALLBACK.expanded_height);
+        assert!((FALLBACK.pill_top_radius - radii.pill_top).abs() < f64::EPSILON);
+        assert!((FALLBACK.pill_bottom_radius - radii.pill_bottom).abs() < f64::EPSILON);
+        assert!((FALLBACK.shell_ear_radius - radii.shell_ear).abs() < f64::EPSILON);
+        assert!((FALLBACK.shell_bottom_radius - radii.shell_bottom).abs() < f64::EPSILON);
+    }
+}

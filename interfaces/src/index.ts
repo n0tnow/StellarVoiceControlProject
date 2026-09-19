@@ -96,15 +96,25 @@ export interface CaptureStatus {
 }
 
 /**
- * The notch shell's dimensions in AppKit **points** (not CSS-relative units), so
- * the webview never has to guess the physical notch. On a display without a
- * notch the Rust side returns a centred-pill fallback.
+ * The notch shell's dimensions and corner radii in AppKit **points** (not
+ * CSS-relative units), so the webview never has to guess the physical notch.
+ * The radii are derived on the Rust side from the measured safe area rather
+ * than hardcoded in CSS. On a display without a notch the Rust side returns a
+ * centred-pill fallback.
  */
 export interface NotchGeometry {
   idleWidth: number;
   idleHeight: number;
   expandedWidth: number;
   expandedHeight: number;
+  /** Convex radius of the resting pill's top corners (hardware cutout, ~4 pt). */
+  pillTopRadius: number;
+  /** Convex radius of the resting pill's bottom corners (hardware cutout, ~8 pt). */
+  pillBottomRadius: number;
+  /** Concave "ear" radius where the expanded shell melts into the screen edge. */
+  shellEarRadius: number;
+  /** Convex radius of the expanded shell's bottom corners. */
+  shellBottomRadius: number;
 }
 
 /* ------------------------------------------------------------------ *
