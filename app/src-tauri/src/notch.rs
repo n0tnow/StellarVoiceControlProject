@@ -21,9 +21,34 @@ const WINDOW_HEIGHT: f64 = 120.0;
 /// The overlay is the app's only window; the label is pinned by the config.
 pub const WINDOW_LABEL: &str = "main";
 
-/// `NSStatusWindowLevel`: above the menu bar, without stealing keyboard focus.
+/// `NSPopUpMenuWindowLevel` (101): above the menu bar (25) *and* above the
+/// window a fullscreen app is promoted to, so the overlay reads as a system HUD
+/// over a fullscreen Space (step A14). `NSStatusWindowLevel` (25) was above the
+/// ordinary desktop/menu bar but lost to a fullscreen window, which is why the
+/// overlay vanished as soon as an app went fullscreen.
 #[cfg(target_os = "macos")]
-const OVERLAY_WINDOW_LEVEL: isize = 25;
+const OVERLAY_WINDOW_LEVEL: isize = 101;
+
+/// The AppKit collection behaviour every configure pass applies (step A14).
+///
+/// * `CanJoinAllSpaces` — the overlay appears on whichever Space is active,
+///   including the fullscreen Space an app creates.
+/// * `FullScreenAuxiliary` — it is allowed to float above a fullscreen window
+///   instead of being forced into that app's fullscreen "primary" role.
+/// * `Stationary` — it does not slide with a Space transition.
+/// * `IgnoresCycle` — it stays out of the Cmd+Tab / window cycle, so the
+///   overlay never activates Polaris.
+///
+/// Kept as one named value so [`configure`] and the diagnostics command cannot
+/// drift apart in what they claim the window is set to.
+#[cfg(target_os = "macos")]
+fn overlay_collection_behavior() -> objc2_app_kit::NSWindowCollectionBehavior {
+    use objc2_app_kit::NSWindowCollectionBehavior;
+    NSWindowCollectionBehavior::CanJoinAllSpaces
+        | NSWindowCollectionBehavior::FullScreenAuxiliary
+        | NSWindowCollectionBehavior::Stationary
+        | NSWindowCollectionBehavior::IgnoresCycle
+}
 
 /// The `notch_geometry` command payload, mirrored as `NotchGeometry` in
 /// `@polaris/interfaces`.
@@ -143,12 +168,46 @@ pub fn setup(app: &tauri::App) -> tauri::Result<()> {
         .ok_or(tauri::Error::WindowNotFound)?;
     // The overlay must never eat a click meant for the app underneath it.
     window.set_ignore_cursor_events(true)?;
-    let geometry = configure(app.handle())
+    let outcome = configure(app.handle())
         .map_err(|error| tauri::Error::Io(std::io::Error::other(error.to_string())))?;
-    println!("polaris: notch geometry {geometry:?}");
+    println!("polaris: notch geometry {:?}", outcome.geometry);
+    // Step A14: log the actual window flags the overlay ended up with, so the
+    // fullscreen behaviour is inspectable from the running process rather than
+    // assumed from the config.
+    println!("polaris: notch window flags {:?}", outcome.flags);
     window.show()?;
     Ok(())
 }
+
+/// The AppKit window flags the overlay was configured with (step A14).
+///
+/// This is the inspectable evidence that the overlay can float over a
+/// fullscreen Space: it is returned by [`notch_window_flags`] and logged at
+/// startup, straight from the live `NSWindow` rather than read back from
+/// `tauri.conf.json` (which cannot express either field).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotchWindowFlags {
+    /// The raw `NSWindowLevel` (`NSPopUpMenuWindowLevel` is 101).
+    pub level: isize,
+    /// The raw `NSWindowCollectionBehavior` bitmask.
+    pub collection_behavior: u64,
+    /// Whether `FullScreenAuxiliary` is set — the window may float above a
+    /// fullscreen app instead of being swallowed by it.
+    pub full_screen_auxiliary: bool,
+    /// Whether `CanJoinAllSpaces` is set — the window appears on every Space.
+    pub can_join_all_spaces: bool,
+    /// Whether the window can become key, i.e. whether it could activate Polaris.
+    pub focusable: bool,
+}
+
+/// The AppKit bits for `NSWindowCollectionBehaviorFullScreenAuxiliary` (1 << 8)
+/// and `CanJoinAllSpaces` (1 << 0), spelled out so the flags readback does not
+/// depend on the generated crate's `bits()` API shape.
+#[cfg(target_os = "macos")]
+const FULL_SCREEN_AUXILIARY_BIT: u64 = 1 << 8;
+#[cfg(target_os = "macos")]
+const CAN_JOIN_ALL_SPACES_BIT: u64 = 1 << 0;
 
 /// Re-reads the display geometry and repositions the overlay. Called on startup
 /// and periodically by the webview so display topology changes are picked up.
@@ -156,6 +215,27 @@ pub fn setup(app: &tauri::App) -> tauri::Result<()> {
 pub async fn notch_geometry(app: AppHandle) -> Result<NotchGeometry, String> {
     // AppKit objects are main-thread-only; hand the closure to the event loop
     // and block this command's worker until it answers.
+    with_overlay(app, |outcome| outcome.geometry).await
+}
+
+/// Reports the live overlay window's AppKit flags (step A14).
+///
+/// The owner-visible check for the fullscreen fix: it reads the level and the
+/// collection behaviour off the real `NSWindow`, so `level=101` and
+/// `fullScreenAuxiliary=true, canJoinAllSpaces=true` are what the running
+/// process can be inspected for. The final "does it visually float over a real
+/// fullscreen app" check still needs a human eye.
+#[tauri::command]
+pub async fn notch_window_flags(app: AppHandle) -> Result<NotchWindowFlags, String> {
+    with_overlay(app, |outcome| outcome.flags).await
+}
+
+/// Runs [`configure`] on the main thread and projects part of its outcome.
+async fn with_overlay<T, F>(app: AppHandle, project: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce(&ConfigureOutcome) -> T + Send + 'static,
+{
     let (sender, receiver) = std::sync::mpsc::sync_channel(1);
     let handle = app.clone();
     app.run_on_main_thread(move || {
@@ -163,17 +243,34 @@ pub async fn notch_geometry(app: AppHandle) -> Result<NotchGeometry, String> {
     })
     .map_err(|error| error.to_string())?;
 
-    tauri::async_runtime::spawn_blocking(move || receiver.recv())
+    let received = tauri::async_runtime::spawn_blocking(move || receiver.recv())
         .await
-        .map_err(|error| error.to_string())?
-        .map_err(|error| error.to_string())?
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    // `recv` fails only if the main-thread closure panicked or never ran.
+    let outcome = received.map_err(|error| error.to_string())?;
+    outcome.map(|value| project(&value)).map_err(|error| error.to_string())
+}
+
+/// What one [`configure`] pass produced: the geometry the webview needs and the
+/// window flags the A14 diagnostics report.
+#[cfg(target_os = "macos")]
+struct ConfigureOutcome {
+    geometry: NotchGeometry,
+    flags: NotchWindowFlags,
+}
+
+/// Non-macOS [`configure`] outcome: no AppKit flags to report, so the fields
+/// are zeroed and only the geometry is real.
+#[cfg(not(target_os = "macos"))]
+struct ConfigureOutcome {
+    geometry: NotchGeometry,
+    flags: NotchWindowFlags,
 }
 
 #[cfg(target_os = "macos")]
-fn configure(app: &AppHandle) -> Result<NotchGeometry, Box<dyn std::error::Error + Send + Sync>> {
+fn configure(app: &AppHandle) -> Result<ConfigureOutcome, Box<dyn std::error::Error + Send + Sync>> {
     use objc2::MainThreadMarker;
-    use objc2_app_kit::{NSScreen, NSWindow, NSWindowCollectionBehavior};
+    use objc2_app_kit::{NSScreen, NSWindow};
     use objc2_foundation::{NSPoint, NSRect, NSSize};
 
     let mtm = MainThreadMarker::new().ok_or("notch geometry requires the main thread")?;
@@ -214,12 +311,19 @@ fn configure(app: &AppHandle) -> Result<NotchGeometry, Box<dyn std::error::Error
     // thread, so the borrowed reference cannot outlive its owner here.
     let native = unsafe { &*raw_window.cast::<NSWindow>() };
     native.setLevel(OVERLAY_WINDOW_LEVEL);
-    native.setCollectionBehavior(
-        NSWindowCollectionBehavior::CanJoinAllSpaces
-            | NSWindowCollectionBehavior::FullScreenAuxiliary
-            | NSWindowCollectionBehavior::Stationary
-            | NSWindowCollectionBehavior::IgnoresCycle,
-    );
+    native.setCollectionBehavior(overlay_collection_behavior());
+    // Step A14: neither line above activates Polaris or takes focus — the window
+    // is click-through and cannot become key — so the overlay floats over a
+    // fullscreen app without stealing the keyboard. The flags are read straight
+    // off the live NSWindow as the inspectable evidence for that.
+    let behavior = native.collectionBehavior().0 as u64;
+    let flags = NotchWindowFlags {
+        level: native.level(),
+        collection_behavior: behavior,
+        full_screen_auxiliary: behavior & FULL_SCREEN_AUXILIARY_BIT != 0,
+        can_join_all_spaces: behavior & CAN_JOIN_ALL_SPACES_BIT != 0,
+        focusable: native.canBecomeKeyWindow(),
+    };
 
     let desired = NSRect::new(
         NSPoint::new(
@@ -232,20 +336,23 @@ fn configure(app: &AppHandle) -> Result<NotchGeometry, Box<dyn std::error::Error
         native.setFrame_display(desired, true);
     }
 
-    Ok(NotchGeometry {
-        idle_width,
-        idle_height,
-        expanded_width,
-        expanded_height,
-        pill_top_radius: radii.pill_top,
-        pill_bottom_radius: radii.pill_bottom,
-        shell_ear_radius: radii.shell_ear,
-        shell_bottom_radius: radii.shell_bottom,
+    Ok(ConfigureOutcome {
+        geometry: NotchGeometry {
+            idle_width,
+            idle_height,
+            expanded_width,
+            expanded_height,
+            pill_top_radius: radii.pill_top,
+            pill_bottom_radius: radii.pill_bottom,
+            shell_ear_radius: radii.shell_ear,
+            shell_bottom_radius: radii.shell_bottom,
+        },
+        flags,
     })
 }
 
 #[cfg(not(target_os = "macos"))]
-fn configure(app: &AppHandle) -> Result<NotchGeometry, Box<dyn std::error::Error + Send + Sync>> {
+fn configure(app: &AppHandle) -> Result<ConfigureOutcome, Box<dyn std::error::Error + Send + Sync>> {
     let window = app
         .get_webview_window(WINDOW_LABEL)
         .ok_or("overlay window unavailable")?;
@@ -257,7 +364,18 @@ fn configure(app: &AppHandle) -> Result<NotchGeometry, Box<dyn std::error::Error
             f64::from(monitor.position().y) / scale,
         ))?;
     }
-    Ok(FALLBACK)
+    // No AppKit on this platform: report zeroed flags so the diagnostics command
+    // still answers, and keep the geometry real.
+    Ok(ConfigureOutcome {
+        geometry: FALLBACK,
+        flags: NotchWindowFlags {
+            level: 0,
+            collection_behavior: 0,
+            full_screen_auxiliary: false,
+            can_join_all_spaces: false,
+            focusable: false,
+        },
+    })
 }
 
 // Compile-time invariants: the pill must be smaller than the expanded shell,
@@ -342,5 +460,30 @@ mod tests {
         assert!((FALLBACK.pill_bottom_radius - radii.pill_bottom).abs() < f64::EPSILON);
         assert!((FALLBACK.shell_ear_radius - radii.shell_ear).abs() < f64::EPSILON);
         assert!((FALLBACK.shell_bottom_radius - radii.shell_bottom).abs() < f64::EPSILON);
+    }
+
+    /// Step A14: the overlay must sit above a fullscreen window, not just above
+    /// the menu bar. `NSStatusWindowLevel` (25) lost to fullscreen, so the
+    /// configured level must be strictly higher, and it must carry both
+    /// `FullScreenAuxiliary` and `CanJoinAllSpaces`.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_overlay_clears_a_fullscreen_window_and_joins_every_space() {
+        use objc2_app_kit::{NSStatusWindowLevel, NSWindowCollectionBehavior};
+        // Above the status (menu bar) level, which is where the old code stopped.
+        assert!(
+            OVERLAY_WINDOW_LEVEL > NSStatusWindowLevel,
+            "the overlay level must clear the status/menu-bar level"
+        );
+        let behavior = overlay_collection_behavior();
+        assert!(behavior.contains(NSWindowCollectionBehavior::FullScreenAuxiliary));
+        assert!(behavior.contains(NSWindowCollectionBehavior::CanJoinAllSpaces));
+        assert!(behavior.contains(NSWindowCollectionBehavior::Stationary));
+        assert!(behavior.contains(NSWindowCollectionBehavior::IgnoresCycle));
+        // The bit readback the diagnostics command reports must agree with the
+        // constants, so `notch_window_flags` cannot claim a flag that was not set.
+        let raw = behavior.0 as u64;
+        assert!(raw & FULL_SCREEN_AUXILIARY_BIT != 0);
+        assert!(raw & CAN_JOIN_ALL_SPACES_BIT != 0);
     }
 }

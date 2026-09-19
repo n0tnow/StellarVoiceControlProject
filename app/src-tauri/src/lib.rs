@@ -24,7 +24,7 @@ use tauri::Manager;
 
 pub use commands::{AppInfo, NETWORK};
 pub use events::{AgentStage, HotkeyState, PolarisEvent, SpeechState, POLARIS_EVENT_NAME};
-pub use notch::NotchGeometry;
+pub use notch::{NotchGeometry, NotchWindowFlags};
 pub use types::CaptureStatus;
 
 /// Starts the desktop shell. Called from `main.rs`.
@@ -45,6 +45,7 @@ pub fn run() {
             agent::agent_chat,
             timing::polaris_phase,
             notch::notch_geometry,
+            notch::notch_window_flags,
             hotkey::hotkey_permission,
         ])
         .setup(|app| {
