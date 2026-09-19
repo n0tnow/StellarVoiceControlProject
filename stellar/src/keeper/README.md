@@ -142,7 +142,9 @@ Events: `config`, `keeper_started`, `executed`, `dry_run`, `pending`,
 
 ## Contract ABI used
 
-Deployed `polaris_guard` (see `contracts/DEPLOYED.md`); multi-tenant, no init/admin.
+Deployed `polaris_guard` (see `contracts/DEPLOYED.md`); multi-tenant, no init/admin. Current testnet deployment
+(2026-09-19): `CDRLSFJ5WIC5UMF2LWPF3NRVDOKE7CN3DAYGKDWQ5TJJMVB7FRHRCK4D`; the earlier `CDIWQTYA…` and `CB5CQHV6…`
+are DEPRECATED. The keeper always takes the id from `GUARD_CONTRACT_ID` — no default is compiled in.
 
 - read (simulated by the keeper account):
   - `list_due(cursor: u32, limit: u32) -> (Vec<u32>, u32)`: ids due at the

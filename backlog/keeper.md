@@ -88,8 +88,74 @@ code+tests only — no live testnet E2E until the guard worker's final redeploy 
   `GUARD_SRC=.worktrees/guard-rules/contracts/polaris_guard/src/lib.rs` it is 64/64 with 0 skips). Workspace-wide
   `npm run check` green.
 
+### Round 4 (2026-09-19): live E2E against the FINAL guard deployment
+Final guard: `CDRLSFJ5WIC5UMF2LWPF3NRVDOKE7CN3DAYGKDWQ5TJJMVB7FRHRCK4D` (deploy tx
+`f6017b43cef06047b6c3bc04e2f88a2e9fb0b3ee3b3aa5a0261a0c43dfacaf59`, wasm sha256
+`c4f65e6542bb5d7e512d4417c1b71b20d7210ca7e665992b4e3cc27f04be98e6`, 23,787 bytes). ABI unchanged from Round 3:
+`list_due(cursor, limit) -> (Vec<u32>, u32)`, errors 100-116, 19 functions. The intermediate `CDIWQTYA…` is
+**DEPRECATED**. Throwaway identities in a scratch config dir outside the repo (nothing from W1's keystore, no
+treasury, no shared keys):
 
-### End-to-end on testnet against the REAL deployed guard: DONE
+| Role | Address |
+|---|---|
+| asset issuer (`KE2E`) | `GBWI2O4RJJU6Y56UAHTJYL2G2KAO2F3EWOSIJHSMQENNPYWL2TLNNTRY` |
+| asset SAC | `CABIE62NFV23AJCPYX5CXXHZ6EVO7ZQ45WOTVPNY65VT337GMIOIR2U2` |
+| owner (user) | `GAH46SQ3W7V74L4VT3Z2OVBMJWZXK3KJZ2MEM5KUYR5CK3XC7CS6UAXA` |
+| payee | `GD4YHC4UCKO4NLFEOLKGSW7FHSR3KL46NMOBXJK4B43L3VJDA7C25XUR` |
+| keeper (fees only) | `GC2YF5BNXUK7SMYX75HIXGBD3RHTCYJFI5UVOKHSBDGH2WHIFCHZPWIW` |
+
+Setup: 1000 KE2E minted to the owner, owner approved the guard for 1000 on the SAC, `set_rule` (auto-approve 10,
+per-tx 50, daily 200, allowed_assets = [SAC]). Schedules: ids 2-5 far-future one-shots (id-space holes), id 6 one-shot
+2 due immediately, id 7 recurring 1 every 30 s x3, id 8 recurring 1 every 30 s x3, id 9 recurring 1 every 20 s x5,
+id 10 one-shot 3 (revocation test). Keeper runs used `KEEPER_POLL_SECONDS=10`, `KEEPER_MAX_PER_TICK=2`.
+
+1. **Dry-run: paging + `get_schedule` decode against the real contract** (`keeper:once --dry-run`,
+   `KEEPER_LOG_LEVEL=debug`; the four not-due entries before the due ids force a multi-page sweep):
+```
+{"event":"tick","due":[6,7],"candidates":[6,7],"limit":2,"pages":4}
+{"event":"dry_run","id":6,"schedule":{"active":true,"amount":"20000000","asset":"CABIE62N...","id":6,"interval_secs":"0","next_run_at":"1789826601","owner":"GAH46SQ3...","runs_left":1,"to":"GD4YHC4U..."}}
+{"event":"dry_run","id":7,"schedule":{"active":true,"amount":"10000000","interval_secs":"30","next_run_at":"1789826601","runs_left":3,...}}
+{"event":"once_done","ok":true,"due":2,"attempted":2,"executed":0,"failed":0,"pending":[]}
+```
+   4 pages at `limit=2`: the keeper followed `next_cursor` 0 -> 3 -> 5 -> 7 -> 0 across the real id space;
+   `get_schedule` decoded (bigint fields appear as JSON strings), nothing signed or sent.
+2. **Executes when due** (keeper started before the due time):
+```
+{"event":"executed","id":6,"hash":"9898fa270e86491014bbb62e46bc8aa9dc86608afa654854a188d5aa7b0633b9","status":"SUCCESS","ledger":4760628,"after":{"next_run_at":"1789826601","runs_left":0,"active":false}}
+{"event":"executed","id":7,"hash":"b155636f128cc923c265a1c70621cccf680e890aeea71876547a75899b5e3eee","status":"SUCCESS","ledger":4760629,"after":{"next_run_at":"1789826751","runs_left":2,"active":true}}
+{"event":"executed","id":7,"hash":"faf91dc5021d2b9981b917845b6a306e15d4e803014f1c79b40de70cbf4e974c","status":"SUCCESS","ledger":4760636,"after":{"next_run_at":"1789826781","runs_left":1,"active":true}}
+{"event":"shutdown_requested","signal":"SIGINT"}
+{"event":"executed","id":7,"hash":"187f9b17c1f5a368cef90e3b4b22b778953021e51d72b3d2ca3636acaa3d00df","status":"SUCCESS","ledger":4760640,"after":{"next_run_at":"1789826781","runs_left":0,"active":false}}
+{"event":"keeper_stopped","pending":[]}
+```
+   One-shots end `active:false`; the recurring ran 3 times ~30 s apart; SIGINT flushed the in-flight submission
+   before exiting.
+3. **Missed runs are skipped, not replayed:** id 8 executed twice, then id 9 ran once at 14:08:08
+   (`next_run_at=1789826892`, `runs_left=4`) and once at 14:08:38 (`1789826932`, `runs_left=3`); the keeper was then
+   stopped for ~100 s (5 missed 20 s slots). On restart one `keeper:once` made exactly **one** payment:
+```
+{"event":"executed","id":9,"hash":"4b66d8e27b578331313489b7e1039127b3a6b2a9e989109c2db513a887daa903","status":"SUCCESS","ledger":4760688,"after":{"next_run_at":"1789827032","runs_left":2,"active":true}}
+{"event":"once_done","ok":true,"due":1,"attempted":1,"executed":1,"failed":0,"pending":[]}
+```
+   `next_run_at` jumped 1789826932 -> 1789827032 (exactly the five skipped slots), one payment, not five.
+4. **Allowance kill-switch (`InsufficientAllowance` #116) and recovery:** owner `approve --amount 0`, one tick
+   rejected both due schedules at simulation (no fee spent):
+```
+{"level":"warn","event":"rejected","id":9,"status":"REJECTED","error":{"kind":"allowance_missing","name":"InsufficientAllowance","code":116,"message":"HostError: Error(Contract, #116)"},"retryInMs":60000}
+{"level":"warn","event":"rejected","id":10,"status":"REJECTED","error":{"kind":"allowance_missing","name":"InsufficientAllowance","code":116,"message":"HostError: Error(Contract, #116)"},"retryInMs":60000}
+{"event":"once_done","ok":true,"due":2,"attempted":2,"executed":0,"failed":2,"pending":[]}
+```
+   After re-approving, the next tick executed both:
+```
+{"event":"executed","id":9,"hash":"4e3e8764ad07c6859595f5d0729a2b7f17772ef2adc9dc0ed73c3d08c651a6e6","status":"SUCCESS","ledger":4760699,"after":{"next_run_at":"1789827092","runs_left":1,"active":true}}
+{"event":"executed","id":10,"hash":"c06ba4b93b5d4a73564e4132c9fa25ee915e83d2970db74899747078093fb0bc","status":"SUCCESS","ledger":4760700,"after":{"next_run_at":"1789827021","runs_left":0,"active":false}}
+```
+5. **Money check:** payee SAC balance `150000000` raw (= 15 KE2E = 2 + 3x1 + 3x1 + 4x1 + 3) and guard
+   `spent_today` `150000000` — exactly the sum of all executed schedules: every payment once, no duplicates, no
+   catch-up. (id 9 kept 1 unused run; nothing depends on it.)
+
+
+### End-to-end on testnet, round 1 (superseded deployment `CB5CQHV6…`): DONE
 Guard `CB5CQHV6OK6AF5ANTE7YHJ6UPG5QAIPHB6UVLRLDKNQ22VEQOHU22RYY` (W1's deployment, the version *before* the planned
 paging/index change). Everything below used my own throwaway testnet identities (nothing from W1's keystore, no
 shared anchor treasury; keys stayed in a scratch keystore outside the repo):
@@ -161,22 +227,14 @@ was started *before* they were due.
 (An earlier smoke test against a throwaway stand-in contract, before W1's push, is superseded by the above.)
 
 ## Unfinished (handed off)
-- **Pending final E2E (do not run yet):** the guard worker is fixing two remaining contract issues and may redeploy to
-  a **new contract ID**. Once the coordinator provides the final ID (and `contracts/DEPLOYED.md` is updated by the
-  guard worker), run the testnet E2E and refresh this report. Commands:
-  ```bash
-  export KEEPER_SECRET=<funded testnet key>  GUARD_CONTRACT_ID=<final C... from DEPLOYED.md>
-  npm run keeper:once -w @polaris/stellar -- --dry-run   # paging + get_schedule decode
-  npm run keeper -w @polaris/stellar                     # live execute path
-  ```
-  What the E2E must confirm for this round: (a) `list_due(cursor, limit)` paging against the real contract (a sweep
-  follows `next_cursor` to `0`), (b) the restore path only if archived entries appear (unlikely on fresh testnet data),
-  (c) the `executed` log still shows the correct post-run `after` state. If the deployed error enum changed, re-check
-  `GUARD_ERRORS` (the drift test does this automatically).
+- The live E2E against the final deployment is done (Round 4); the four undone verifications listed in Round 3 are
+  all evidenced there. Leftover: id 9 kept 1 unused run (harmless; the schedule stays active until it runs or is
+  cancelled by its owner).
 - `scripts/check.sh` does not run `npm test`; adding it there was out of scope (shared file).
 
 ## Blockers
-- None for code+tests. The live E2E is blocked on the guard's final contract ID (see "Pending final E2E").
+- None. The keeper is E2E-verified against the final guard
+  `CDRLSFJ5WIC5UMF2LWPF3NRVDOKE7CN3DAYGKDWQ5TJJMVB7FRHRCK4D`; PR #9 can move out of draft for review.
 
 ## Review Notes
 - Design choices worth a reviewer's eye:
@@ -190,23 +248,24 @@ was started *before* they were due.
      result fields, so a tiny compat reader keeps it working on either.
   4. Restore fee: `TransactionBuilder.build()` adds the `transactionData` resource fee to the fee we pass, so the
      restore transaction is built with the base fee only (adding `minResourceFee` too would double-count).
-  5. Node >= 22 native TS: `.ts` import specifiers, no enums/parameter properties (`erasableSyntaxOnly` enforces it).
+  5. Node >= 22.18 native TS: `.ts` import specifiers, no enums/parameter properties (`erasableSyntaxOnly` enforces it).
   6. Signed transactions are limited to a single `execute_schedule` invocation whose auth is source-account only.
   7. Multi-tenant guard: `list_due` returns due schedules of *every* owner, so the keeper serves everyone by design;
      anyone can run one. Refusals cost nothing (they fail at simulation), so a schedule whose owner tightened the rule
      or revoked the allowance is only re-simulated on the back-off cadence (max 1 h).
 - ABI mismatches worked around: (a) `get_schedule` returns `Option<Schedule>` (I had assumed a bare `Schedule`) ->
   `Schedule | null`; (b) error codes start at 100 (I had an empty table) -> tables + range routing; (c) missed runs are
-  skipped (no replay) -> logging/tests; (d) `list_due` is about to become paginated -> isolated + bounded cursor loop.
+  skipped (no replay) -> logging/tests; (d) the old single-argument `list_due` became paginated -> isolated decoder +
+  bounded cursor loop (Round 3), verified live in Round 4.
   Function names and argument types (`u32` ids/limits, no auth on `execute_schedule`) matched what I was told.
   Minor doc inconsistency in W1's `demo.sh` comments: it says `expiration_ledger` where the argument is
   `live_until_ledger` (DEPLOYED.md has it right).
 - Reviewer should not be W3.
 
 ## Suggested Next Step
-- After the guard's final redeploy: set the new `GUARD_CONTRACT_ID`, re-run the E2E (dry-run then live), refresh this
-  report and the README if any ABI/error detail changed.
-- Then wire `npm test -w @polaris/stellar` into `scripts/check.sh` and decide where the keeper runs (a small VM/launchd
+- Review and merge PR #9; then set `GUARD_CONTRACT_ID=CDRLSFJ5WIC5UMF2LWPF3NRVDOKE7CN3DAYGKDWQ5TJJMVB7FRHRCK4D`
+  (per `contracts/DEPLOYED.md`) wherever the keeper runs.
+- Wire `npm test -w @polaris/stellar` into `scripts/check.sh` and decide where the keeper runs (a small VM/launchd
   job on the demo machine; it only needs a few XLM).
 
 ## Raven calls
