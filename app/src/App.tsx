@@ -1,177 +1,180 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import type { UnlistenFn } from "@tauri-apps/api/event";
-import { Mic, Plug, RadioTower, Trash2 } from "lucide-react";
-import type { AppInfo } from "@polaris/interfaces";
+import type { CaptureStatus, NotchGeometry } from "@polaris/interfaces";
 
-import { EventLog } from "@/components/EventLog";
-import { Button } from "@/components/ui/button";
-import {
-  describeEvent,
-  devSelfTest,
-  getAppInfo,
-  listenPolarisEvents,
-  makeLine,
-  type LogLine,
-} from "@/lib/polaris";
+import { getCaptureStatus, getNotchGeometry, listenPolarisEvents } from "@/lib/polaris";
 
-type StreamState = "connecting" | "live" | "failed";
+const FALLBACK_GEOMETRY: NotchGeometry = {
+  idleWidth: 216,
+  idleHeight: 34,
+  expandedWidth: 680,
+  expandedHeight: 66,
+};
+
+const IDLE_STATUS: CaptureStatus = { state: "idle", recording: null, error: null };
 
 /**
- * Polaris shell — skeleton stage.
+ * How long the expanded "Ready to send" shell stays up before collapsing back
+ * to the idle pill. The recording is untouched — it stays on disk for step A1.
+ */
+const READY_DWELL_MS = 6000;
+
+/** Display topology has no Tauri event; re-read geometry on a cheap interval. */
+const GEOMETRY_POLL_MS = 2000;
+
+/** Backoff before retrying a failed connection to the Rust core. */
+const RECONNECT_MS = 3000;
+
+/**
+ * Polaris notch overlay (step A0).
  *
- * Wired today: the typed `polaris-event` channel from Rust, app metadata, and the
- * log pane that every later step is demoed through.
- * Not wired yet: hotkey and microphone (step A0), STT (A1), the agent round trip
- * (A2), speech output (A3), Touch ID approval (A5).
+ * The shell is a pure function of the `capture_status` event stream: idle ->
+ * recording (hotkey down) -> ready (release, WAV on disk). Release never sends
+ * or submits anything. Microphone and permission failures arrive as the `error`
+ * state instead of crashing the shell.
  */
 export default function App() {
-  const [lines, setLines] = useState<LogLine[]>([]);
-  const [info, setInfo] = useState<AppInfo | null>(null);
-  const [stream, setStream] = useState<StreamState>("connecting");
-  const [busy, setBusy] = useState(false);
-  const [wireEventCount, setWireEventCount] = useState(0);
+  const [status, setStatus] = useState<CaptureStatus>(IDLE_STATUS);
+  const [geometry, setGeometry] = useState<NotchGeometry>(FALLBACK_GEOMETRY);
+  const [connectionError, setConnectionError] = useState<string | null>(null);
+  const [connected, setConnected] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
 
-  const append = useCallback((line: Omit<LogLine, "id" | "at">) => {
-    setLines((previous) => [...previous, makeLine(line)]);
-  }, []);
-
-  // Subscribe to the Rust event stream, then fetch app metadata.
   useEffect(() => {
+    let disposed = false;
     let unlisten: UnlistenFn | undefined;
-    let cancelled = false;
+    let receivedStatus = false;
+    let retry: ReturnType<typeof setTimeout> | undefined;
 
-    listenPolarisEvents((event) => {
-      setWireEventCount((count) => count + 1);
-      append(describeEvent(event));
-    })
-      .then((stop) => {
-        if (cancelled) {
-          stop();
+    // Subscribe first, then read the snapshot, so no transition is missed
+    // between the two. A live event always wins over the startup snapshot.
+    const connect = async () => {
+      try {
+        unlisten = await listenPolarisEvents((event) => {
+          if (disposed) return;
+          if (event.type === "capture_status") {
+            receivedStatus = true;
+            setStatus(event.status);
+          }
+        });
+        if (disposed) {
+          unlisten();
           return;
         }
-        unlisten = stop;
-        setStream("live");
-        append({
-          origin: "ui",
-          title: "Subscribed to polaris-event",
-          tone: "ok",
-        });
-      })
-      .catch((error: unknown) => {
-        setStream("failed");
-        append({
-          origin: "ui",
-          title: "Could not subscribe to the event stream",
-          detail: String(error),
-          tone: "danger",
-        });
-      });
+        const snapshot = await getCaptureStatus();
+        if (!disposed) {
+          if (!receivedStatus) setStatus(snapshot);
+          setConnected(true);
+          setConnectionError(null);
+        }
+      } catch (error) {
+        unlisten?.();
+        unlisten = undefined;
+        if (!disposed) {
+          setConnectionError(String(error));
+          retry = setTimeout(() => void connect(), RECONNECT_MS);
+        }
+      }
+    };
 
-    getAppInfo()
-      .then((metadata) => {
-        setInfo(metadata);
-        append({
-          origin: "ui",
-          title: `Polaris ${metadata.version} ready`,
-          detail: `network: ${metadata.network} · tauri: ${metadata.tauriVersion}`,
-          tone: "accent",
+    const refreshGeometry = () => {
+      getNotchGeometry()
+        .then((next) => {
+          if (!disposed) setGeometry(next);
+        })
+        .catch((error: unknown) => {
+          if (!disposed) setConnectionError(`Display unavailable: ${String(error)}`);
         });
-      })
-      .catch((error: unknown) => {
-        append({
-          origin: "ui",
-          title: "app_info command failed",
-          detail: String(error),
-          tone: "danger",
-        });
-      });
+    };
+
+    void connect();
+    refreshGeometry();
+    const geometryTimer = setInterval(refreshGeometry, GEOMETRY_POLL_MS);
 
     return () => {
-      cancelled = true;
+      disposed = true;
       unlisten?.();
+      clearTimeout(retry);
+      clearInterval(geometryTimer);
     };
-  }, [append]);
+  }, []);
 
-  const runSelfTest = useCallback(async () => {
-    setBusy(true);
-    try {
-      const expected = await devSelfTest();
-      append({
-        origin: "ui",
-        title: `dev_self_test emitted ${expected.length} events`,
-        detail: expected.map((event) => event.type).join(" -> "),
-        tone: "ok",
-      });
-    } catch (error: unknown) {
-      append({
-        origin: "ui",
-        title: "dev_self_test failed",
-        detail: String(error),
-        tone: "danger",
-      });
-    } finally {
-      setBusy(false);
+  // Presentation-only dwell: the wire `ready` state persists (the WAV is still
+  // waiting for A1), but the companion collapses so it does not sit expanded.
+  useEffect(() => {
+    if (status.state !== "ready") {
+      setCollapsed(false);
+      return;
     }
-  }, [append]);
+    const timer = setTimeout(() => setCollapsed(true), READY_DWELL_MS);
+    return () => clearTimeout(timer);
+  }, [status]);
 
-  const statusTone = useMemo(
-    () => (stream === "live" ? "text-polaris-ok" : stream === "failed" ? "text-polaris-danger" : "text-polaris-warn"),
-    [stream],
-  );
+  const state = connectionError ? "error" : status.state;
+  const visual = state === "ready" && collapsed ? "idle" : state;
+  const expanded = visual !== "idle" || !connected;
+  const error = connectionError ?? status.error;
+  const durationMs = status.recording?.durationMs ?? 0;
+
+  const label =
+    state === "recording"
+      ? "Listening"
+      : state === "ready"
+        ? "Ready to send"
+        : state === "error"
+          ? "Recording unavailable"
+          : "Connecting";
+  const detail =
+    connectionError
+      ? "Reconnecting…"
+      : state === "error"
+        ? "Hold ⌃⌥ Space to retry"
+        : state === "ready"
+          ? `${(durationMs / 1000).toFixed(1)}s · Hold ⌃⌥ Space to re-record`
+          : state === "recording"
+            ? "Release ⌃⌥ Space when you are done"
+            : "Starting up…";
+
+  const style = {
+    "--idle-width": `${geometry.idleWidth}px`,
+    "--idle-height": `${geometry.idleHeight}px`,
+    "--expanded-width": `${geometry.expandedWidth}px`,
+    "--expanded-height": `${geometry.expandedHeight}px`,
+  } as CSSProperties;
 
   return (
-    <div className="flex h-full flex-col bg-polaris-bg text-polaris-text">
-      <header className="flex items-center gap-4 border-b border-polaris-line px-5 py-4">
-        <div className="flex size-9 items-center justify-center rounded-xl bg-polaris-accent/15">
-          <RadioTower className="size-4 text-polaris-accent" />
+    <main className="notch-stage" style={style} aria-label="Polaris voice capture">
+      <section
+        className={`notch ${expanded ? "is-expanded" : ""} state-${visual}`}
+        aria-label={
+          expanded
+            ? `${label}. ${detail}`
+            : "Polaris ready. Hold Control, Option and Space to record."
+        }
+      >
+        <div className="notch-content" aria-hidden={!expanded}>
+          <div className="notch-copy">
+            <p className="notch-label">{label}</p>
+            <p className="notch-detail">{detail}</p>
+          </div>
+          <div className="notch-indicator" aria-hidden="true">
+            <span />
+            <span />
+            <span />
+          </div>
         </div>
-        <div className="min-w-0 flex-1">
-          <h1 className="text-sm font-semibold tracking-wide">Polaris</h1>
-          <p className="text-xs text-polaris-muted">
-            push-to-talk Stellar assistant · skeleton
-          </p>
-        </div>
-        <div className="flex items-center gap-2 text-[11px] text-polaris-muted">
-          {info ? (
-            <>
-              <span className="rounded-md border border-polaris-line px-2 py-0.5">
-                v{info.version}
-              </span>
-              <span className="rounded-md border border-polaris-line px-2 py-0.5">
-                {info.network}
-              </span>
-            </>
-          ) : null}
-          <span className={`flex items-center gap-1.5 ${statusTone}`}>
-            <Plug className="size-3" />
-            {stream}
-          </span>
-        </div>
-      </header>
-
-      <EventLog lines={lines} />
-
-      <footer className="flex items-center gap-3 border-t border-polaris-line px-5 py-4">
-        <Button
-          variant="default"
-          className="gap-2"
-          disabled
-          title="Step A0: global hotkey + microphone capture are not wired yet"
-        >
-          <Mic className="size-4" />
-          Hold to talk
-        </Button>
-        <Button variant="secondary" onClick={runSelfTest} disabled={busy || stream !== "live"}>
-          {busy ? "Running…" : "Run self-test"}
-        </Button>
-        <Button variant="ghost" onClick={() => setLines([])}>
-          <Trash2 className="size-4" />
-          Clear
-        </Button>
-        <span className="ml-auto text-[11px] text-polaris-muted">
-          {wireEventCount} events received · next: A0 audio capture
-        </span>
-      </footer>
-    </div>
+        {state === "error" && error ? <p className="notch-error">{error}</p> : null}
+      </section>
+      <span
+        className="sr-only"
+        role={state === "error" ? "alert" : "status"}
+        aria-live="polite"
+        aria-atomic="true"
+      >
+        {expanded
+          ? `${label}. ${detail}. ${error ?? ""}`
+          : "Ready. Hold Control, Option and Space to record. Release to prepare your recording."}
+      </span>
+    </main>
   );
 }
