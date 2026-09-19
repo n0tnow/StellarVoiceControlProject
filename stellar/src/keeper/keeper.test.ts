@@ -419,9 +419,9 @@ test("pages are followed past backed-off ids so later schedules are still reache
   await keeper.tick(); // attempts 1,2 -> both backed off
   chain.executeCalls = [];
   chain.listDueCursors = [];
-  await keeper.tick(); // 1,2 suppressed: must page on to 3,4
+  await keeper.tick(); // 1,2 suppressed: the sweep resumes past their page and reaches 3,4
   assert.deepEqual(chain.executeCalls.map((c) => c.id), [3, 4]);
-  assert.ok(chain.listDueCursors.length >= 2);
+  assert.deepEqual(chain.listDueCursors, [2], "resumed instead of restarting at 0 (no re-scan of backed-off ids)");
 });
 
 test("scan ends when the contract reports no more pages", async () => {
@@ -463,7 +463,116 @@ test("a failure on a later page keeps what was found; a failure on page 1 fails 
   assert.equal(s.ok, true);
   assert.deepEqual(chain.executeCalls.map((c) => c.id), [1, 2]);
   assert.ok(logs.some((l) => l.event === "list_due_page_failed"));
+  assert.equal(keeper.state().sweepCursor, 2, "the failed page is retried next tick, not skipped");
 
   chain.listDueError = new Error("down");
   assert.equal((await keeper.tick()).ok, false);
+});
+
+// ── F1: persistent sweep cursor over the global id space ────────────────────
+
+/**
+ * Models the guard's global, ever-growing id space: ids `1..idSpace` exist
+ * (holes included, never reused) and `list_due` scans a window of `limit` ids
+ * from `cursor`, returning end-of-space as `null` (the port's translation of
+ * the contract's cursor `0`). Owners are deliberately absent: the id space is
+ * shared by every tenant, which is why a fixed per-tick window starves ids.
+ */
+class SparseIdSpaceChain implements KeeperChain {
+  readonly idSpace: number;
+  readonly dueIds: Set<number>;
+  listDueCursors: number[] = [];
+  executed: number[] = [];
+
+  constructor(idSpace: number, dueIds: number[]) {
+    this.idSpace = idSpace;
+    this.dueIds = new Set(dueIds);
+  }
+
+  async listDue(cursor: number, limit: number): Promise<DuePage> {
+    this.listDueCursors.push(cursor);
+    const endOfSpace = this.idSpace + 1;
+    const start = Math.max(1, cursor);
+    if (limit === 0 || start >= endOfSpace) return { ids: [], nextCursor: null };
+    const end = Math.min(start + limit, endOfSpace);
+    const ids: number[] = [];
+    for (let id = start; id < end; id++) if (this.dueIds.has(id)) ids.push(id);
+    return { ids, nextCursor: end >= endOfSpace ? null : end };
+  }
+  async getSchedule(): Promise<Schedule | null> {
+    return null;
+  }
+  async execute(id: number): Promise<ExecResult> {
+    this.executed.push(id);
+    return { kind: "success", hash: `h${id}`, ledger: 1 };
+  }
+  async checkPending(): Promise<ExecResult> {
+    return { kind: "pending", hash: "x", expiresAt: 0 };
+  }
+}
+
+function sparseHarness(idSpace: number, dueIds: number[], maxPerTick: number) {
+  const chain = new SparseIdSpaceChain(idSpace, dueIds);
+  const keeper = new Keeper(
+    { pollSeconds: 15, maxPerTick, dryRun: false },
+    { chain, log: () => {}, now: () => 1_000_000, sleep: async () => {} },
+  );
+  return { chain, keeper };
+}
+
+test("review F1: a due id past one tick's page window is executed within N ticks (id 999)", async () => {
+  // 10 pages x 5 ids = 50 ids per tick. With the old cursor-reset-every-tick
+  // scan, id 999 was never reached (the reviewer's repro: 20 ticks, 0 runs).
+  const { chain, keeper } = sparseHarness(1000, [999], 5);
+  let executedAtTick = 0;
+  for (let tickNo = 1; tickNo <= 20; tickNo++) {
+    const s = await keeper.tick();
+    if (s.executed > 0) {
+      executedAtTick = tickNo;
+      break;
+    }
+    assert.notEqual(keeper.state().sweepCursor, 0, `tick ${tickNo} must not restart at 0 before reaching the far id`);
+  }
+  assert.deepEqual(chain.executed, [999], "the far id was reached and executed");
+  assert.ok(executedAtTick > 0 && executedAtTick <= 20, `executed on tick ${executedAtTick}`);
+  assert.equal(chain.listDueCursors.length, 200, "same 200 calls as the reviewer's repro, but call #200 scans ids 996..1000");
+
+  // The scan window slid forward instead of restarting: every cursor recorded
+  // before the wrap (which happens on the tick that reaches end-of-space) is
+  // strictly greater than the previous one, so nothing was skipped or rescanned.
+  const cursors = chain.listDueCursors;
+  assert.equal(cursors[0], 0);
+  assert.ok(cursors.at(-1)! > 900, "the sweep reached the top of the id space");
+  assert.deepEqual(cursors, [...cursors].sort((a, b) => a - b));
+  assert.equal(new Set(cursors).size, cursors.length);
+
+  // The due id sat in the final window, so that same tick wrapped the cursor:
+  // the next tick starts a fresh sweep at the bottom.
+  assert.equal(keeper.state().sweepCursor, 0);
+});
+
+test("review F1 cross-tenant: front-page due ids do not monopolize the sweep", async () => {
+  const { chain, keeper } = sparseHarness(1000, [1, 999], 5);
+  for (let tickNo = 1; tickNo <= 19; tickNo++) await keeper.tick();
+  assert.deepEqual(chain.executed, [1], "id 1 paid once, not once per tick");
+  await keeper.tick(); // tick 20 reaches the 996..1000 window
+  assert.deepEqual(chain.executed, [1, 999], "the tenant at the far id is served too");
+});
+
+test("the sweep cursor resumes across ticks and wraps only at the end of the id space", async () => {
+  const { chain, keeper } = sparseHarness(12, [11], 1);
+  await keeper.tick(); // scans cursors 0,2..10 (10 pages x 1 id), nothing due
+  assert.deepEqual(chain.executed, []);
+  assert.equal(keeper.state().sweepCursor, 11, "resumes where the page cap stopped it");
+
+  await keeper.tick(); // cursor 11 -> id 11 found and executed
+  assert.deepEqual(chain.executed, [11]);
+  assert.equal(keeper.state().sweepCursor, 12, "advanced past the executed id");
+
+  await keeper.tick(); // cursor 12 -> id 12, end of space -> wrap
+  assert.equal(keeper.state().sweepCursor, 0);
+
+  const before = chain.listDueCursors.length;
+  await keeper.tick(); // a fresh sweep starts at the bottom
+  assert.equal(chain.listDueCursors[before], 0);
 });

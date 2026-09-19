@@ -10,7 +10,9 @@
  * State is in-memory only. That is safe by construction: `list_due` is the
  * source of truth after a restart, and the contract rejects a stale or
  * duplicate run, so the worst case of losing state is one extra (harmless,
- * rejected-at-simulation) attempt.
+ * rejected-at-simulation) attempt. The sweep cursor is in-memory too: after a
+ * restart the sweep starts again from id 0, so an id that sits behind a full
+ * sweep window is reached after one fresh wrap (never not at all).
  */
 import {
   backoffMs,
@@ -94,6 +96,13 @@ export class Keeper {
   private readonly pending = new Map<number, PendingTx>();
   /** Per-id backoff after a refusal/failure. */
   private readonly backoff = new Map<number, BackoffEntry>();
+  /**
+   * Where the next tick resumes scanning the global (and ever-growing) id
+   * space. Persisted across ticks so the scan window slides forward instead of
+   * always covering ids 1..MAX_PAGES_PER_TICK*limit; wrapped to 0 only when the
+   * contract reports the end of the id space.
+   */
+  private sweepCursor = 0;
   private tickFailures = 0;
   private readonly opts: KeeperOptions;
 
@@ -106,12 +115,13 @@ export class Keeper {
   }
 
   /** Snapshot for tests/diagnostics. */
-  state(): { inflight: number[]; pending: number[]; backedOff: number[] } {
+  state(): { inflight: number[]; pending: number[]; backedOff: number[]; sweepCursor: number } {
     const now = this.now();
     return {
       inflight: [...this.inflight],
       pending: [...this.pending.keys()],
       backedOff: [...this.backoff].filter(([, b]) => b.until > now).map(([id]) => id),
+      sweepCursor: this.sweepCursor,
     };
   }
 
@@ -127,14 +137,18 @@ export class Keeper {
     const skipCount = new Set([...this.inflight, ...this.pending.keys(), ...this.activeBackoffIds(now)]).size;
     const limit = Math.min(MAX_LIST_LIMIT, this.opts.maxPerTick + skipCount);
 
-    // Scan pages until we have KEEPER_MAX_PER_TICK eligible ids, the contract
-    // says there are no more pages, the cursor stops advancing, or the page cap
-    // is hit. A failure on the first page fails the tick; a later failure only
-    // ends the scan (what we already found is still executed).
+    // Resume the sweep where the previous tick stopped (see `sweepCursor`), so
+    // ids behind one tick's page budget are reached within a bounded number of
+    // ticks instead of never. Scan pages until we have KEEPER_MAX_PER_TICK
+    // eligible ids, the contract says there are no more pages (cursor wraps to
+    // 0), the cursor stops advancing, or the page cap is hit. A failure on the
+    // first page fails the tick; a later failure ends the scan (what we already
+    // found is still executed) and the failed page is retried by the next tick.
     const dueIds: number[] = [];
     const candidates: number[] = [];
     const seen = new Set<number>();
-    let cursor = 0;
+    const cursorFrom = this.sweepCursor;
+    let cursor = cursorFrom;
     let pages = 0;
     while (pages < MAX_PAGES_PER_TICK) {
       let page: DuePage;
@@ -142,9 +156,10 @@ export class Keeper {
         page = await this.chain.listDue(cursor, limit);
       } catch (err) {
         const error = classifyThrown(err);
+        this.sweepCursor = cursor; // retry this page on the next tick
         if (pages === 0) {
           this.tickFailures += 1;
-          this.log("error", { event: "list_due_failed", error, consecutiveFailures: this.tickFailures });
+          this.log("error", { event: "list_due_failed", cursor, error, consecutiveFailures: this.tickFailures });
           return { ok: false, due: 0, attempted: 0, executed: 0, failed: 0, error };
         }
         this.log("warn", { event: "list_due_page_failed", cursor, page: pages, error });
@@ -157,14 +172,21 @@ export class Keeper {
         dueIds.push(id);
         if (candidates.length < this.opts.maxPerTick && !suppressed(id)) candidates.push(id);
       }
+      // Advance (or wrap) the persistent cursor before deciding to stop, so the
+      // next tick resumes exactly where this one stopped. A non-advancing cursor
+      // is treated as end-of-space: ids are global and never reused, so it means
+      // the contract has nothing further to scan.
+      const next = page.nextCursor;
+      const endOfSpace = next === null || next <= cursor;
+      this.sweepCursor = endOfSpace ? 0 : next;
       if (candidates.length >= this.opts.maxPerTick) break;
-      if (page.nextCursor === null || page.nextCursor === cursor) break;
-      cursor = page.nextCursor;
+      if (endOfSpace) break;
+      cursor = this.sweepCursor;
     }
     this.tickFailures = 0;
 
     this.pruneBackoff(new Set(dueIds), now);
-    this.log("debug", { event: "tick", due: dueIds, candidates, limit, pages });
+    this.log("debug", { event: "tick", due: dueIds, candidates, limit, pages, cursorFrom, cursorTo: this.sweepCursor });
 
     const summary: TickSummary = { ok: true, due: dueIds.length, attempted: 0, executed: 0, failed: 0 };
     for (const id of candidates) {
