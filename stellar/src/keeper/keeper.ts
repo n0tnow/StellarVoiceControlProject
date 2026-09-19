@@ -18,11 +18,13 @@ import {
   type ClassifiedError,
   type ErrorKind,
 } from "./errors.ts";
-import type { ExecResult, KeeperChain, Schedule } from "./chain.ts";
+import type { DuePage, ExecResult, KeeperChain, Schedule } from "./chain.ts";
 import type { Logger } from "./log.ts";
 
 /** Upper bound on `list_due` page size regardless of backoff pressure. */
 const MAX_LIST_LIMIT = 200;
+/** Hard bound on `list_due` pages scanned per tick (a tick is never unbounded). */
+export const MAX_PAGES_PER_TICK = 10;
 /** Cap for the tick-level (list_due failure) backoff. */
 const MAX_TICK_BACKOFF_MS = 2 * 60_000;
 
@@ -115,25 +117,48 @@ export class Keeper {
     const suppressed = (id: number): boolean =>
       this.inflight.has(id) || this.pending.has(id) || (this.backoff.get(id)?.until ?? 0) > now;
 
-    // Ask for enough ids that backed-off/pending ones cannot starve the rest.
+    // Ask for enough ids per page that backed-off/pending ones cannot starve the rest.
     const skipCount = new Set([...this.inflight, ...this.pending.keys(), ...this.activeBackoffIds(now)]).size;
     const limit = Math.min(MAX_LIST_LIMIT, this.opts.maxPerTick + skipCount);
 
-    let due: number[];
-    try {
-      due = await this.chain.listDue(limit);
-    } catch (err) {
-      const error = classifyThrown(err);
-      this.tickFailures += 1;
-      this.log("error", { event: "list_due_failed", error, consecutiveFailures: this.tickFailures });
-      return { ok: false, due: 0, attempted: 0, executed: 0, failed: 0, error };
+    // Scan pages until we have KEEPER_MAX_PER_TICK eligible ids, the contract
+    // says there are no more pages, the cursor stops advancing, or the page cap
+    // is hit. A failure on the first page fails the tick; a later failure only
+    // ends the scan (what we already found is still executed).
+    const dueIds: number[] = [];
+    const candidates: number[] = [];
+    const seen = new Set<number>();
+    let cursor = 0;
+    let pages = 0;
+    while (pages < MAX_PAGES_PER_TICK) {
+      let page: DuePage;
+      try {
+        page = await this.chain.listDue(cursor, limit);
+      } catch (err) {
+        const error = classifyThrown(err);
+        if (pages === 0) {
+          this.tickFailures += 1;
+          this.log("error", { event: "list_due_failed", error, consecutiveFailures: this.tickFailures });
+          return { ok: false, due: 0, attempted: 0, executed: 0, failed: 0, error };
+        }
+        this.log("warn", { event: "list_due_page_failed", cursor, page: pages, error });
+        break;
+      }
+      pages += 1;
+      for (const id of page.ids) {
+        if (seen.has(id)) continue;
+        seen.add(id);
+        dueIds.push(id);
+        if (candidates.length < this.opts.maxPerTick && !suppressed(id)) candidates.push(id);
+      }
+      if (candidates.length >= this.opts.maxPerTick) break;
+      if (page.nextCursor === null || page.nextCursor === cursor) break;
+      cursor = page.nextCursor;
     }
     this.tickFailures = 0;
 
-    const dueIds = [...new Set(due)];
     this.pruneBackoff(new Set(dueIds), now);
-    const candidates = dueIds.filter((id) => !suppressed(id)).slice(0, this.opts.maxPerTick);
-    this.log("debug", { event: "tick", due: dueIds, candidates, limit });
+    this.log("debug", { event: "tick", due: dueIds, candidates, limit, pages });
 
     const summary: TickSummary = { ok: true, due: dueIds.length, attempted: 0, executed: 0, failed: 0 };
     for (const id of candidates) {

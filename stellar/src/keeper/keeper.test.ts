@@ -1,15 +1,22 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { ExecResult, KeeperChain, Schedule } from "./chain.ts";
+import type { DuePage, ExecResult, KeeperChain, Schedule } from "./chain.ts";
 import { backoffMs, type ClassifiedError } from "./errors.ts";
-import { Keeper } from "./keeper.ts";
+import { Keeper, MAX_PAGES_PER_TICK } from "./keeper.ts";
 import type { LogFields, LogLevel } from "./log.ts";
 
 /** Scriptable in-memory chain: no network, full control over each call. */
 class FakeChain implements KeeperChain {
   due: number[] = [];
   listDueLimits: number[] = [];
+  listDueCursors: number[] = [];
   listDueError: Error | undefined;
+  /** Contract-side page cap (real pages may be smaller than the requested limit). */
+  pageSize: number | undefined;
+  /** When set, listDue throws on any page whose cursor is > 0. */
+  failLaterPages = false;
+  /** Pretend the index never ends (nextCursor always advances). */
+  endless = false;
   executeCalls: Array<{ id: number; dryRun: boolean }> = [];
   checkCalls: string[] = [];
   /** Per-id scripted results; the last one repeats. Default: success. */
@@ -18,10 +25,15 @@ class FakeChain implements KeeperChain {
   /** Optional gate to hold an execute() open (concurrency tests). */
   gate: Promise<void> | undefined;
 
-  async listDue(limit: number): Promise<number[]> {
+  async listDue(cursor: number, limit: number): Promise<DuePage> {
     this.listDueLimits.push(limit);
+    this.listDueCursors.push(cursor);
     if (this.listDueError) throw this.listDueError;
-    return this.due.slice(0, limit);
+    if (this.failLaterPages && cursor > 0) throw new Error("rpc hiccup on page 2");
+    const size = Math.min(limit, this.pageSize ?? limit);
+    const ids = this.due.slice(cursor, cursor + size);
+    const next = cursor + size;
+    return { ids, nextCursor: this.endless || next < this.due.length ? next : null };
   }
   async getSchedule(id: number): Promise<Schedule | null> {
     return { id, owner: "GOWNER", to: "GTO", asset: "CASSET", amount: 10n, next_run_at: 1n, interval_secs: 0n, runs_left: 1, active: true };
@@ -260,9 +272,9 @@ class SkipSemanticsChain implements KeeperChain {
   rejectWith: ClassifiedError | undefined;
   sched = { id: 1, next_run_at: 1_000, interval_secs: 100, runs_left: 5, active: true };
 
-  async listDue(limit: number): Promise<number[]> {
+  async listDue(_cursor: number, limit: number): Promise<DuePage> {
     const s = this.sched;
-    return s.active && s.next_run_at <= this.nowSec ? [s.id].slice(0, limit) : [];
+    return { ids: s.active && s.next_run_at <= this.nowSec ? [s.id].slice(0, limit) : [], nextCursor: null };
   }
   async getSchedule(): Promise<Schedule | null> {
     const s = this.sched;
@@ -337,7 +349,7 @@ test("a not-due answer (clock skew) is handled quietly: info log, short backoff,
   const { chain, keeper, logs } = skipHarness();
   chain.sched.next_run_at = 2_000;
   // list_due (stale read) claims the id is due although the ledger clock disagrees.
-  chain.listDue = async () => [1];
+  chain.listDue = async () => ({ ids: [1], nextCursor: null });
   chain.nowSec = 1_500;
   const s = await keeper.tick();
   assert.equal(s.failed, 1);
@@ -349,4 +361,73 @@ test("a not-due answer (clock skew) is handled quietly: info log, short backoff,
 
   chain.nowSec = 2_000 + 30; // due now, backoff (15s) over
   assert.equal((await keeper.tick()).executed, 1);
+});
+
+// ── paginated list_due: bounded cursor loop ─────────────────────────────────
+
+test("scans pages until it has KEEPER_MAX_PER_TICK eligible ids, then stops", async () => {
+  const { chain, keeper } = harness({ maxPerTick: 3 });
+  chain.due = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+  chain.pageSize = 2; // contract hands out 2 ids per page
+  await keeper.tick();
+  assert.deepEqual(chain.executeCalls.map((c) => c.id), [1, 2, 3]);
+  assert.deepEqual(chain.listDueCursors, [0, 2], "third id found on page 2; page 3 never requested");
+});
+
+test("pages are followed past backed-off ids so later schedules are still reached", async () => {
+  const { chain, keeper } = harness({ maxPerTick: 2 });
+  chain.due = [1, 2, 3, 4, 5];
+  chain.pageSize = 2;
+  chain.script.set(1, [rejected("rule_violated", "OverDailyLimit")]);
+  chain.script.set(2, [rejected("rule_violated", "OverDailyLimit")]);
+  await keeper.tick(); // attempts 1,2 -> both backed off
+  chain.executeCalls = [];
+  chain.listDueCursors = [];
+  await keeper.tick(); // 1,2 suppressed: must page on to 3,4
+  assert.deepEqual(chain.executeCalls.map((c) => c.id), [3, 4]);
+  assert.ok(chain.listDueCursors.length >= 2);
+});
+
+test("scan ends when the contract reports no more pages", async () => {
+  const { chain, keeper } = harness({ maxPerTick: 50 });
+  chain.due = [1, 2, 3];
+  chain.pageSize = 2;
+  const s = await keeper.tick();
+  assert.equal(s.due, 3);
+  assert.deepEqual(chain.listDueCursors, [0, 2], "second page returned nextCursor=null");
+});
+
+test("an endless cursor is still bounded by MAX_PAGES_PER_TICK", async () => {
+  const { chain, keeper } = harness({ maxPerTick: 1000 });
+  chain.due = Array.from({ length: 500 }, (_, i) => i + 1);
+  chain.pageSize = 1;
+  chain.endless = true;
+  await keeper.tick();
+  assert.equal(chain.listDueCursors.length, MAX_PAGES_PER_TICK);
+});
+
+test("a cursor that does not advance ends the scan (no infinite loop)", async () => {
+  const { chain, keeper } = harness();
+  let calls = 0;
+  chain.listDue = async (cursor: number) => {
+    calls += 1;
+    return { ids: [], nextCursor: cursor };
+  };
+  const s = await keeper.tick();
+  assert.equal(s.ok, true);
+  assert.equal(calls, 1);
+});
+
+test("a failure on a later page keeps what was found; a failure on page 1 fails the tick", async () => {
+  const { chain, keeper, logs } = harness({ maxPerTick: 5 });
+  chain.due = [1, 2, 3, 4];
+  chain.pageSize = 2;
+  chain.failLaterPages = true;
+  const s = await keeper.tick();
+  assert.equal(s.ok, true);
+  assert.deepEqual(chain.executeCalls.map((c) => c.id), [1, 2]);
+  assert.ok(logs.some((l) => l.event === "list_due_page_failed"));
+
+  chain.listDueError = new Error("down");
+  assert.equal((await keeper.tick()).ok, false);
 });

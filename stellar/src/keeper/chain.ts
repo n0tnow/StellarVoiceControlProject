@@ -64,9 +64,20 @@ export type ExecResult =
   /** Dry run: the simulation succeeded, nothing was signed or sent. */
   | { kind: "dry_run"; note?: string };
 
+/** One page of due schedule ids. `nextCursor === null` means "no more pages". */
+export interface DuePage {
+  ids: number[];
+  nextCursor: number | null;
+}
+
 export interface KeeperChain {
-  /** Ids of schedules due at the current ledger time (at most `limit`). */
-  listDue(limit: number): Promise<number[]>;
+  /**
+   * One page of ids of schedules due at the current ledger time (at most
+   * `limit`), starting at `cursor` (0 for the first page). The keeper loops
+   * over pages, bounded; the contract-specific paging ABI is decoded here and
+   * nowhere else (see `SorobanChain.listDue`).
+   */
+  listDue(cursor: number, limit: number): Promise<DuePage>;
   /** Full schedule record for logs and dry runs; `null` when the id does not exist. */
   getSchedule(id: number): Promise<Schedule | null>;
   /** Run one occurrence of the schedule. Throws only on transport errors. */
@@ -111,10 +122,19 @@ export class SorobanChain implements KeeperChain {
 
   // ── reads ────────────────────────────────────────────────────────────────
 
-  async listDue(limit: number): Promise<number[]> {
+  /**
+   * THE ONLY place that knows the `list_due` ABI.
+   *
+   * Currently deployed guard: `list_due(limit: u32) -> Vec<u32>` (a single
+   * page, no cursor). When the contract moves to a paginated read, only this
+   * method changes: pass `cursor` as an argument and decode the returned
+   * `(Vec<u32>, next_cursor)` tuple into a `DuePage` (mapping the contract's
+   * end-of-list signal to `nextCursor: null`).
+   */
+  async listDue(_cursor: number, limit: number): Promise<DuePage> {
     const value = await this.readCall("list_due", nativeToScVal(limit, { type: "u32" }));
     if (!Array.isArray(value)) throw new Error("list_due returned a non-array value");
-    return value.map((v) => Number(v));
+    return { ids: value.map((v) => Number(v)), nextCursor: null };
   }
 
   /** `get_schedule` returns `Option<Schedule>`: void (None) decodes to null. */

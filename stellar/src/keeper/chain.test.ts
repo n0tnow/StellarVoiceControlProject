@@ -86,7 +86,7 @@ const ok = (ledger = 55): Any => ({ status: "SUCCESS", ledger });
 test("listDue decodes the u32 vec returned by simulating list_due", async () => {
   const { rpc, chain } = setup();
   rpc.sims = [okSim(vecOf([4, 9]))];
-  assert.deepEqual(await chain.listDue(10), [4, 9]);
+  assert.deepEqual(await chain.listDue(0, 10), { ids: [4, 9], nextCursor: null });
   // The read-only call is only simulated, never sent.
   assert.equal(rpc.sent.length, 0);
 });
@@ -94,7 +94,7 @@ test("listDue decodes the u32 vec returned by simulating list_due", async () => 
 test("listDue surfaces a failing simulation as an error (so the loop backs off)", async () => {
   const { rpc, chain } = setup();
   rpc.sims = [errSim("HostError: Error(Contract, #1)")];
-  await assert.rejects(chain.listDue(10), /list_due simulation failed/);
+  await assert.rejects(chain.listDue(0, 10), /list_due simulation failed/);
 });
 
 test("execute: simulate -> assemble -> sign -> send -> poll to SUCCESS", async () => {
