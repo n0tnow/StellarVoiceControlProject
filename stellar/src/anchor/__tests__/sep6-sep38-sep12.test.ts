@@ -298,4 +298,31 @@ describe("SEP-6 polling state machine", () => {
     expect((err.last as AnchorTransaction).status).toBe("pending_anchor");
     expect(calls.length).toBe(6); // t=0..5s inclusive at 1s steps
   });
+
+  it("narrates and reports the anchor's last message + more_info_url when a deposit is stuck (live 2026-09-20 regression)", async () => {
+    // Reproduces the TR mock anchor's stalled pending_anchor deposit: the order never moves,
+    // so the client must surface the anchor's own message and link, not just a bare timeout.
+    const stuckMessage = "TRY received; paying USDC on Stellar.";
+    const { fetch } = fakeFetch({
+      [`GET ${HOME}/sep6/transaction`]: {
+        transaction: {
+          id: "sep_stuck",
+          kind: "deposit",
+          status: "pending_anchor",
+          message: stuckMessage,
+          more_info_url: `https://${HOME}/sep6/tx/sep_stuck`,
+        },
+      },
+    });
+    const ctx = makeCtx(fetch);
+    const err = (await pollTransaction(ctx, TOML, TOKEN, "sep_stuck", { intervalMs: 1000, timeoutMs: 5000 }).catch((e: unknown) => e)) as PollTimeoutError;
+    expect(err).toBeInstanceOf(PollTimeoutError);
+    expect(err.message).toContain('still "pending_anchor"');
+    expect(err.message).toContain(stuckMessage);
+    expect(err.message).toContain(`https://${HOME}/sep6/tx/sep_stuck`);
+    const rec = ctx.explain.all().at(-1)!;
+    expect(rec.step).toBe("sep6.timeout");
+    expect(rec.anchorSaid).toBe(stuckMessage);
+    expect(rec.what).not.toContain(stuckMessage); // anchor text never enters the narration
+  });
 });

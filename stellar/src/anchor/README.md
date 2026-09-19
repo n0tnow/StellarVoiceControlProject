@@ -160,6 +160,33 @@ On mainnet the zero-XLM user needs sponsored reserves / fee bumps instead of Fri
 discovery and info (assets SRT/USDC/native, amounts 1-10) but demands SEP-12 fields
 (`first_name`, `last_name`, `email_address`), which surface as `KycRequiredError`.
 
+### 2026-09-20 live re-check: deposit payout stalled on the anchor (not our client)
+
+A fresh 50 TRY deposit (order `sep_uwg7nu53jr5inqpc1926`) walked
+`pending_user_transfer_start -> pending_anchor` but then sat in `pending_anchor` for
+>180 s, where 2026-09-19 it completed in ~2 s. Evidence that this is anchor-side:
+
+* The anchor still accepts the whole flow: SEP-1, SEP-10 (challenge signed by
+  `GDXY…E73M`), SEP-38 (`50 TRY -> 1.0198045 USDC`), SEP-12 (auto-approved), the
+  deposit order and `simulate-bank-transfer` all returned as documented.
+* The order's own message is `"TRY received; paying USDC on Stellar."`, `status_eta 5`,
+  `updated_at` frozen at creation — it never reached `pending_stellar`/`completed`.
+* Horizon shows the treasury (`GCLC…W7T3Z6`) made **no outgoing USDC payment after
+  20:59:32Z**, while it kept receiving withdrawal payments (e.g. 1 USDC at 22:12:02Z).
+  Horizon, `/health` (treasury ~29 139 USDC, `low_balance:false`) and the anchor were
+  all up.
+* `/sep6/info` now omits `min_amount`/`max_amount` (2026-09-19 it printed 0.5 / 300) and
+  `/health` reports `limits: {min_onramp_try:null, max_onramp_try:null, min_offramp_usdc:null}`.
+  The client treats missing limits as optional and still created the order.
+
+The client is correct here; the fix is graceful reporting: on a poll timeout it now
+records `sep6.timeout` and includes the anchor's sanitised last `message` and
+`more_info_url` in the `PollTimeoutError`, so a stuck order names the anchor's own
+status instead of a bare "still pending_anchor". Covered by an offline mocked-HTTP
+regression test. Until the anchor's payout worker recovers, the TR deposit path cannot
+reach `completed`; see `backlog/anchor-live-check.md` for the full evidence and demo
+guidance.
+
 ## Mock vs mainnet
 
 | | TR mock anchor (testnet) | Real Turkish anchor (mainnet) |

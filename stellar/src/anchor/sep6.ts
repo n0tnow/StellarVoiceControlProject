@@ -657,7 +657,17 @@ export async function pollTransaction(
       return { tx, outcome: "stopped", history };
     }
     if (ctx.now().getTime() - started >= timeout) {
-      throw new PollTimeoutError(`order ${id} is still "${tx.status}" after ${Math.round(timeout / 1000)}s`, tx);
+      const seconds = Math.round(timeout / 1000);
+      const said = tx.message ? `; the anchor last said: "${tx.message}"` : "";
+      const where = tx.moreInfoUrl ? ` (order details: ${tx.moreInfoUrl})` : "";
+      ctx.explain.record(
+        "sep6.timeout",
+        `SEP-6 order ${id} is still "${tx.status}" after ${seconds}s, so we stopped waiting.` +
+          (tx.message ? " The anchor's own status message is attached." : ""),
+        "The order never reached a final state. A status like \"pending_anchor\" that does not move usually means a problem on the anchor's side, not with your account; the safe next step is to check the order later instead of paying again.",
+        { anchorSaid: tx.message },
+      );
+      throw new PollTimeoutError(`order ${id} is still "${tx.status}" after ${seconds}s${said}${where}`, tx);
     }
     await ctx.sleep(interval);
   }
