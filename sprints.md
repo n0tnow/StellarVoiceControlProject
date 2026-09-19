@@ -82,6 +82,18 @@
 - [ ] Approval card UI polished (Stellar Design System / shadcn), explorer links on card
 - [ ] (optional if time) MPP pay-per-command session
 
+### M3 — Owner B Track: Autonomous Wallet (step-by-step) 🔲
+> Rule: cut order is top-down priority — whatever does not fit is cut from the bottom
+> (see notes.md "Owner B work plan & cut order", 2026-09-19). Each item is its own branch + PR + review by a different agent.
+- [ ] Guard rules + executor (W1): `polaris_guard` with `set_rule`, executor key, `pay_owner` / `pay_executor`, typed `GuardError`s; deployed on testnet, contract id documented
+- [ ] Scheduled payments (W1): `create_schedule` / `cancel_schedule` / `execute_schedule`, `list_due`, `spent_today`
+- [ ] Keeper (W3): untrusted bot that finds due schedules (`list_due`) and calls `execute_schedule`
+- [ ] Anchor SEP-6 deposit + withdraw, voice-driven (W4): SEP-1/10/12/38 + SEP-6 only, TRY amounts via SEP-38 quotes, `anchor_step` narration; no SEP-24
+- [x] Rule/Schedule interface types (W5, `docs/rule-types-and-decisions`) (2026-09-19, PR #8)
+- [ ] P2P escrow (`polaris_p2p_escrow`, architecture §5.6)
+- [ ] MPP (last): agent paying a paid HTTP-402 service; optional separate "agent wallet" account
+- [ ] README section: how the SEP flow works and why SEP-24 is not used in Turkey
+
 ## Milestone 4 — Delivery / Presentation 🔲
 > Deadline: 20 Sep 12:00. Bonuses (passkey wallet, P2P escrow, developer mode) ONLY after M4 items are done.
 - [ ] README refreshed to reflect current codebase (constitution requirement)

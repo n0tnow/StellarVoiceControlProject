@@ -92,4 +92,52 @@
   6. `.gitignore`-d files stay clone-local; `.gitignore` itself must be identical across all clones.
 - **Status:** decided
 
+## 2026-09-19 — Owner B pivot: user wallet with autonomy, not a dev tool
+- **Idea:** Owner B builds a **USER tool**, not a developer tool. The user creates their own rules by voice (e.g. "no approval needed under 10 USDC"), schedules payments ("do X at time T"), makes P2P offers, and deposits/withdraws through the anchor — all by voice.
+- **Discussion:** Autonomy needs a trust model that does not hand anyone unbounded power. Chosen shape: the user's **G account** holds the funds, the **`polaris_guard`** contract stores the rules on-chain and moves funds (SEP-41 `transfer_from`, guard as spender), an **executor key** may only call the guard's executor entry point, and a **keeper** triggers due schedules. The contract validates everything; the keeper is untrusted and needs no auth. Full type/ABI description: `docs/interfaces.md` §6.
+- **Decision:**
+  1. Owner B's product is the user wallet with autonomy. **Developer mode is shelved for now (not deleted)** — it stays in the architecture as a possible bonus.
+  2. **Superseding nuance** to `docs/architecture.md` §1 item 4 ("every value-moving step needs explicit user approval with Touch ID") and §6 (risk tier 3: read-back + Touch ID): Touch ID is now required to **CREATE or LOOSEN** rules/schedules and for **anything above the user's auto-approve limit**. Actions **inside the rules** run **without Touch ID**. The older notes and architecture text are left untouched; this note refines them.
+  3. When the guard rejects an executor action, the agent emits `approval_required` and the UI asks for Touch ID (payment then goes through the owner path).
+- **Status:** decided
+
+## 2026-09-19 — SEP-24 is not used on the Turkey path
+- **Idea:** Decide which anchor SEPs the TRY (Turkey) flow may use and what the demo shows.
+- **Discussion:** Source: SDF anchor workshop given by Kaan (Developer Advocate); transcript/summary provided by the user. Facts as stated in the workshop:
+  - **SEP-6 is legal in Turkey** — it is like sending money by IBAN to an exchange: the user's own app talks to the anchor and the user does the bank transfer.
+  - **SEP-24** — an app offering *another company's* on/off-ramp to its own users — is **prohibited per MASAK** (Turkish financial-crimes authority). Example given: **1Lira / MetaMask**.
+  - Hence the hackathon mock anchor implements only **SEP-6/10/12/38 (+ SEP-1)**, no SEP-24.
+  - Nuance to keep: the speaker also called the SEP-24 side a **grey area** and said SDF chose to **wait for regulation to mature**.
+  - Organizer expectation: **programmatic deposit/withdraw working on a testnet anchor** (`tr-mock-anchor.fly.dev` or `testanchor.stellar.org`), result-oriented, and builders must be able to **explain what happens in the background** (hence the `anchor_step` narration event).
+  - Framing for the jury: "if regulations allowed, it would look like this".
+- **Decision:** The TRY flow uses **SEP-6 only**. **No SEP-24 code or demo anywhere** in the project. README gets a short section on how the SEP flow works and why SEP-24 is not used in Turkey (tracked in `sprints.md`).
+- **Status:** decided
+
+## 2026-09-19 — Measured facts for anchor amounts
+- **Idea:** Record the numbers actually measured on the mock anchor so agents size test amounts correctly.
+- **Discussion (measured live 2026-09-19):**
+  - **SEP-38 quote:** 500 TRY → 10.198 USDC, ≈ 49.03 TRY/USDC, fee 2.49 TRY (50 bps).
+  - **Limit mismatch:** the guide states limits of 50–3000 TRY ≈ 1–61 USDC, while `/sep6/info` prints 0.5–300. The two disagree.
+  - **Treasury size:** the treasury is shared; Kaan says ~50k USDC, our earlier measurement was 26.6k USDC (see the 2026-09-19 research note).
+  - `testanchor.stellar.org` (verified live 2026-09-19) advertises SEP-1/6/10/12/24/31/38/45. We use **only its SEP-6 side** for dev/tests.
+- **Decision:** Drive amounts in **TRY via SEP-38 quotes** (do not trust the `/sep6/info` unit range); keep **test deposits small** because the treasury is shared.
+- **Status:** decided
+
+## 2026-09-19 — MPP position & P2P interpretation
+- **Idea:** Clarify what MPP is for and how "P2P order" maps onto our contracts.
+- **Discussion:**
+  - **MPP** (Machine Payments Protocol) is an **HTTP-402 machine-payment protocol for an AGENT paying a paid service** — **not** user-to-user payments. Two Stellar modes: **Charge** (per-request SAC transfer, one on-chain tx per request) and **Session** (a one-way payment channel contract, off-chain commits, one deposit + one close). Source: Raven, `skills.stellar-dev.agentic-payments` (`mpp.md`), checked 2026-09-19.
+  - **Idea (open, unverified):** a separate **"agent wallet" G account**, topped up by the guard within the user's limits, pays MPP. Reason: in MPP pull-mode the client signs Soroban auth entries directly, which the guard contract cannot cap — so the agent must only ever hold a bounded balance.
+  - **P2P "order"** = an **escrow offer** on `polaris_p2p_escrow` (`docs/architecture.md` §5.6: `create_offer` / `accept` / `confirm_fiat` / `cancel` / `expire`). This is the user's default interpretation until told otherwise.
+- **Decision:** MPP priority is **last**. P2P is read as the escrow offer above.
+- **Status:** decided (the "agent wallet" idea for MPP is open)
+
+## 2026-09-19 — Owner B work plan & cut order
+- **Idea:** Fix the order of Owner B's work for the hackathon crunch so cuts are made from the bottom, not ad hoc.
+- **Decision:**
+  1. **Priority order:** (1) guard rules + executor (W1) → (2) scheduled payments + keeper (W1/W3) → (3) anchor SEP-6 deposit + withdraw (W4) → (4) P2P escrow → (5) MPP. **Whatever does not fit is cut from the bottom.**
+  2. **Workers:** W1 guard, W3 keeper, W4 anchor, W5 this docs/types task. One PR each, reviewed by a **different** agent (constitution §3).
+  3. **Raven consultation is mandatory in every worker task**, and every worker report lists its Raven calls.
+- **Status:** decided
+
 <!-- New notes are appended chronologically at the bottom. -->
