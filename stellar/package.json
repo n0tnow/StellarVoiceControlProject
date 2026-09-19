@@ -4,6 +4,9 @@
   "private": true,
   "description": "Polaris chain layer: anchor client (SEP-10/38/6), protocol integration, typed bindings. Owner B.",
   "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
   "exports": {
     ".": "./src/index.ts"
   },

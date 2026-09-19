@@ -93,7 +93,8 @@ backlog. Each `executed` log line includes an `after` object
 
 ## Run it
 
-Needs Node >= 22 (native TypeScript execution) and a deployed `polaris_guard`.
+Needs Node >= 22.18 (the release where native TypeScript execution is on by
+default) and a deployed `polaris_guard`.
 
 ```bash
 # 1. Create a throwaway testnet keeper key and fund it (a few XLM is plenty).
@@ -134,31 +135,42 @@ One JSON object per line on stdout:
 {"ts":"...","level":"warn","event":"rejected","id":8,"status":"REJECTED","error":{"kind":"allowance_missing","name":"AllowanceMissing","code":5,"message":"HostError: Error(Contract, #5)"},"retryInMs":60000}
 ```
 
-Events: `config`, `keeper_started`, `executed`, `dry_run`, `pending`, `failed`,
-`rejected`, `list_due_failed`, `pending_check_failed`, `shutdown_requested`,
-`keeper_stopped`, `once_done`.
+Events: `config`, `keeper_started`, `executed`, `dry_run`, `pending`,
+`restore_pending`, `restore_confirmed`, `restore_failed`, `restore_rejected`,
+`failed`, `rejected`, `list_due_failed`, `pending_check_failed`,
+`shutdown_requested`, `keeper_stopped`, `once_done`.
 
 ## Contract ABI used
 
 Deployed `polaris_guard` (see `contracts/DEPLOYED.md`); multi-tenant, no init/admin.
 
 - read (simulated by the keeper account):
-  - `list_due(limit: u32) -> Vec<u32>`: ids due at the current ledger time. Only
-    `SorobanChain.listDue` in `chain.ts` knows this signature; the keeper loop
-    talks to a paged interface (`listDue(cursor, limit) -> { ids, nextCursor }`).
+  - `list_due(cursor: u32, limit: u32) -> (Vec<u32>, u32)`: ids due at the
+    current ledger time, scanning at most `limit` ids from `cursor` (the
+    contract clamps `limit` to its own `MAX_DUE_SCAN = 100`). The returned
+    cursor is the id to pass next, or `0` once the scan reached the end of the
+    id space; `SorobanChain.listDue` maps that `0` to `nextCursor: null` (the
+    port's only end-of-pages signal). Only `SorobanChain.listDue` in `chain.ts`
+    knows this signature; the keeper loop talks to a paged interface
+    (`listDue(cursor, limit) -> { ids, nextCursor }`).
   - `get_schedule(id: u32) -> Option<Schedule>` (`null` when unknown); used for
     the `after` state in logs and for dry-run output.
 - write: `execute_schedule(id: u32)`, no caller auth, one run per call.
 
 ### Error codes
 
-Guard errors start at **100** on purpose, so a code below 100 came from the
-token (Stellar Asset Contract, 1-13) or the host, never from guard policy.
-`GUARD_ERRORS` and `TOKEN_ERRORS` in `errors.ts` map both ranges to the classes
-above (e.g. `#110 ScheduleNotDue` -> `not_due`, `#116 InsufficientAllowance` ->
-`allowance_missing`, SAC `#9 AllowanceError` -> `allowance_missing`). A test
-parses the contract's `#[contracterror]` enum and fails if the table drifts.
-Unmapped codes still work (`unknown_contract`, backed off).
+Guard errors start at **100** on purpose, so a code below 100 came from a
+built-in contract (Stellar Asset Contract / account contract) or the host, never
+from guard policy. `GUARD_ERRORS` and `TOKEN_ERRORS` in `errors.ts` map both
+ranges to the classes above (e.g. `#110 ScheduleNotDue` -> `not_due`,
+`#116 InsufficientAllowance` -> `allowance_missing`, SAC `#9 AllowanceError` ->
+`allowance_missing`). `TOKEN_ERRORS` covers `soroban-env-host`'s shared
+`ContractError` codes 2..15 (4 `UnauthorizedError`, 5 `AuthenticationError`,
+7 `AccountIsNotClassic`, 14 `InsufficientAccountReserve`, 15
+`TooManyAccountSubentries`, ...); code 1 is reserved upstream and intentionally
+unmapped, so it degrades to `unknown_contract`. A test parses the contract's
+`#[contracterror]` enum and fails if the guard table drifts. Unmapped codes
+still work (`unknown_contract`, backed off).
 
 Only a few codes can come out of `execute_schedule` in practice: `#109`, `#110`,
 `#111`, `#116`, plus the rule checks (`#100`, `#103`, `#104`, `#106`).
