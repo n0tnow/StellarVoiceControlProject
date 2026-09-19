@@ -12,6 +12,7 @@ import {
 } from "../../guard/__tests__/helpers.ts";
 import type { Rule } from "../../guard/types.ts";
 import {
+  ARMING_STEP_NOTE,
   buildBaselineSetup,
   buildDisableAutoPay,
   buildEnableAutoPay,
@@ -61,6 +62,22 @@ function disableDeps(rpc: FakeGuardRpc, over: Partial<DisableAutoPayDeps> = {}):
 /**
  * A tiny pure model of the on-chain state `pay_executor` depends on. Used to
  * prove that no prefix of the enable sequence can auto-pay.
+ *
+ * The contract's `pay_executor` has more gates than are modelled here. The
+ * following are deliberately NOT modelled because they are constant and
+ * satisfied across this whole sequence, so they cannot open a prefix window:
+ *
+ *   • a rule exists            — the Always-ask baseline publishes one first.
+ *   • the asset is allowed     — the baseline and the draft list the same SAC.
+ *   • `per_tx_limit` / `daily_limit` — both are >= `auto_approve_limit` by
+ *                                validation, so `amount <= auto_approve_limit`
+ *                                already implies them.
+ *   • `known_recipients_only`  — an alias-book gate independent of the arming
+ *                                steps; constant (and not a prefix variable).
+ *
+ * The varying gates that DO decide the prefix property are the three fields
+ * below; modelling exactly those keeps the proof honest without pretending the
+ * model is the contract.
  */
 interface ChainState {
   executorRegistered: boolean;
@@ -186,9 +203,29 @@ describe("buildEnableAutoPay — three steps, arming order (executor last)", () 
     expect(res.summary.actions[2]?.lines.join(" ")).toContain("Function: set_executor");
   });
 
+  it("calls out step 3 (set_executor) as the arming step, first note and flagged action", async () => {
+    const res = await buildEnableAutoPay(enableDeps(writeRpc()), DRAFT);
+    expect(res.summary.notes[0]).toBe(ARMING_STEP_NOTE);
+    expect(res.summary.notes[0]).toContain("arms unattended payments");
+    expect(res.summary.actions.filter((a) => a.arming === true).map((a) => a.kind)).toEqual([
+      "set_executor",
+    ]);
+    expect(res.summary.actions.map((a) => a.arming)).toEqual([undefined, undefined, true]);
+  });
+
   it("states that schedules need the allowance to cover their total", async () => {
     const res = await buildEnableAutoPay(enableDeps(writeRpc()), DRAFT);
     expect(res.summary.notes.join(" ")).toContain("Schedules need the allowance to cover their total");
+  });
+
+  it("decodes thresholdRaw/dailyLimitRaw back from the signed set_rule XDR", async () => {
+    const res = await buildEnableAutoPay(enableDeps(writeRpc()), DRAFT);
+    const decoded = scValToNative(invokedCall(res.steps[1].unsignedXdr).args[1]!) as {
+      auto_approve_limit: bigint;
+      daily_limit: bigint;
+    };
+    expect(res.summary.exposure?.thresholdRaw).toBe(decoded.auto_approve_limit);
+    expect(res.summary.exposure?.dailyLimitRaw).toBe(decoded.daily_limit);
   });
 
   it("exposure reports the raw limits and the ledger-derived expiry", async () => {
@@ -262,6 +299,45 @@ describe("buildEnableAutoPay — allowance change visibility", () => {
   });
 });
 
+describe("buildEnableAutoPay — already-armed refusal (NB1)", () => {
+  it("refuses an armed account with a typed already_armed and builds nothing", async () => {
+    const rpc = writeRpc();
+    await expect(
+      buildEnableAutoPay(enableDeps(rpc, { current: { rule: RULE, executor: EXECUTOR } }), DRAFT),
+    ).rejects.toMatchObject({ name: "ApprovalError", code: "already_armed" });
+    expect(rpc.simulated).toHaveLength(0);
+  });
+
+  it("points the refusal message at the tighten and disable flows", async () => {
+    const err = (await buildEnableAutoPay(
+      enableDeps(writeRpc(), { current: { rule: RULE, executor: EXECUTOR } }),
+      DRAFT,
+    ).catch((e) => e)) as ApprovalError;
+    expect(err.message).toContain("tighten");
+    expect(err.message).toContain("disable");
+  });
+
+  it("allows an executor with auto_approve_limit == 0 (partially armed)", async () => {
+    const res = await buildEnableAutoPay(
+      enableDeps(writeRpc(), {
+        current: { rule: { ...RULE, auto_approve_limit: 0n }, executor: EXECUTOR },
+      }),
+      DRAFT,
+    );
+    expect(res.order).toEqual(["approve", "set_rule", "set_executor"]);
+  });
+
+  it("allows a positive limit with no executor (partially armed)", async () => {
+    const res = await buildEnableAutoPay(enableDeps(writeRpc(), { current: { rule: RULE } }), DRAFT);
+    expect(res.order).toEqual(["approve", "set_rule", "set_executor"]);
+  });
+
+  it("is unchanged when current is omitted (caller guarantees a not-armed baseline)", async () => {
+    const res = await buildEnableAutoPay(enableDeps(writeRpc()), DRAFT);
+    expect(res.steps.map((s) => s.kind)).toEqual(["approve", "set_rule", "set_executor"]);
+  });
+});
+
 describe("buildBaselineSetup — Always-ask baseline (allowance + rule, no executor)", () => {
   const input = (over: Partial<BaselineSetupInput> = {}): BaselineSetupInput => ({
     rule: BASELINE_RULE,
@@ -326,6 +402,22 @@ describe("buildBaselineSetup — Always-ask baseline (allowance + rule, no execu
     });
   });
 
+  it("decodes the exposure limits back from the signed set_rule XDR", async () => {
+    const res = await buildBaselineSetup(enableDeps(writeRpc()), input());
+    const decoded = scValToNative(invokedCall(res.steps[1]!.unsignedXdr).args[1]!) as {
+      auto_approve_limit: bigint;
+      daily_limit: bigint;
+    };
+    expect(res.summary.exposure?.thresholdRaw).toBe(decoded.auto_approve_limit);
+    expect(res.summary.exposure?.dailyLimitRaw).toBe(decoded.daily_limit);
+  });
+
+  it("has no arming action or arming note (the baseline registers no executor)", async () => {
+    const res = await buildBaselineSetup(enableDeps(writeRpc()), input());
+    expect(res.summary.actions.every((a) => a.arming !== true)).toBe(true);
+    expect(res.summary.notes.join(" ")).not.toContain("arms unattended payments");
+  });
+
   it("accepts auto_approve_limit == 0 (the Always-ask value)", async () => {
     await expect(
       buildBaselineSetup(enableDeps(writeRpc()), input({ rule: ruleWith({ auto_approve_limit: 0n }) })),
@@ -365,6 +457,8 @@ describe("buildBaselineSetup — Always-ask baseline (allowance + rule, no execu
     await expectCode({ allowanceDays: 91 }, "invalid_allowance_days");
     await expectCode({ allowanceDays: 1.5 }, "invalid_allowance_days");
     await expectCode({ assetContractId: "not-a-contract-id" }, "invalid_asset");
+    // NB4: a valid C... that is not rule.allowed_assets[0] must be refused.
+    await expectCode({ assetContractId: ASSET_SAC }, "invalid_asset");
   });
 
   it("'Always ask' state model: no executor means no auto-pay, even with a live allowance", async () => {
@@ -445,10 +539,17 @@ describe("buildTightenRule — classification-driven confirmation", () => {
     const res = await buildTightenRule({ owner: OWNER, guard: guardClient(rpc), current: RULE }, next);
     expect(res.classification).toBe("tightening");
     expect(res.confirmation).toBe("light");
-    expect(res.step.kind).toBe("set_rule");
-    const call = invokedCall(res.step.unsignedXdr);
+    expect(res.steps.map((s) => s.kind)).toEqual(["set_rule"]);
+    const call = invokedCall(res.steps[0]!.unsignedXdr);
     expect(call.name).toBe("set_rule");
     expect(scValToNative(call.args[1]!)).toEqual(next);
+  });
+
+  it("builds nothing and returns confirmation none for an identical rule", async () => {
+    const rpc = writeRpc();
+    const res = await buildTightenRule({ owner: OWNER, guard: guardClient(rpc), current: RULE }, { ...RULE });
+    expect(res).toEqual({ steps: [], classification: "same", confirmation: "none" });
+    expect(rpc.simulated).toHaveLength(0);
   });
 
   it("refuses a loosening by default with use_enable_flow and builds nothing", async () => {
@@ -476,7 +577,7 @@ describe("buildTightenRule — classification-driven confirmation", () => {
     );
     expect(res.classification).toBe("loosening");
     expect(res.confirmation).toBe("card_and_touch_id");
-    expect(invokedCall(res.step.unsignedXdr).name).toBe("set_rule");
+    expect(invokedCall(res.steps[0]!.unsignedXdr).name).toBe("set_rule");
   });
 
   it("builds a new_rule only with the explicit opt-out, still card_and_touch_id", async () => {

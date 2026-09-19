@@ -15,6 +15,7 @@ export {
   MAX_ALLOWED_ASSETS,
   MAX_ALLOWANCE_DAYS,
   MIN_ALLOWANCE_DAYS,
+  assertAssetMatchesRule,
   makeAutoPayDraft,
   ruleFromDraft,
   validateAutoPayDraft,
@@ -38,6 +39,7 @@ export {
 export { requiresApprovalCard, resolveApprovalRoute, type GuardRoute } from "./routing.ts";
 export { formatRawAmount, readBack, readBackDisable, type DisableReadBackInput, type ReadBackOptions } from "./readback.ts";
 export {
+  ARMING_STEP_NOTE,
   LEDGER_SECONDS,
   buildBaselineSetup,
   buildDisableAutoPay,

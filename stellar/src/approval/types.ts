@@ -66,6 +66,7 @@ export type ApprovalErrorCode =
   | "allowance_too_small"
   | "invalid_allowance_days"
   | "missing_asset"
+  | "already_armed"
   | "use_enable_flow";
 
 /** Typed approval failure. Match on `code`, never on the human message. */
@@ -246,6 +247,23 @@ function assertValidAsset(asset: unknown, label: string): asserts asset is strin
   }
 }
 
+/**
+ * The SAC allowance target and the rule's first allowed asset must agree when
+ * both are present: a mismatch would grant the allowance on an asset the agent
+ * may never spend (or list an asset the guard flow never approves). Shared by
+ * the enable draft and the Always-ask baseline so neither can drift.
+ */
+export function assertAssetMatchesRule(assetContractId: string | undefined, rule: Rule): void {
+  if (assetContractId === undefined) return;
+  const first = rule.allowed_assets[0];
+  if (first !== undefined && first !== assetContractId) {
+    throw new ApprovalError(
+      "invalid_asset",
+      `assetContractId ${assetContractId} must equal the rule's first allowed asset ${first}`,
+    );
+  }
+}
+
 /** The input the Always-ask baseline builder validates (rule + allowance + asset). */
 export interface BaselineSetupInput {
   /** The published rule; `auto_approve_limit` may be 0 (the "always ask" value). */
@@ -266,6 +284,7 @@ export interface BaselineSetupInput {
 export function validateBaselineSetup(input: BaselineSetupInput): void {
   validateRuleAndAllowance(input.rule, input.allowanceRaw, input.allowanceDays);
   assertValidAsset(input.assetContractId, "assetContractId");
+  assertAssetMatchesRule(input.assetContractId, input.rule);
 }
 
 /**
@@ -276,7 +295,9 @@ export function validateAutoPayDraft(draft: AutoPayDraft): void {
   if (typeof draft.executor !== "string" || !StrKey.isValidEd25519PublicKey(draft.executor)) {
     throw new ApprovalError("invalid_executor", `executor must be a valid G... address, got ${JSON.stringify(draft.executor)}`);
   }
-  validateRuleAndAllowance(ruleFromDraft(draft), draft.allowanceRaw, draft.allowanceDays);
+  const rule = ruleFromDraft(draft);
+  validateRuleAndAllowance(rule, draft.allowanceRaw, draft.allowanceDays);
+  assertAssetMatchesRule(draft.allowedAssets[0], rule);
 }
 
 /** Project a validated draft onto the on-chain `Rule` shape (snake_case, exact). */

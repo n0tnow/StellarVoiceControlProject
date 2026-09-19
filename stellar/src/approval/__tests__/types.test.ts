@@ -1,16 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { I128_MAX } from "../../guard/amount.ts";
-import { EXECUTOR } from "../../guard/__tests__/helpers.ts";
+import { EXECUTOR, RULE } from "../../guard/__tests__/helpers.ts";
 import {
   ApprovalError,
   DEFAULT_ALLOWANCE_DAYS,
   MAX_ALLOWED_ASSETS,
+  assertAssetMatchesRule,
   makeAutoPayDraft,
   ruleFromDraft,
   validateAutoPayDraft,
   type AutoPayDraft,
 } from "../types.ts";
-import { ASSET_SAC, DRAFT } from "./fixtures.ts";
+import { ASSET_SAC, DRAFT, USDC_SAC } from "./fixtures.ts";
 
 function expectCode(fn: () => void, code: string): void {
   try {
@@ -197,5 +198,23 @@ describe("validateAutoPayDraft — contract mirror + app-stricter rules", () => 
     expect(err.name).toBe("ApprovalError");
     expect(err.code).toBe("limit_order");
     expect(err.message).toBe("boom");
+  });
+});
+
+describe("assertAssetMatchesRule — allowance target vs rule allowlist (NB4)", () => {
+  it("accepts the matching first allowed asset", () => {
+    expect(() => assertAssetMatchesRule(RULE.allowed_assets[0], RULE)).not.toThrow();
+  });
+
+  it("accepts an unknown target (nothing to cross-check)", () => {
+    expect(() => assertAssetMatchesRule(undefined, RULE)).not.toThrow();
+  });
+
+  it("rejects a valid C... that differs from rule.allowed_assets[0]", () => {
+    expectCode(() => assertAssetMatchesRule(USDC_SAC, RULE), "invalid_asset");
+  });
+
+  it("the enable draft cross-check passes for its own (matching) asset", () => {
+    expect(() => validateAutoPayDraft(DRAFT)).not.toThrow();
   });
 });

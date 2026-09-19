@@ -235,3 +235,40 @@ Total = 67 + 111 + 121 + 133 + 98 = **530 passed, 0 failed**.
 
 Acceptance: `git status --short` lists only `stellar/src/approval/**` and
 `backlog/approval-policy.md`; the temporary root `node_modules` symlink is removed.
+
+---
+
+## Review fixes 2 (T1-fix2, 2026-09-19)
+
+Applied the corrections from `backlog/approval-policy-review-2.md` (delta re-review, verdict
+"approve with corrections"). Scope stayed inside `stellar/src/approval/**` plus this report; no
+commit/push/tag; `stellar/src/guard/**` untouched.
+
+| # | Review item | Fix |
+|---|---|---|
+| B1 | Enable card never called out step 3 as the arming step | Added `ARMING_STEP_NOTE` as the **first** `summary.notes` entry and marked the `set_executor` action with `arming: true` (new optional field on `ApprovalActionSummary`). Tests: note is first, only the third action is flagged, and the baseline has no arming action/note. |
+| NB1 | Prefix-safety precondition was stated but not enforced | Added optional `current?: { rule?; executor? }` to `EnableAutoPayDeps`. When provided and the account is already armed (executor registered **and** `auto_approve_limit > 0`), `buildEnableAutoPay` refuses with typed `ApprovalError("already_armed")` and builds nothing; the message points at the tighten/disable flows. Omitted `current` keeps behaviour unchanged (documented caller precondition). Tests: armed refusal, both partially-armed cases, and the omitted case. |
+| NB3 | Identical-rule tighten built a pointless no-op `set_rule` | `buildTightenRule` now returns `{ steps: [], classification: "same", confirmation: "none" }` without calling the guard. `TightenRuleResult.step` became `steps: BuiltApprovalStep[]`; existing tighten tests updated. Test asserts the exact no-build result and an empty `rpc.simulated`. |
+| NB4 | `assetContractId` was not cross-checked against `rule.allowed_assets` | Added `assertAssetMatchesRule(assetContractId, rule)` (typed `invalid_asset`) called from both `validateBaselineSetup` and `validateAutoPayDraft`. Tests: baseline mismatch, helper match/unknown/mismatch, and the enable draft passes its own matching asset. |
+| NB2 | State model omitted invariant contract gates | Added a comment above `ChainState` listing the gates deliberately not modelled (rule present, asset allowed, `per_tx`/`daily` caps, `known_recipients_only`) and why they are constant across the sequence. |
+| NB6 | Exposure limits were read from the input, not the signed XDR | Added `ruleFromSetRuleXdr` and both enable/baseline `exposure.thresholdRaw`/`dailyLimitRaw` now decode back from the produced `set_rule` XDR. Tests assert exposure equals the decoded values for both builders. |
+
+### Gates re-run (T1-fix2)
+
+```
+$ caffeinate -i npm run check -w @polaris/stellar        # tsc exit 0
+$ caffeinate -i npm run test:approval -w @polaris/stellar
+ Test Files  4 passed (4)
+      Tests  112 passed (112)
+$ caffeinate -i npm test -w @polaris/stellar
+ keeper:  ℹ tests 67 / pass 67 / fail 0
+ anchor:  Test Files 5 passed / Tests 111 passed
+ payments: Test Files 7 passed / Tests 121 passed
+ guard:   Test Files 7 passed / Tests 133 passed
+ approval: Test Files 4 passed / Tests 112 passed
+```
+
+Total = 67 + 111 + 121 + 133 + 112 = **544 passed, 0 failed** (was 530; +14 approval tests).
+
+Acceptance: `git status --short` lists only `stellar/src/approval/**` and
+`backlog/approval-policy.md`; the temporary root `node_modules` symlink is removed.

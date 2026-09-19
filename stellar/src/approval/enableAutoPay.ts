@@ -72,6 +72,12 @@ const REVOKE_ALLOWANCE_KILL_SWITCH_CAVEAT =
   "Revoking the allowance disables ALL guard payments, including ones you approve yourself.";
 /** Card copy: the baseline state leaves the executor unregistered. */
 const ALWAYS_ASK_NOTE = "Always ask: every payment will need your approval.";
+/**
+ * Card copy: step 3 (`set_executor`) is the arming step. Placed first on the
+ * enable card so the owner cannot miss what actually turns on unattended pay.
+ */
+export const ARMING_STEP_NOTE =
+  "Step 3 (set_executor) registers the agent and arms unattended payments up to the threshold; until then nothing can be paid without your approval.";
 
 export type ApprovalStepKind = "set_executor" | "set_rule" | "approve" | "revoke_executor";
 
@@ -87,6 +93,8 @@ export interface BuiltApprovalStep {
 export interface ApprovalActionSummary {
   kind: ApprovalStepKind;
   lines: string[];
+  /** Marks the step that arms unattended payments (`set_executor` on enable). */
+  arming?: boolean;
 }
 
 /** The money/limits the card must surface, straight from the draft. */
@@ -126,6 +134,16 @@ export interface EnableAutoPayDeps {
    * used to build the XDR (the caller reads it read-only).
    */
   currentAllowanceRaw?: bigint;
+  /**
+   * The current on-chain arming state, when known. When provided and the
+   * account is already armed (`executor` registered AND
+   * `rule.auto_approve_limit > 0`), the builder refuses with
+   * `ApprovalError("already_armed")` and builds nothing, pointing at the
+   * tighten/disable flows. When omitted, behaviour is unchanged — but the
+   * caller MUST ensure a not-armed baseline (no executor, threshold 0), or the
+   * prefix-safety guarantee does not hold.
+   */
+  current?: { rule?: Rule | undefined; executor?: string | undefined };
   /** Injected clock for the exposure dates. */
   now?: () => Date;
   /** IANA zone for `allowanceExpiresLocal` (default UTC). */
@@ -184,7 +202,8 @@ export interface TightenRuleOptions {
 }
 
 export interface TightenRuleResult {
-  step: BuiltApprovalStep;
+  /** Empty when the change is a no-op (`classification === "same"`). */
+  steps: BuiltApprovalStep[];
   classification: ChangeKind;
   confirmation: ConfirmationLevel;
 }
@@ -219,6 +238,26 @@ function decodedLines(unsignedXdr: string, networkPassphrase: string): string[] 
     `Function: ${decoded.functionName} (${shortKey(decoded.contractId)})`,
     `Args: ${decoded.args.map(describeValue).join(", ")}`,
   ];
+}
+
+/**
+ * Decode the `Rule` argument of a built `set_rule` call back out of its XDR.
+ * The card's exposure must be proof of the signed XDR, not of the caller's
+ * draft (they are built from the same values, but only the XDR is signed).
+ */
+function ruleFromSetRuleXdr(unsignedXdr: string, networkPassphrase: string): Rule {
+  const decoded = decodeInvocation(unsignedXdr, networkPassphrase);
+  return decoded.args[1] as Rule;
+}
+
+/**
+ * An account is already armed when an executor is registered **and** the rule's
+ * `auto_approve_limit` is positive; either condition alone still fails closed.
+ */
+function isAlreadyArmed(current: EnableAutoPayDeps["current"]): boolean {
+  if (!current) return false;
+  const { rule, executor } = current;
+  return typeof executor === "string" && executor.length > 0 && (rule?.auto_approve_limit ?? 0n) > 0n;
 }
 
 /** Deterministic `YYYY-MM-DD HH:mm` in an IANA zone (no locale surprises). */
@@ -262,6 +301,15 @@ export async function buildEnableAutoPay(
   const assetContractId = draft.allowedAssets[0];
   if (!assetContractId) throw new ApprovalError("no_assets", "at least one allowed asset is required");
 
+  // Fail closed on an already-armed account: the prefix-safety proof only holds
+  // from a not-armed baseline, and re-enabling would re-sign an armed state.
+  if (isAlreadyArmed(deps.current)) {
+    throw new ApprovalError(
+      "already_armed",
+      "this account is already armed for unattended payments; use the tighten flow to lower the limits or the disable flow to revoke the executor before enabling again",
+    );
+  }
+
   const { owner, guard, networkPassphrase } = deps;
   const rule = ruleFromDraft(draft);
 
@@ -278,6 +326,7 @@ export async function buildEnableAutoPay(
   });
   const setRuleCall = await guard.setRule(owner, rule);
   const setExecutorCall = await guard.setExecutor(owner, draft.executor);
+  const decodedRule = ruleFromSetRuleXdr(setRuleCall.unsignedXdr, networkPassphrase);
 
   const steps: [BuiltApprovalStep, BuiltApprovalStep, BuiltApprovalStep] = [
     { kind: "approve", unsignedXdr: approveCall.unsignedXdr, payloadHash: approveCall.payloadHash },
@@ -294,15 +343,24 @@ export async function buildEnableAutoPay(
     order: ["approve", "set_rule", "set_executor"],
     summary: {
       title: "Enable automatic payments (3 owner signatures, 1 approval)",
-      actions: steps.map((step) => ({ kind: step.kind, lines: decodedLines(step.unsignedXdr, networkPassphrase) })),
+      actions: steps.map((step) => ({
+        kind: step.kind,
+        lines: decodedLines(step.unsignedXdr, networkPassphrase),
+        ...(step.kind === "set_executor" ? { arming: true } : {}),
+      })),
       exposure: {
-        thresholdRaw: draft.thresholdRaw,
-        dailyLimitRaw: draft.dailyLimitRaw,
+        // Decoded back from the signed `set_rule` XDR, never the draft.
+        thresholdRaw: decodedRule.auto_approve_limit,
+        dailyLimitRaw: decodedRule.daily_limit,
         allowanceRaw: draft.allowanceRaw,
         allowanceExpiresLocal: formatInTimeZone(expiresAt, deps.timeZone ?? "UTC"),
         allowanceExpiresUtc: expiresAt.toISOString(),
       },
-      notes: [SCHEDULE_ALLOWANCE_NOTE, ...allowanceChangeNotes(deps.currentAllowanceRaw, draft.allowanceRaw)],
+      notes: [
+        ARMING_STEP_NOTE,
+        SCHEDULE_ALLOWANCE_NOTE,
+        ...allowanceChangeNotes(deps.currentAllowanceRaw, draft.allowanceRaw),
+      ],
       confirmation: "card_and_touch_id",
     },
   };
@@ -334,6 +392,7 @@ export async function buildBaselineSetup(
     ...(deps.explorerBase ? { explorerBase: deps.explorerBase } : {}),
   });
   const setRuleCall = await guard.setRule(owner, input.rule);
+  const decodedRule = ruleFromSetRuleXdr(setRuleCall.unsignedXdr, networkPassphrase);
 
   const steps: [BuiltApprovalStep, BuiltApprovalStep] = [
     { kind: "approve", unsignedXdr: approveCall.unsignedXdr, payloadHash: approveCall.payloadHash },
@@ -351,8 +410,9 @@ export async function buildBaselineSetup(
       title: "Set up the Always-ask baseline (allowance + rule, no executor)",
       actions: steps.map((step) => ({ kind: step.kind, lines: decodedLines(step.unsignedXdr, networkPassphrase) })),
       exposure: {
-        thresholdRaw: input.rule.auto_approve_limit,
-        dailyLimitRaw: input.rule.daily_limit,
+        // Decoded back from the signed `set_rule` XDR, never the input rule.
+        thresholdRaw: decodedRule.auto_approve_limit,
+        dailyLimitRaw: decodedRule.daily_limit,
         allowanceRaw: input.allowanceRaw,
         allowanceExpiresLocal: formatInTimeZone(expiresAt, deps.timeZone ?? "UTC"),
         allowanceExpiresUtc: expiresAt.toISOString(),
@@ -451,6 +511,10 @@ export async function buildDisableAutoPay(
  * loosening under the light label. Pass `{ allowLoosening: true }` to build the
  * loosening step explicitly; it still returns the full `card_and_touch_id`
  * confirmation so it can only be submitted after a real approval.
+ *
+ * An identical rule (`classification === "same"`) builds NOTHING and returns
+ * `{ steps: [], confirmation: "none" }`: there is no point asking the owner to
+ * sign a no-op `set_rule`.
  */
 export async function buildTightenRule(
   deps: RuleChangeDeps,
@@ -458,10 +522,13 @@ export async function buildTightenRule(
   options: TightenRuleOptions = {},
 ): Promise<TightenRuleResult> {
   const classification = classifyChange(deps.current, nextRule);
+  if (classification === "same") {
+    return { steps: [], classification, confirmation: "none" };
+  }
   if (!options.allowLoosening) assertTightening(classification);
   const call = await deps.guard.setRule(deps.owner, nextRule);
   return {
-    step: { kind: "set_rule", unsignedXdr: call.unsignedXdr, payloadHash: call.payloadHash },
+    steps: [{ kind: "set_rule", unsignedXdr: call.unsignedXdr, payloadHash: call.payloadHash }],
     classification,
     confirmation: confirmationLevel(classification),
   };
