@@ -38,8 +38,7 @@ function todo(tool: string): ChainTool {
  * Chain tools the agent may call. Every one returns an unsigned XDR plus a
  * summary decoded from it (`docs/interfaces.md` §2).
  *
- * TODO(B): implement in this order — `sendPayment` first (it is the M2 vertical
- * slice), then `swap`/`guardPolicy`. `depositTry` (SEP-10/38/6 anchor) is in ./anchor.
+ * Chain-lane implementations live under `stellar/src/{payments,guard,approval,schedule,suggest,live}`; anchor in ./anchor; `swap`/`guardPolicy` remain stubs.
  */
 // Real payment builder (Intent -> unsigned XDR + decoded summary). Configure it once
 // with `configurePayments(deps)`; calling it before that throws a typed refusal.

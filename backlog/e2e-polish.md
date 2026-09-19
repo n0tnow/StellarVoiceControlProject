@@ -14,7 +14,7 @@
 - **`e2e:status`:** read-only snapshot (addresses, balances, rule, executor, alias, `spent_today`, SAC allowance, schedules with local + UTC next-run), `--json`, `--help`; without `--live` it prints a plan and touches no network.
 - **`e2e:tool`:** 12 commands; every state-changing command builds with the production tools, decodes the card **from the XDR**, requires an explicit `y/N` (default NO) or `--yes`, signs the **exact displayed XDR**, submits, waits and reads the result back.
 - **Live smoke passed on Stellar TESTNET** using the existing throwaway accounts; the tool fired a scheduled payment through the untouched keeper CLI (7 s after due) and cancelled a second schedule. Hashes below.
-- Offline gates green: `check` clean, `test:live` **84 passed**, full `test` **894 passed / 0 failed**.
+- Offline gates green: `check` clean, `test:live` **112 passed** (12 files), full `test` **922 passed / 0 failed**. (These are the current, post-review-fix numbers; the **84 / 894** figures quoted in the original draft were the pre-review baseline — see "Review fixes" below, which added 28 live tests.)
 
 ## Scope / files changed
 

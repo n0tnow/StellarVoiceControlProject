@@ -235,3 +235,27 @@
 - **Pointer:** [`docs/approval-and-scheduling.md`](docs/approval-and-scheduling.md) §7; parked idea in
   [`backlog/guard-v0.2-hardening.md`](backlog/guard-v0.2-hardening.md).
 - **Status:** decided
+
+## 2026-09-20 — Chain Lane Completed and Verified Live on Testnet
+- **Idea:** The chain lane (`sendPayment`, guard client, approval T1, schedules T2, suggestions T3, live adapters) is complete and verified end to end.
+- **Evidence:** **922** offline tests green across 8 suites (`backlog/final-gate-chain-lane.md`); **12/12** live scenarios S0–S11 on Stellar TESTNET, independently re-read on-chain (`backlog/e2e-testnet-review.md`, all hashes `SUCCESS`); manual tool `e2e:tool` (`backlog/e2e-polish.md`).
+- **Bugs the live run found:** `sendPayment` set a lower time bound (`minTime = now`) → `tx_too_early` on testnet; fixed to `minTime = 0`. Earlier rounds, independent review caught the `setRule` ABI encoding defect (`scvString`/`scvU64` instead of `scvSymbol`/`scvI128`) and the suggestions outlier threshold.
+- **Status:** decided
+
+## 2026-09-20 — Review Process Finding: Independent Review Catches What Fake-RPC Tests Cannot
+- **Idea:** Every chain-lane module had a separate independent reviewer (author never reviews own code).
+- **Finding:** The reviewers caught **real defects in every module** (a reject on guard-client, blocking fixes in send-payment, approval, schedule, suggest, and the e2e tooling). Offline fake-RPC tests cannot catch ABI-encoding or clock/timing bugs — those only surfaced through independent XDR/spec analysis and the live run.
+- **Decision:** Keep mandatory per-module independent review before merge; treat a live testnet run as required evidence for chain-lane work.
+- **Status:** decided
+
+## 2026-09-20 — Decision: Approval Gate Is STRICT
+- **Decision:** The manual `e2e:tool` approval gate is **STRICT**: it approves only the exact lowercase `y` or `yes` (at most one trailing `\n` removed); no trimming, no case folding, so `Y`, `Y `, ` y`, `YES`, `Yes`, `yes please`, `1` and EOF all abort.
+- **Rationale:** approval must be explicit and default-deny; the prompt times out (120 s) and signs only the exact XDR that was displayed.
+- **Pointer:** `stellar/src/live/confirm.ts`; `backlog/e2e-polish.md` (B3) and `backlog/e2e-polish-review-2.md`.
+- **Status:** decided
+
+## 2026-09-20 — Local-Only Artefacts Intentionally Not in the PR
+- **Idea:** Some exploratory artefacts stay local only and are deliberately **not** part of the chain-lane PR.
+- **What/where:** the test UI branch (`local/test-ui`) and the privacy/passkey spikes on local branches `spike/ct`, `spike/spp`, `spike/passkey`. Their reports live on those branches (local-only), not under `backlog/` in this PR.
+- **Pointer:** chain-lane scope check in `backlog/final-gate-chain-lane.md` (Step 1: no `stellar/src/spike` or live-UI code in the diff).
+- **Status:** decided
