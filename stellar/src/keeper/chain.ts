@@ -211,8 +211,9 @@ export class SorobanChain implements KeeperChain {
 
   private async restore(preamble: StellarRpc.Api.SimulateTransactionRestoreResponse["restorePreamble"]): Promise<ExecResult> {
     const account = await this.rpc.getAccount(this.opts.keypair.publicKey());
-    const fee = String(Number(BASE_FEE) + Number(preamble.minResourceFee));
-    const tx = new TransactionBuilder(account, { fee, networkPassphrase: this.opts.networkPassphrase })
+    // build() adds the resource fee carried by `transactionData` on top of this
+    // inclusion fee, so the fee here is just the base fee (no double counting).
+    const tx = new TransactionBuilder(account, { fee: BASE_FEE, networkPassphrase: this.opts.networkPassphrase })
       .setSorobanData(preamble.transactionData.build())
       .addOperation(Operation.restoreFootprint({}))
       .setTimeout(this.opts.txTimeoutSeconds)
