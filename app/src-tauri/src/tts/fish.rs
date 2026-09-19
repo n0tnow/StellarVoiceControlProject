@@ -153,7 +153,19 @@ impl FishSpeaker {
         None
     }
 
-    fn speak_with_key(&self, text: &str, key: &str) -> Result<(), TtsError> {
+    /// Performs the live request and returns the provider's raw audio bytes.
+    ///
+    /// Split out of [`Self::speak`] so the network step and the playback step can
+    /// be exercised independently — in particular, the `#[ignore]`d live test in
+    /// `tts::tests` asserts on the returned payload (non-empty MPEG) before any
+    /// audio is played. Public only for that sibling test; the app always speaks
+    /// through [`Speaker::speak`].
+    pub fn synthesize(&self, text: &str) -> Result<Vec<u8>, TtsError> {
+        let key = self.api_key.as_deref().ok_or(TtsError::MissingKey)?;
+        self.synthesize_with_key(text, key)
+    }
+
+    fn synthesize_with_key(&self, text: &str, key: &str) -> Result<Vec<u8>, TtsError> {
         let reference_id = self
             .reference_id
             .as_deref()
@@ -188,9 +200,14 @@ impl FishSpeaker {
             ));
         }
 
-        // The bytes are an audio container that macOS can play directly once they
-        // are on disk; `format` is the container the request asked for.
-        let path = player::write_temp_audio(&bytes, &self.format)?;
+        Ok(bytes.to_vec())
+    }
+
+    /// Writes `bytes` to a temp file, plays them with `afplay`, then removes the
+    /// file. The bytes are an audio container macOS plays directly; `format` is
+    /// the container the request asked for.
+    fn play(&self, bytes: &[u8]) -> Result<(), TtsError> {
+        let path = player::write_temp_audio(bytes, &self.format)?;
         let played = player::play_file(&path);
         // Best-effort cleanup: a leftover temp file must never mask a playback
         // result, and the OS temp dir is pruned by the system anyway.
@@ -202,8 +219,8 @@ impl FishSpeaker {
 impl Speaker for FishSpeaker {
     fn speak(&self, text: &str) -> Result<(), TtsError> {
         // Missing config short-circuits before any network work.
-        let key = self.api_key.as_deref().ok_or(TtsError::MissingKey)?;
-        self.speak_with_key(text, key)
+        let bytes = self.synthesize(text)?;
+        self.play(&bytes)
     }
 
     fn name(&self) -> &'static str {

@@ -501,4 +501,60 @@ mod tests {
         speak_and_log(backend.as_ref(), "Polaris hazır. Yerel ses çalışıyor.")
             .expect("local macOS speech must succeed");
     }
+
+    /// Whether `bytes` look like an MPEG audio payload: either an ID3v2 tag or
+    /// an MPEG frame sync (`11111111 111`). Used by the live test below.
+    fn looks_like_mpeg(bytes: &[u8]) -> bool {
+        bytes.starts_with(b"ID3")
+            || (bytes.len() >= 2 && bytes[0] == 0xFF && (bytes[1] & 0xE0) == 0xE0)
+    }
+
+    /// Live verification of the REAL Fish Audio backend, not the fallback. It
+    /// makes a paid/free-tier network call and speaks aloud, so it is `#[ignore]`d
+    /// to keep the default `cargo test` offline and deterministic. Run it with the
+    /// repo `.env` present (the test also self-loads it):
+    ///
+    /// ```text
+    /// caffeinate -i cargo test manual_live_fish -- --ignored --nocapture
+    /// ```
+    ///
+    /// It proves two things in sequence: the HTTP response carries a non-empty
+    /// MPEG payload, and the exact production `speak_and_log` path writes that
+    /// payload to disk, plays it through `afplay`, and prints
+    /// `polaris: tts in <ms> ms via fish`.
+    #[test]
+    #[ignore = "calls the live Fish Audio API and speaks aloud; run manually with --ignored --nocapture"]
+    fn manual_live_fish_synthesises_mpeg_and_speaks() {
+        // Real environment variables win; this only fills gaps from the
+        // gitignored `.env`, so a sourced shell still takes precedence.
+        crate::env::load();
+
+        // Built from the environment, exactly as `build_backend()` does it.
+        let speaker = fish::FishSpeaker::from_env();
+        assert_eq!(
+            speaker.missing_config(),
+            None,
+            "the live test needs FISH_AUDIO_API_KEY and POLARIS_TTS_REFERENCE_ID"
+        );
+
+        let sentence = "Merhaba, this is Polaris. Onaylıyor musun?";
+
+        // 1. The raw payload: non-empty and genuinely MPEG.
+        let audio = speaker
+            .synthesize(sentence)
+            .expect("live Fish synthesis must succeed");
+        assert!(
+            !audio.is_empty(),
+            "Fish answered 2xx with an empty audio body"
+        );
+        assert!(
+            looks_like_mpeg(&audio),
+            "expected an MPEG payload, got {} bytes starting {:02X?}",
+            audio.len(),
+            &audio[..audio.len().min(4)]
+        );
+
+        // 2. The production path: temp file -> `afplay` -> `tts in <ms> ms via fish`.
+        speak_and_log(&speaker, sentence).expect("live Fish playback must succeed");
+    }
 }
