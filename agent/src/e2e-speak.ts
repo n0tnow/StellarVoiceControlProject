@@ -30,8 +30,11 @@ import { fileURLToPath } from "node:url";
 
 import { createEventBus } from "./events.ts";
 import { runTurn } from "./loop.ts";
-import { createAgentRuntime } from "./runtime.ts";
+import { createDefaultRegistry } from "./runtime.ts";
 import { isSpeakable, spokenText } from "./speech.ts";
+import { AnthropicLlm } from "./llm/anthropic.ts";
+import { anthropicOptionsFromEnv, openAiOptionsFromEnv, resolveProvider } from "./llm/config.ts";
+import { OpenAiCompatibleLlm } from "./llm/openai.ts";
 
 const transcript = process.argv.slice(2).join(" ").trim();
 if (!transcript) {
@@ -46,12 +49,52 @@ bus.subscribe((event) => {
   }
 });
 
-const { registry, llm } = createAgentRuntime();
-console.error(`agent: model=${llm.model}, tools=${registry.size}, transcript=${JSON.stringify(transcript)}`);
+// Step A11: this driver also measures the agent half of the turn, phase by
+// phase, so a real per-language breakdown exists without the microphone. The
+// provider phases are captured by wrapping `fetch`: the client calls it once,
+// and the body read (`.text()`) is wrapped to time the full response. The Rust
+// subprocess below prints the TTS half of the same turn.
+const timeline: Array<{ phase: string; at: number }> = [];
+const began = performance.now();
+const mark = (phase: string): void => {
+  timeline.push({ phase, at: Math.round(performance.now() - began) });
+};
+const realFetch = globalThis.fetch;
+const timingFetch: typeof fetch = async (input, init) => {
+  mark("provider request sent");
+  const response = await realFetch(input, init);
+  mark("provider first byte");
+  return new Proxy(response, {
+    get(target, property, receiver) {
+      if (property === "text") {
+        return async () => {
+          const body = await target.text();
+          mark("provider full response");
+          return body;
+        };
+      }
+      const value = Reflect.get(target, property, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+};
 
-const started = Date.now();
+const registry = createDefaultRegistry();
+const { provider } = resolveProvider(process.env);
+const options =
+  provider === "anthropic" ? anthropicOptionsFromEnv(process.env) : openAiOptionsFromEnv(process.env);
+const llm =
+  provider === "anthropic"
+    ? new AnthropicLlm({ ...options, fetchImpl: timingFetch })
+    : new OpenAiCompatibleLlm({ ...options, fetchImpl: timingFetch });
+console.error(
+  `agent: provider=${provider}, model=${llm.model}, tools=${registry.size}, transcript=${JSON.stringify(transcript)}`,
+);
+
+mark("agent request built");
 const result = await runTurn({ transcript, registry, llm, bus });
-const intentMs = Date.now() - started;
+mark("intent parsed");
+const intentMs = Math.round(performance.now() - began);
 
 // A turn without an intent is NOT a failed turn: the model answered
 // conversationally and that answer is what gets spoken (A5 bug fix). Only a
@@ -65,6 +108,7 @@ if (!isSpeakable(result)) {
 }
 
 const sentence = spokenText(result);
+mark("sentence built");
 if (result.intent) {
   console.log(`intent in ${intentMs} ms: ${JSON.stringify(result.intent)}`);
 } else {
@@ -74,6 +118,10 @@ console.log(`spoken sentence: ${sentence}`);
 // Step A11: the model reports the language of the turn; the shell hands it to
 // TTS so the voice matches the words. The driver forwards it to the Rust test.
 console.log(`language: ${result.language ?? "(not reported)"}`);
+
+// The agent-half phase table. The TTS half is printed by the Rust subprocess
+// below as its own `turn timing` block.
+console.log("agent phases: " + timeline.map(({ phase, at }) => `${phase}=${at}ms`).join(" -> "));
 
 // The Rust side owns Fish Audio; the driver only feeds it the finished sentence.
 // Spawning the ignored test keeps the provider client in one place.
@@ -120,7 +168,7 @@ const speakMs = Date.now() - speakStarted;
 process.stdout.write(rustOutput);
 
 console.log(
-  `end-to-end: intent ${intentMs} ms + speak ${speakMs} ms = ${Date.now() - started} ms`,
+  `end-to-end: agent ${intentMs} ms + speak ${speakMs} ms = ${Math.round(performance.now() - began)} ms`,
 );
 
 if (exitCode !== 0) {
