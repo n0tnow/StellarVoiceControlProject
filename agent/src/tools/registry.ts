@@ -28,6 +28,14 @@ export interface AgentTool<Input = unknown, Output = unknown> {
    * the call behind Touch ID approval before it reaches the chain.
    */
   requiresApproval?: boolean;
+  /**
+   * Approval-gated tools **must not run** during the agent turn. Instead the
+   * loop validates the model's arguments and turns them into a structured
+   * `Intent` — this is the whole output of step A2. Implementations throw an
+   * `AgentError` of kind `input` when the arguments cannot be trusted, which the
+   * loop converts into a clarification rather than a bogus intent.
+   */
+  toIntent?(input: Input, ctx: ToolContext): Intent;
   run(input: Input, ctx: ToolContext): Promise<Output>;
 }
 

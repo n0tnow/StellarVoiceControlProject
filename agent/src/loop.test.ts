@@ -1,0 +1,134 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+
+import type { PolarisEvent } from "@polaris/interfaces";
+
+import { AgentError } from "./errors.ts";
+import { createEventBus } from "./events.ts";
+import { runTurn, type AgentLlm, type LlmTurn } from "./loop.ts";
+import { createDefaultRegistry } from "./runtime.ts";
+
+/** Deterministic provider: returns the same scripted turn, with no network. */
+class ScriptedLlm implements AgentLlm {
+  readonly model = "scripted";
+  readonly #turn: LlmTurn;
+
+  constructor(turn: LlmTurn) {
+    this.#turn = turn;
+  }
+
+  async turn(): Promise<LlmTurn> {
+    return this.#turn;
+  }
+}
+
+function harness(turn: LlmTurn, transcript: string) {
+  const bus = createEventBus();
+  const events: PolarisEvent[] = [];
+  bus.subscribe((event) => events.push(event));
+  return {
+    events,
+    run: () =>
+      runTurn({
+        transcript,
+        registry: createDefaultRegistry(),
+        llm: new ScriptedLlm(turn),
+        bus,
+      }),
+  };
+}
+
+test("a send_payment tool call becomes a validated Intent and is never executed", async () => {
+  const transcript = "Ahmete 5 USDC gönder";
+  const { run, events } = harness(
+    {
+      toolCalls: [
+        { name: "send_payment", input: { amount: "5", asset: "USDC", recipient: "Ahmet" } },
+      ],
+    },
+    transcript,
+  );
+
+  const result = await run();
+  assert.deepEqual(result.intent, {
+    kind: "send",
+    asset: "USDC",
+    amount: "5",
+    recipient: "Ahmet",
+    source: transcript,
+  });
+  assert.equal(result.intentTool, "send_payment");
+  assert.deepEqual(result.executedTools, []);
+  assert.match(result.answer, /Send 5 USDC to Ahmet/);
+  assert.ok(
+    events.some((event) => event.type === "agent_status" && event.stage === "awaiting_approval"),
+    "the loop must announce that approval is required",
+  );
+});
+
+test("an unrelated command yields no tool call and no intent", async () => {
+  const { run } = harness({ text: "Hava durumunu bilmiyorum.", toolCalls: [] }, "bugün hava nasıl");
+  const result = await run();
+  assert.equal(result.intent, undefined);
+  assert.equal(result.answer, "Hava durumunu bilmiyorum.");
+  assert.deepEqual(result.executedTools, []);
+});
+
+test("a bogus tool call becomes a clarification, not an intent", async () => {
+  const { run } = harness(
+    { toolCalls: [{ name: "send_payment", input: { amount: "abc", asset: "USDC", recipient: "Ahmet" } }] },
+    "Ahmete biraz USDC gönder",
+  );
+  const result = await run();
+  assert.equal(result.intent, undefined);
+  assert.match(result.answer, /couldn't turn that into a payment/i);
+});
+
+test("more than one action at once is refused", async () => {
+  const { run } = harness(
+    {
+      toolCalls: [
+        { name: "send_payment", input: { amount: "5", asset: "USDC", recipient: "Ahmet" } },
+        { name: "send_payment", input: { amount: "6", asset: "USDC", recipient: "Ada" } },
+      ],
+    },
+    "Ahmete 5 ve Ada'ya 6 USDC gönder",
+  );
+  const result = await run();
+  assert.equal(result.intent, undefined);
+  assert.match(result.answer, /one action at a time/i);
+});
+
+test("a non-approval tool still runs and feeds the round trip", async () => {
+  const { run } = harness(
+    { text: "calling noop", toolCalls: [{ name: "noop", input: { echo: "hello" } }] },
+    "please run the noop tool",
+  );
+  const result = await run();
+  assert.deepEqual(result.executedTools, ["noop"]);
+  assert.equal(result.intent, undefined);
+  assert.match(result.answer, /noop -> /);
+});
+
+test("an unknown tool is a programming error, not an intent", async () => {
+  const { run } = harness({ toolCalls: [{ name: "does_not_exist", input: {} }] }, "do something");
+  await assert.rejects(run(), (error: unknown) => error instanceof AgentError && error.kind === "unknown_tool");
+});
+
+test("a provider failure propagates and emits an error event", async () => {
+  const bus = createEventBus();
+  const events: PolarisEvent[] = [];
+  bus.subscribe((event) => events.push(event));
+  const failing: AgentLlm = {
+    model: "failing",
+    async turn() {
+      throw new AgentError("network", "simulated outage");
+    },
+  };
+
+  await assert.rejects(
+    runTurn({ transcript: "hi", registry: createDefaultRegistry(), llm: failing, bus }),
+    (error: unknown) => error instanceof AgentError && error.kind === "network",
+  );
+  assert.ok(events.some((event) => event.type === "error"));
+});

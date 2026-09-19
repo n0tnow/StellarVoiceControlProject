@@ -10,6 +10,8 @@
   "types": "./src/index.ts",
   "scripts": {
     "start": "node src/demo.ts",
+    "cli": "node --env-file-if-exists=../.env src/cli.ts",
+    "test": "node --test \"src/**/*.test.ts\"",
     "check": "tsc -p tsconfig.json"
   },
   "dependencies": {
