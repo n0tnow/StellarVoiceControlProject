@@ -18,6 +18,7 @@
 //! API key is only ever placed in the `Authorization` header; it is never logged,
 //! never written to disk, and never included in an error.
 
+use std::collections::HashMap;
 use std::time::Duration;
 
 use serde::Serialize;
@@ -27,6 +28,22 @@ use crate::tts::{player, PlaybackStart, Speaker, TtsError};
 
 /// Default model; override with `POLARIS_TTS_MODEL`.
 pub const DEFAULT_MODEL: &str = "s2.1-pro-free";
+
+/// The pinned voice every utterance falls back to.
+pub const REFERENCE_ID_ENV: &str = "POLARIS_TTS_REFERENCE_ID";
+
+/// Optional per-language voice override, e.g. `POLARIS_TTS_REFERENCE_ID_TR`.
+/// The suffix is a BCP-47 language base; the value is a Fish `reference_id`.
+pub const REFERENCE_ID_OVERRIDE_PREFIX: &str = "POLARIS_TTS_REFERENCE_ID_";
+
+/// Collects `POLARIS_TTS_REFERENCE_ID_<LANG>` entries into a language -> voice
+/// map. Thin wrapper over the shared parser in `tts`.
+pub fn voice_overrides_from<I>(pairs: I) -> HashMap<String, String>
+where
+    I: IntoIterator<Item = (String, String)>,
+{
+    crate::tts::language_overrides_from(pairs, REFERENCE_ID_OVERRIDE_PREFIX)
+}
 
 /// Default audio container; override with `POLARIS_TTS_FORMAT`.
 pub const DEFAULT_FORMAT: &str = "mp3";
@@ -73,22 +90,27 @@ pub fn request_body(text: &str, reference_id: &str, format: &str, latency: &str)
 pub struct FishSpeaker {
     api_key: Option<String>,
     model: String,
+    /// The pinned voice: the fallback for every language without an override.
     reference_id: Option<String>,
+    /// Optional `POLARIS_TTS_REFERENCE_ID_<LANG>` overrides, keyed by language base.
+    voices: HashMap<String, String>,
     format: String,
     latency: String,
     client: reqwest::blocking::Client,
 }
 
 impl FishSpeaker {
-    /// Reads the key, model, voice id and output knobs from the environment.
+    /// Reads the key, model, voice id, per-language overrides and output knobs
+    /// from the environment.
     pub fn from_env() -> Self {
         Self::new(
             env::var("FISH_AUDIO_API_KEY"),
             env::var("POLARIS_TTS_MODEL").unwrap_or_else(|| DEFAULT_MODEL.to_string()),
-            env::var("POLARIS_TTS_REFERENCE_ID"),
+            env::var(REFERENCE_ID_ENV),
             env::var("POLARIS_TTS_FORMAT").unwrap_or_else(|| DEFAULT_FORMAT.to_string()),
             env::var("POLARIS_TTS_LATENCY").unwrap_or_else(|| DEFAULT_LATENCY.to_string()),
         )
+        .with_voice_overrides(voice_overrides_from(std::env::vars()))
     }
 
     pub fn new(
@@ -107,10 +129,17 @@ impl FishSpeaker {
             api_key,
             model,
             reference_id,
+            voices: HashMap::new(),
             format,
             latency,
             client,
         }
+    }
+
+    /// Attaches the per-language voice overrides read from the environment.
+    pub fn with_voice_overrides(mut self, voices: HashMap<String, String>) -> Self {
+        self.voices = voices;
+        self
     }
 
     /// The engine id sent in the `model` header.
@@ -118,9 +147,33 @@ impl FishSpeaker {
         &self.model
     }
 
-    /// The voice id sent in the body, if configured. Not secret; useful in the
-    /// startup line so the fixed voice can be verified.
+    /// The pinned voice id, if configured. Not secret; useful in the startup
+    /// line so the fixed default voice can be verified. This is the **fallback**
+    /// voice, never changed silently by a language override.
     pub fn voice_id(&self) -> Option<&str> {
+        self.reference_id.as_deref()
+    }
+
+    /// The per-language overrides in effect (language base -> voice id).
+    pub fn voice_overrides(&self) -> &HashMap<String, String> {
+        &self.voices
+    }
+
+    /// The voice for one utterance: the language override when one is
+    /// configured, otherwise the pinned voice.
+    ///
+    /// This is the whole of the A11 "per-language voice" mechanism. The owner
+    /// owns the values (`POLARIS_TTS_REFERENCE_ID_<LANG>`); code only decides the
+    /// precedence, so an unset or unknown language can never silently change the
+    /// pinned voice.
+    pub fn reference_for(&self, language: Option<&str>) -> Option<&str> {
+        if let Some(base) = language.and_then(crate::tts::normalize_language_base) {
+            if let Some(voice) = self.voices.get(&base) {
+                if !voice.trim().is_empty() {
+                    return Some(voice);
+                }
+            }
+        }
         self.reference_id.as_deref()
     }
 
@@ -168,7 +221,8 @@ impl FishSpeaker {
 
     #[cfg(test)]
     fn synthesize_with_key(&self, text: &str, key: &str) -> Result<Vec<u8>, TtsError> {
-        let response = self.request_with_key(text, key)?;
+        // The live payload test always uses the pinned voice (`None`).
+        let response = self.request_with_key(text, key, None)?;
         let bytes = response
             .bytes()
             .map_err(|error| TtsError::Network(error.to_string()))?;
@@ -191,11 +245,12 @@ impl FishSpeaker {
         &self,
         text: &str,
         key: &str,
+        language: Option<&str>,
     ) -> Result<reqwest::blocking::Response, TtsError> {
-        let reference_id = self
-            .reference_id
-            .as_deref()
-            .ok_or(TtsError::MissingReferenceId)?;
+        // The language picks a voice override when one is configured, and the
+        // pinned voice otherwise. Requesting with no voice at all would drift the
+        // voice, so a missing reference is still an error.
+        let reference_id = self.reference_for(language).ok_or(TtsError::MissingReferenceId)?;
         let body = request_body(text, reference_id, &self.format, &self.latency);
 
         let response = self
@@ -229,9 +284,14 @@ impl Speaker for FishSpeaker {
     /// live response through lets playback begin at roughly the provider's
     /// time-to-first-byte. `synthesize` is retained for the live test's payload
     /// assertion; the app always streams.
-    fn speak(&self, text: &str, on_playback_start: &PlaybackStart<'_>) -> Result<(), TtsError> {
+    fn speak(
+        &self,
+        text: &str,
+        language: Option<&str>,
+        on_playback_start: &PlaybackStart<'_>,
+    ) -> Result<(), TtsError> {
         let key = self.api_key.as_deref().ok_or(TtsError::MissingKey)?;
-        let response = self.request_with_key(text, key)?;
+        let response = self.request_with_key(text, key, language)?;
         player::play_stream(response, &self.format, on_playback_start)
     }
 
@@ -305,7 +365,7 @@ mod tests {
         );
         assert!(!speaker.has_key());
         let noop = || {};
-        assert_eq!(speaker.speak("hello", &noop), Err(TtsError::MissingKey));
+        assert_eq!(speaker.speak("hello", None, &noop), Err(TtsError::MissingKey));
     }
 
     #[test]
@@ -321,7 +381,7 @@ mod tests {
         // first because sending without it drifts the voice.
         let noop = || {};
         assert_eq!(
-            speaker.speak("hello", &noop),
+            speaker.speak("hello", None, &noop),
             Err(TtsError::MissingReferenceId)
         );
     }
@@ -377,6 +437,81 @@ mod tests {
         assert_eq!(speaker.model(), "s2.1-pro-free");
         assert_eq!(speaker.voice_id(), Some(VOICE));
         assert_eq!(speaker.name(), "fish");
+    }
+
+    #[test]
+    fn a_language_override_wins_and_unknown_languages_fall_back_to_the_pinned_voice() {
+        let voices = voice_overrides_from([
+            ("POLARIS_TTS_REFERENCE_ID_TR".to_string(), "tr-voice".to_string()),
+            ("POLARIS_TTS_REFERENCE_ID_EN_US".to_string(), "en-voice".to_string()),
+            // Not an override: the base var and a non-voice var are ignored.
+            ("POLARIS_TTS_REFERENCE_ID".to_string(), "ignored".to_string()),
+            ("POLARIS_TTS_MODEL".to_string(), "ignored".to_string()),
+        ]);
+        let speaker = FishSpeaker::new(
+            Some("sk-test".to_string()),
+            DEFAULT_MODEL.to_string(),
+            Some(VOICE.to_string()),
+            DEFAULT_FORMAT.to_string(),
+            DEFAULT_LATENCY.to_string(),
+        )
+        .with_voice_overrides(voices);
+
+        // The base (`en-US` -> `en`) is what keys the override.
+        assert_eq!(speaker.reference_for(Some("tr")), Some("tr-voice"));
+        assert_eq!(speaker.reference_for(Some("tr-TR")), Some("tr-voice"));
+        assert_eq!(speaker.reference_for(Some("EN_us")), Some("en-voice"));
+        // A language with no override, and no language at all, use the pinned voice.
+        assert_eq!(speaker.reference_for(Some("de")), Some(VOICE));
+        assert_eq!(speaker.reference_for(None), Some(VOICE));
+        // The pinned voice is never silently changed.
+        assert_eq!(speaker.voice_id(), Some(VOICE));
+        assert_eq!(speaker.voice_overrides().len(), 2);
+    }
+
+    #[test]
+    fn voice_override_parsing_ignores_blank_and_malformed_entries() {
+        let voices = voice_overrides_from([
+            // Blank value: nothing to switch to.
+            ("POLARIS_TTS_REFERENCE_ID_TR".to_string(), "  ".to_string()),
+            // A numeric "language" is not a language base.
+            ("POLARIS_TTS_REFERENCE_ID_12".to_string(), "x".to_string()),
+            // A trailing underscore means an empty suffix.
+            ("POLARIS_TTS_REFERENCE_ID_".to_string(), "y".to_string()),
+            ("POLARIS_TTS_REFERENCE_ID_XX".to_string(), "de-voice".to_string()),
+        ]);
+        assert_eq!(voices.len(), 1);
+        assert_eq!(voices.get("xx").map(String::as_str), Some("de-voice"));
+
+        // A blank override can never shadow the pinned voice at lookup time.
+        let speaker = FishSpeaker::new(
+            Some("sk-test".to_string()),
+            DEFAULT_MODEL.to_string(),
+            Some(VOICE.to_string()),
+            DEFAULT_FORMAT.to_string(),
+            DEFAULT_LATENCY.to_string(),
+        )
+        .with_voice_overrides(HashMap::from([("tr".to_string(), "   ".to_string())]));
+        assert_eq!(speaker.reference_for(Some("tr")), Some(VOICE));
+    }
+
+    #[test]
+    fn a_language_base_is_normalized_or_rejected() {
+        assert_eq!(
+            crate::tts::normalize_language_base("TR"),
+            Some("tr".to_string())
+        );
+        assert_eq!(
+            crate::tts::normalize_language_base(" en-US "),
+            Some("en".to_string())
+        );
+        assert_eq!(
+            crate::tts::normalize_language_base("zh_Hans"),
+            Some("zh".to_string())
+        );
+        assert_eq!(crate::tts::normalize_language_base(""), None);
+        assert_eq!(crate::tts::normalize_language_base("12"), None);
+        assert_eq!(crate::tts::normalize_language_base("t"), None);
     }
 
     #[test]

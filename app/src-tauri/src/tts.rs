@@ -37,11 +37,50 @@ pub mod fish;
 pub mod local;
 pub mod player;
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
 use crate::env;
+
+/// The language base (`en-US` -> `en`) used to key the per-language voice
+/// overrides. Returns `None` for anything that is not plausibly a language base,
+/// so a malformed env key can never become a lookup entry.
+pub fn normalize_language_base(value: &str) -> Option<String> {
+    let normalized = value.trim().to_lowercase().replace('_', "-");
+    let base = normalized.split('-').next().unwrap_or_default();
+    if base.len() >= 2 && base.chars().all(|character| character.is_ascii_alphabetic()) {
+        Some(base.to_string())
+    } else {
+        None
+    }
+}
+
+/// Collects `<prefix><LANG>` environment entries into a language -> value map.
+///
+/// Takes key/value pairs rather than reading the process environment, so the
+/// parsing is unit-tested deterministically. Blank values, empty suffixes and
+/// non-language suffixes are ignored — a pinned default is always the fallback.
+pub fn language_overrides_from<I>(pairs: I, prefix: &str) -> HashMap<String, String>
+where
+    I: IntoIterator<Item = (String, String)>,
+{
+    let mut overrides = HashMap::new();
+    for (key, value) in pairs {
+        let Some(suffix) = key.strip_prefix(prefix) else {
+            continue;
+        };
+        let value = value.trim();
+        if suffix.is_empty() || value.is_empty() {
+            continue;
+        }
+        if let Some(base) = normalize_language_base(suffix) {
+            overrides.insert(base, value.to_string());
+        }
+    }
+    overrides
+}
 
 /// Everything that can go wrong between "there is text to speak" and "the audio
 /// finished playing".
@@ -126,7 +165,17 @@ pub trait Speaker: Send + Sync {
     /// Synthesizes `text` and plays it, invoking `on_playback_start` at the
     /// moment audio playback begins — never during synthesis — and returning once
     /// the audio has finished.
-    fn speak(&self, text: &str, on_playback_start: &PlaybackStart<'_>) -> Result<(), TtsError>;
+    ///
+    /// `language` is the model-reported BCP-47 tag for this utterance (step A11).
+    /// A backend may use it to pick a per-language voice; `None` means the
+    /// configured default voice, and a language without an override must fall
+    /// back to that default (never silently switch the pinned voice).
+    fn speak(
+        &self,
+        text: &str,
+        language: Option<&str>,
+        on_playback_start: &PlaybackStart<'_>,
+    ) -> Result<(), TtsError>;
 
     /// Short backend name for the terminal latency line, so the Fish and local
     /// numbers can be told apart on the same scale.
@@ -163,7 +212,12 @@ impl FallbackSpeaker {
 }
 
 impl Speaker for FallbackSpeaker {
-    fn speak(&self, text: &str, on_playback_start: &PlaybackStart<'_>) -> Result<(), TtsError> {
+    fn speak(
+        &self,
+        text: &str,
+        language: Option<&str>,
+        on_playback_start: &PlaybackStart<'_>,
+    ) -> Result<(), TtsError> {
         // A single utterance may cross the primary/fallback boundary (the primary
         // can fail mid-flight), so the playback-start notification is latched: it
         // fires at most once per utterance no matter which backend actually plays.
@@ -176,9 +230,9 @@ impl Speaker for FallbackSpeaker {
         let Some(primary) = &self.primary else {
             // No primary at all (Fish was not configured): speak locally and
             // skip the fallback banner, which would be misleading.
-            return self.fallback.speak(text, &on_start);
+            return self.fallback.speak(text, language, &on_start);
         };
-        match primary.speak(text, &on_start) {
+        match primary.speak(text, language, &on_start) {
             Ok(()) => Ok(()),
             Err(error) => {
                 eprintln!(
@@ -188,7 +242,7 @@ impl Speaker for FallbackSpeaker {
                     error.detail()
                 );
                 self.used_fallback.store(true, Ordering::Relaxed);
-                self.fallback.speak(text, &on_start)
+                self.fallback.speak(text, language, &on_start)
             }
         }
     }
@@ -270,6 +324,20 @@ pub fn build_backend() -> Arc<dyn Speaker> {
                 fish.model(),
                 fish.voice_id().unwrap_or("?")
             );
+            // Per-language overrides are the owner's values; printing which ones
+            // are in effect is the only way to confirm the lookup on a real run.
+            if !fish.voice_overrides().is_empty() {
+                let mut overrides: Vec<(&String, &String)> = fish.voice_overrides().iter().collect();
+                overrides.sort_by_key(|(language, _)| language.as_str());
+                let rendered: Vec<String> = overrides
+                    .into_iter()
+                    .map(|(language, voice)| format!("{language}={voice}"))
+                    .collect();
+                println!(
+                    "polaris: TTS per-language voice overrides: {}",
+                    rendered.join(", ")
+                );
+            }
             Arc::new(FallbackSpeaker::new(Some(Arc::new(fish)), local_speaker()))
         }
     }
@@ -288,13 +356,14 @@ fn local_speaker() -> Arc<dyn Speaker> {
 pub fn speak_verified(
     backend: &dyn Speaker,
     text: &str,
+    language: Option<&str>,
     on_playback_start: &PlaybackStart<'_>,
 ) -> Result<(), TtsError> {
     let text = text.trim();
     if text.is_empty() {
         return Err(TtsError::EmptyText);
     }
-    backend.speak(text, on_playback_start)
+    backend.speak(text, language, on_playback_start)
 }
 
 /// Speaks `text` and prints the terminal lines the `speak` command relies on:
@@ -304,16 +373,18 @@ pub fn speak_verified(
 pub fn speak_and_log(
     backend: &dyn Speaker,
     text: &str,
+    language: Option<&str>,
     on_playback_start: &PlaybackStart<'_>,
 ) -> Result<(), TtsError> {
     let started = Instant::now();
-    match speak_verified(backend, text, on_playback_start) {
+    match speak_verified(backend, text, language, on_playback_start) {
         Ok(()) => {
             println!(
-                "polaris: tts in {} ms via {} ({} chars)",
+                "polaris: tts in {} ms via {} ({} chars, lang {})",
                 started.elapsed().as_millis(),
                 backend.name(),
-                text.trim().chars().count()
+                text.trim().chars().count(),
+                language.unwrap_or("-")
             );
             Ok(())
         }
@@ -358,7 +429,12 @@ mod tests {
     }
 
     impl Speaker for FakeSpeaker {
-        fn speak(&self, _text: &str, _on_playback_start: &PlaybackStart<'_>) -> Result<(), TtsError> {
+        fn speak(
+            &self,
+            _text: &str,
+            _language: Option<&str>,
+            _on_playback_start: &PlaybackStart<'_>,
+        ) -> Result<(), TtsError> {
             *self.calls.lock().unwrap() += 1;
             self.result
                 .lock()
@@ -377,10 +453,10 @@ mod tests {
         let backend = FakeSpeaker::returning(Ok(()));
         let noop = || {};
         assert_eq!(
-            speak_verified(&backend, "   ", &noop),
+            speak_verified(&backend, "   ", None, &noop),
             Err(TtsError::EmptyText)
         );
-        assert_eq!(speak_verified(&backend, "", &noop), Err(TtsError::EmptyText));
+        assert_eq!(speak_verified(&backend, "", None, &noop), Err(TtsError::EmptyText));
         assert_eq!(*backend.calls.lock().unwrap(), 0);
     }
 
@@ -390,7 +466,12 @@ mod tests {
             seen: Mutex<Vec<String>>,
         }
         impl Speaker for RecordingSpeaker {
-            fn speak(&self, text: &str, _on_playback_start: &PlaybackStart<'_>) -> Result<(), TtsError> {
+            fn speak(
+                &self,
+                text: &str,
+                _language: Option<&str>,
+                _on_playback_start: &PlaybackStart<'_>,
+            ) -> Result<(), TtsError> {
                 self.seen.lock().unwrap().push(text.to_string());
                 Ok(())
             }
@@ -399,7 +480,7 @@ mod tests {
             seen: Mutex::new(Vec::new()),
         };
         let noop = || {};
-        speak_verified(&backend, "  Sending 5 USDC to Ahmet — confirm?  ", &noop).unwrap();
+        speak_verified(&backend, "  Sending 5 USDC to Ahmet — confirm?  ", None, &noop).unwrap();
         assert_eq!(
             backend.seen.lock().unwrap().as_slice(),
             &["Sending 5 USDC to Ahmet — confirm?"]
@@ -411,7 +492,7 @@ mod tests {
         let backend = FakeSpeaker::returning(Err(TtsError::MissingKey));
         let noop = || {};
         assert_eq!(
-            speak_verified(&backend, "hi", &noop),
+            speak_verified(&backend, "hi", None, &noop),
             Err(TtsError::MissingKey)
         );
     }
@@ -424,7 +505,12 @@ mod tests {
     }
 
     impl Speaker for NotifySpeaker {
-        fn speak(&self, _text: &str, on_playback_start: &PlaybackStart<'_>) -> Result<(), TtsError> {
+        fn speak(
+            &self,
+            _text: &str,
+            _language: Option<&str>,
+            on_playback_start: &PlaybackStart<'_>,
+        ) -> Result<(), TtsError> {
             on_playback_start();
             self.result.clone()
         }
@@ -443,7 +529,7 @@ mod tests {
 
         // A backend that fails before playback must never announce it.
         let failing = FakeSpeaker::returning(Err(TtsError::Network("dns".into())));
-        assert!(speak_verified(&failing, "hi", &on_start).is_err());
+        assert!(speak_verified(&failing, "hi", None, &on_start).is_err());
         assert_eq!(announced.load(Ordering::SeqCst), 0);
 
         // A backend that really starts playing announces exactly once.
@@ -451,7 +537,7 @@ mod tests {
             result: Ok(()),
             name: "fake",
         };
-        speak_verified(&playing, "hi", &on_start).unwrap();
+        speak_verified(&playing, "hi", None, &on_start).unwrap();
         assert_eq!(announced.load(Ordering::SeqCst), 1);
     }
 
@@ -474,7 +560,7 @@ mod tests {
         });
         let backend = FallbackSpeaker::new(Some(primary), fallback);
 
-        backend.speak("merhaba", &on_start).unwrap();
+        backend.speak("merhaba", None, &on_start).unwrap();
         assert_eq!(announced.load(Ordering::SeqCst), 1);
     }
 
@@ -520,7 +606,7 @@ mod tests {
         let backend = FallbackSpeaker::new(Some(primary), fallback);
         let noop = || {};
 
-        assert!(backend.speak("merhaba", &noop).is_ok());
+        assert!(backend.speak("merhaba", None, &noop).is_ok());
     }
 
     #[test]
@@ -536,7 +622,7 @@ mod tests {
         let noop = || {};
 
         assert_eq!(
-            backend.speak("merhaba", &noop),
+            backend.speak("merhaba", None, &noop),
             Err(TtsError::Local("say not found".into()))
         );
     }
@@ -550,7 +636,7 @@ mod tests {
         let noop = || {};
 
         assert_eq!(backend.name(), "fish", "nothing has run yet");
-        backend.speak("merhaba", &noop).unwrap();
+        backend.speak("merhaba", None, &noop).unwrap();
         assert_eq!(backend.name(), "local");
     }
 
@@ -561,7 +647,7 @@ mod tests {
         let backend = FallbackSpeaker::new(Some(primary.clone()), fallback.clone());
         let noop = || {};
 
-        backend.speak("merhaba", &noop).unwrap();
+        backend.speak("merhaba", None, &noop).unwrap();
         assert_eq!(*primary.calls.lock().unwrap(), 1);
         assert_eq!(*fallback.calls.lock().unwrap(), 0);
         assert_eq!(backend.name(), "fish");
@@ -573,7 +659,7 @@ mod tests {
         let backend = FallbackSpeaker::new(None, fallback);
         let noop = || {};
 
-        assert!(backend.speak("merhaba", &noop).is_ok());
+        assert!(backend.speak("merhaba", None, &noop).is_ok());
         assert_eq!(backend.name(), "local");
     }
 
@@ -607,6 +693,7 @@ mod tests {
         speak_and_log(
             backend.as_ref(),
             "Polaris hazır. Yerel ses çalışıyor.",
+            None,
             &noop,
         )
         .expect("local macOS speech must succeed");
@@ -679,11 +766,35 @@ mod tests {
         // 2. The production path: streamed into the player -> `tts in <ms> ms via fish`.
         // The playback-start notification (the A9 "Speaking" trigger) must fire
         // exactly once, and only after real audio has begun.
+        //
+        // Step A11: this is also the headless TTS timing harness. `POLARIS_E2E_LANG`
+        // (a BCP-47 tag) exercises the per-language voice path; `POLARIS_TIMING`
+        // (on by default) makes `speak_and_log` print one phase block, so the
+        // synthesis split can be read without a human at the microphone.
+        let language = crate::env::var("POLARIS_E2E_LANG");
+        println!(
+            "polaris: live Fish voice for lang {} => {} (overrides: {})",
+            language.as_deref().unwrap_or("-"),
+            speaker.reference_for(language.as_deref()).unwrap_or("?"),
+            speaker
+                .voice_overrides()
+                .iter()
+                .map(|(lang, voice)| format!("{lang}={voice}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        crate::timing::begin_turn();
+        crate::timing::mark("hotkey release");
+        crate::timing::mark("tts request sent");
         let announced = std::sync::atomic::AtomicUsize::new(0);
         let on_start = || {
+            crate::timing::mark("playback start");
             announced.fetch_add(1, Ordering::SeqCst);
         };
-        speak_and_log(&speaker, &sentence, &on_start).expect("live Fish playback must succeed");
+        speak_and_log(&speaker, &sentence, language.as_deref(), &on_start)
+            .expect("live Fish playback must succeed");
+        crate::timing::mark("playback end");
+        crate::timing::finish_turn();
         assert_eq!(announced.load(Ordering::SeqCst), 1);
     }
 }

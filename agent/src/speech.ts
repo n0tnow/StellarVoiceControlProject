@@ -22,51 +22,91 @@
  * off mid-word is worse than letting it finish.
  */
 import type { Intent } from "@polaris/interfaces";
+import { languageBase } from "./language.ts";
 
 /** The part of a turn result that can be spoken. */
 export interface SpokenResult {
   answer: string;
   intent?: Intent;
+  /** Model-reported BCP-47 language of the turn (step A11). */
+  language?: string;
 }
 
 /**
- * A short, natural confirmation sentence for a parsed intent.
+ * The confirmation templates. The confirmation sentence is built here, in
+ * TypeScript, so it must exist in every language Polaris can answer in — the
+ * A11 bug was an English sentence (and voice) for a Turkish speaker and vice
+ * versa. English is the fallback for an unknown or unsupported language.
+ *
+ * Only `tr` and `en` are wired because those are the two the product hears; a
+ * new language means adding one entry, not new code paths.
+ */
+type Confirmation = (intent: Intent) => string;
+
+const CONFIRMATIONS: Record<string, Confirmation> = {
+  en: (intent) => {
+    switch (intent.kind) {
+      case "send": {
+        const recipient = intent.recipient ?? intent.alias ?? "the recipient";
+        return `Sending ${intent.amount} ${intent.asset} to ${recipient}. Do you confirm?`;
+      }
+      case "deposit":
+        return `Depositing ${intent.amount} ${intent.asset}. Do you confirm?`;
+      case "swap":
+        return `Swapping ${intent.amount} ${intent.asset}. Do you confirm?`;
+      case "guard_policy":
+        return "Updating your spending policy. Do you confirm?";
+      case "raw_tx":
+        return "Preparing a transaction. Do you confirm?";
+      default:
+        return `Preparing a ${String(intent.kind).replace(/_/g, " ")}. Do you confirm?`;
+    }
+  },
+  tr: (intent) => {
+    switch (intent.kind) {
+      case "send": {
+        const recipient = intent.recipient ?? intent.alias ?? "alıcıya";
+        return `${recipient} adresine ${intent.amount} ${intent.asset} gönderiyorum. Onaylıyor musun?`;
+      }
+      case "deposit":
+        return `${intent.amount} ${intent.asset} yatırıyorum. Onaylıyor musun?`;
+      case "swap":
+        return `${intent.amount} ${intent.asset} takas ediyorum. Onaylıyor musun?`;
+      case "guard_policy":
+        return "Harcama politikanı güncelliyorum. Onaylıyor musun?";
+      case "raw_tx":
+        return "Bir işlem hazırlıyorum. Onaylıyor musun?";
+      default:
+        return `Bir ${String(intent.kind).replace(/_/g, " ")} işlemi hazırlıyorum. Onaylıyor musun?`;
+    }
+  },
+};
+
+/**
+ * A short, natural confirmation sentence for a parsed intent, in `language`
+ * when a template exists and in English otherwise.
  *
  * Deliberately one or two short sentences: this is a confirmation prompt read
  * aloud before an approval, not a paragraph. `recipient` falls back to the
  * address-book `alias` and then to a neutral phrase, so a spoken sentence never
  * contains an empty gap.
  */
-export function confirmationSentence(intent: Intent): string {
-  switch (intent.kind) {
-    case "send": {
-      const recipient = intent.recipient ?? intent.alias ?? "the recipient";
-      return `Sending ${intent.amount} ${intent.asset} to ${recipient}. Do you confirm?`;
-    }
-    case "deposit":
-      return `Depositing ${intent.amount} ${intent.asset}. Do you confirm?`;
-    case "swap":
-      return `Swapping ${intent.amount} ${intent.asset}. Do you confirm?`;
-    case "guard_policy":
-      return "Updating your spending policy. Do you confirm?";
-    case "raw_tx":
-      return "Preparing a transaction. Do you confirm?";
-    default:
-      // Unreachable for the current union; kept so an intent kind added later
-      // still speaks something rather than throwing.
-      return `Preparing a ${String(intent.kind).replace(/_/g, " ")}. Do you confirm?`;
-  }
+export function confirmationSentence(intent: Intent, language?: string): string {
+  const template = CONFIRMATIONS[languageBase(language) ?? ""] ?? CONFIRMATIONS.en;
+  return template!(intent);
 }
 
 /**
  * The sentence to speak for one agent turn.
  *
- * An intent becomes its confirmation sentence; anything else becomes the turn's
- * answer text. Callers pass a successful turn only — a failure is never spoken.
+ * An intent becomes its confirmation sentence (in the turn's language); anything
+ * else becomes the turn's answer text, which the model already produced in the
+ * user's language. Callers pass a successful turn only — a failure is never
+ * spoken.
  */
 export function spokenText(result: SpokenResult): string {
   if (result.intent) {
-    return confirmationSentence(result.intent);
+    return confirmationSentence(result.intent, result.language);
   }
   return result.answer.trim();
 }
@@ -84,8 +124,12 @@ export function isSpeakable(result: SpokenResult): boolean {
   return spokenText(result).length > 0;
 }
 
-/** Plays one utterance; resolves once the audio has finished. */
-export type SpeakFn = (text: string) => Promise<void>;
+/**
+ * Plays one utterance; resolves once the audio has finished. `language` is the
+ * model-reported BCP-47 tag (step A11) and lets the backend pick a per-language
+ * voice; `undefined` means "use the pinned voice".
+ */
+export type SpeakFn = (text: string, language?: string) => Promise<void>;
 
 /**
  * Serializes utterances so two of them never play at once.
@@ -98,6 +142,8 @@ export type SpeakFn = (text: string) => Promise<void>;
  */
 interface PendingUtterance {
   text: string;
+  /** Model-reported language of the turn that produced this utterance. */
+  language?: string;
   /** Per-utterance failure hook, for the caller that enqueued it. */
   onError?: (error: unknown) => void;
 }
@@ -135,18 +181,27 @@ export class SpeechQueue {
    * direct signal that no audio will arrive (otherwise the turn lingers on
    * "thinking" until the watchdog). A superseded pending utterance is dropped,
    * so its `onError` is never called — the newer utterance owns the turn.
+   *
+   * `language` is the turn's model-reported BCP-47 tag (step A11); it is passed
+   * through to the backend so a per-language voice can be selected. It is the
+   * third parameter so the existing `(text, onError)` call sites keep working.
    */
-  enqueue(text: string, onError?: (error: unknown) => void): void {
+  enqueue(text: string, onError?: (error: unknown) => void, language?: string): void {
     const trimmed = text.trim();
     if (trimmed.length === 0) {
       return;
     }
+    const utterance: PendingUtterance = {
+      text: trimmed,
+      ...(language ? { language } : {}),
+      ...(onError ? { onError } : {}),
+    };
     if (this.#busy) {
-      this.#pending = { text: trimmed, ...(onError ? { onError } : {}) };
+      this.#pending = utterance;
       return;
     }
     this.#busy = true;
-    void this.#drain({ text: trimmed, ...(onError ? { onError } : {}) });
+    void this.#drain(utterance);
   }
 
   /** Resolves once the queue is empty. Used by tests and shutdown paths. */
@@ -161,7 +216,7 @@ export class SpeechQueue {
     let current: PendingUtterance | null = first;
     while (current !== null) {
       try {
-        await this.#speak(current.text);
+        await this.#speak(current.text, current.language);
       } catch (error) {
         this.#onError(error);
         current.onError?.(error);

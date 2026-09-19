@@ -84,6 +84,47 @@ test("regression: a conversational turn is speakable, intent or not", () => {
   assert.equal(isSpeakable({ answer: "" }), false);
 });
 
+test("the confirmation follows the model-reported language (step A11)", () => {
+  assert.equal(
+    confirmationSentence(intent({ recipient: "bilal" }), "en"),
+    "Sending 5 USDC to bilal. Do you confirm?",
+  );
+  // Turkish for a Turkish turn: the A11 bug was an English sentence for a
+  // Turkish speaker (and the reverse).
+  assert.match(
+    confirmationSentence(intent({ recipient: "bilal" }), "tr"),
+    /Onaylıyor musun\?$/,
+  );
+  assert.match(confirmationSentence(intent({ recipient: "bilal" }), "tr-TR"), /bilal adresine/);
+  // An unknown language falls back to English, never to silence.
+  assert.match(confirmationSentence(intent({ recipient: "bilal" }), "de"), /Do you confirm\?$/);
+  assert.match(confirmationSentence(intent({ recipient: "bilal" })), /Do you confirm\?$/);
+});
+
+test("an intent is spoken in the turn's language", () => {
+  const spoken = spokenText({
+    answer: "ignored for an intent",
+    intent: intent({ recipient: "Ahmet" }),
+    language: "tr",
+  });
+  assert.match(spoken, /^Ahmet adresine 5 USDC gönderiyorum\./);
+});
+
+test("the reported language reaches the speak backend", async () => {
+  const seen: Array<[string, string | undefined]> = [];
+  const queue = new SpeechQueue(async (text, language) => {
+    seen.push([text, language]);
+  });
+  // `enqueue(text, onError?, language?)` — language is the third argument.
+  queue.enqueue("merhaba", undefined, "tr");
+  queue.enqueue("hello");
+  await queue.whenIdle();
+  assert.deepEqual(seen, [
+    ["merhaba", "tr"],
+    ["hello", undefined],
+  ]);
+});
+
 test("a second utterance waits for the first and never overlaps", async () => {
   const spoken: string[] = [];
   const first = gate();

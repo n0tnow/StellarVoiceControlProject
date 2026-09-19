@@ -24,6 +24,7 @@
 import type { AgentLlm, LlmToolCall, LlmTurn } from "../loop.ts";
 import type { AgentTool } from "../tools/registry.ts";
 import { AgentError } from "../errors.ts";
+import { languageFromToolCalls, stripLanguageTag } from "../language.ts";
 
 export interface OpenAiCompatibleOptions {
   /** Provider root, e.g. `https://opencode.ai/zen/go/v1`, or a logical label when a transport ignores it. */
@@ -225,9 +226,18 @@ export class OpenAiCompatibleLlm implements AgentLlm {
       throw new AgentError("malformed", `provider response had no choices[0].message: ${truncate(JSON.stringify(data))}`);
     }
 
-    const text = typeof message.content === "string" && message.content.length > 0 ? message.content : undefined;
+    const rawText =
+      typeof message.content === "string" && message.content.length > 0 ? message.content : undefined;
     const toolCalls = (message.tool_calls ?? []).map((call) => this.#parseToolCall(call));
-    return { text, toolCalls };
+    // Step A11: the model reports the language either as a `language` field on a
+    // tool call's JSON input or as a leading `[xx]` tag on a text answer.
+    const { text, language: tagged } = stripLanguageTag(rawText);
+    const language = languageFromToolCalls(toolCalls) ?? tagged;
+    return {
+      ...(text !== undefined && text.length > 0 ? { text } : {}),
+      toolCalls,
+      ...(language ? { language } : {}),
+    };
   }
 
   #parseToolCall(call: ChatToolCall): LlmToolCall {

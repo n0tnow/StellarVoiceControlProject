@@ -103,6 +103,12 @@ export const sendPaymentTool: AgentTool<SendPaymentInput, Intent> = {
         description: 'Recipient name, alias or "G..." address, exactly as spoken.',
       },
       memo: { type: "string", description: "Optional memo." },
+      language: {
+        type: "string",
+        description:
+          'The language the user spoke, as a BCP-47 base code ("tr" or "en"). ' +
+          "Used to pick the reply voice; never spoken.",
+      },
     },
     required: ["amount", "asset", "recipient"],
     additionalProperties: false,

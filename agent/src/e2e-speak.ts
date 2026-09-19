@@ -71,6 +71,9 @@ if (result.intent) {
   console.log(`no intent in ${intentMs} ms — speaking the conversational answer`);
 }
 console.log(`spoken sentence: ${sentence}`);
+// Step A11: the model reports the language of the turn; the shell hands it to
+// TTS so the voice matches the words. The driver forwards it to the Rust test.
+console.log(`language: ${result.language ?? "(not reported)"}`);
 
 // The Rust side owns Fish Audio; the driver only feeds it the finished sentence.
 // Spawning the ignored test keeps the provider client in one place.
@@ -93,7 +96,11 @@ const exitCode = await new Promise<number | null>((resolve) => {
     ],
     {
       cwd: tauriDir,
-      env: { ...process.env, POLARIS_E2E_TEXT: sentence },
+      env: {
+        ...process.env,
+        POLARIS_E2E_TEXT: sentence,
+        ...(result.language ? { POLARIS_E2E_LANG: result.language } : {}),
+      },
       stdio: ["ignore", "pipe", "pipe"],
     },
   );

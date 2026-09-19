@@ -14,6 +14,14 @@ export interface LlmToolCall {
 export interface LlmTurn {
   text?: string;
   toolCalls: LlmToolCall[];
+  /**
+   * The BCP-47 language the model answered in, when it reported one (step A11).
+   * A tool call carries it as an `input.language` field, a text answer as a
+   * leading `[xx]` tag that the provider client strips from `text`. The TTS layer
+   * uses it to pick a per-language voice; the reply text itself is already in the
+   * user's language because the system prompt requires it.
+   */
+  language?: string;
 }
 
 /**
@@ -52,6 +60,8 @@ export interface AgentTurnResult {
   intent?: Intent;
   /** Registry name of the tool that produced `intent`. */
   intentTool?: string;
+  /** The model-reported language of the turn, forwarded to speech (step A11). */
+  language?: string;
 }
 
 /** Short human summary of an intent; the UI's single-line intent display. */
@@ -153,6 +163,9 @@ export async function runTurn(options: AgentTurnOptions): Promise<AgentTurnResul
       answer,
       executedTools,
       ...(resolved ? { intent: resolved.intent, intentTool: resolved.tool } : {}),
+      // The model reported the language; the shell hands it to TTS so the voice
+      // matches the words (step A11). Absent means "unknown" — never guessed here.
+      ...(first.language ? { language: first.language } : {}),
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

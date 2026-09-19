@@ -12,6 +12,7 @@
 //! `--` separates the voice options from the text, so text that begins with a
 //! dash is spoken literally instead of being parsed as a flag.
 
+use std::collections::HashMap;
 use std::process::Command;
 
 use crate::env;
@@ -24,6 +25,11 @@ pub const DEFAULT_VOICE: &str = "Yelda";
 
 /// `POLARIS_TTS_LOCAL_VOICE` — overrides the local voice.
 pub const VOICE_ENV: &str = "POLARIS_TTS_LOCAL_VOICE";
+
+/// Optional per-language voice override, e.g. `POLARIS_TTS_LOCAL_VOICE_EN`.
+/// Mirrors the Fish `POLARIS_TTS_REFERENCE_ID_<LANG>` mechanism, so the local
+/// fallback can also match the language of the utterance.
+pub const VOICE_OVERRIDE_PREFIX: &str = "POLARIS_TTS_LOCAL_VOICE_";
 
 /// Resolves the local voice. Blank or missing means [`DEFAULT_VOICE`].
 ///
@@ -52,27 +58,62 @@ pub fn command_args(voice: Option<&str>, text: &str) -> Vec<String> {
 
 /// The local backend.
 pub struct LocalSpeaker {
+    /// The pinned voice: the fallback for every language without an override.
     voice: Option<String>,
+    /// Optional `POLARIS_TTS_LOCAL_VOICE_<LANG>` overrides, keyed by language base.
+    voices: HashMap<String, String>,
 }
 
 impl LocalSpeaker {
     pub fn from_env() -> Self {
         Self::new(resolve_voice(env::var(VOICE_ENV)))
+            .with_voice_overrides(crate::tts::language_overrides_from(
+                std::env::vars(),
+                VOICE_OVERRIDE_PREFIX,
+            ))
     }
 
     pub fn new(voice: Option<String>) -> Self {
-        Self { voice }
+        Self {
+            voice,
+            voices: HashMap::new(),
+        }
     }
 
-    /// The configured voice; `None` means the macOS system default.
+    /// Attaches the per-language voice overrides read from the environment.
+    pub fn with_voice_overrides(mut self, voices: HashMap<String, String>) -> Self {
+        self.voices = voices;
+        self
+    }
+
+    /// The pinned voice; `None` means the macOS system default.
     pub fn voice(&self) -> Option<&str> {
+        self.voice.as_deref()
+    }
+
+    /// The voice for one utterance: the language override when one is
+    /// configured, otherwise the pinned voice. Same precedence as the Fish
+    /// backend (step A11), so a missing language can never silently change voice.
+    pub fn voice_for(&self, language: Option<&str>) -> Option<&str> {
+        if let Some(base) = language.and_then(crate::tts::normalize_language_base) {
+            if let Some(voice) = self.voices.get(&base) {
+                if !voice.trim().is_empty() {
+                    return Some(voice);
+                }
+            }
+        }
         self.voice.as_deref()
     }
 }
 
 impl Speaker for LocalSpeaker {
-    fn speak(&self, text: &str, on_playback_start: &PlaybackStart<'_>) -> Result<(), TtsError> {
-        let args = command_args(self.voice.as_deref(), text);
+    fn speak(
+        &self,
+        text: &str,
+        language: Option<&str>,
+        on_playback_start: &PlaybackStart<'_>,
+    ) -> Result<(), TtsError> {
+        let args = command_args(self.voice_for(language), text);
         // `say` synthesizes and plays in one step, so the process starting *is*
         // playback beginning. Announce after a successful spawn, never before: a
         // `say` that could not be started must not read as "Speaking".
@@ -140,5 +181,23 @@ mod tests {
         assert_eq!(speaker.voice(), Some("Yelda"));
         assert_eq!(speaker.name(), "local");
         assert_eq!(LocalSpeaker::new(None).voice(), None);
+    }
+
+    #[test]
+    fn a_language_override_wins_and_unknown_languages_fall_back_to_the_pinned_voice() {
+        let speaker = LocalSpeaker::new(Some("Yelda".to_string())).with_voice_overrides(
+            HashMap::from([
+                ("tr".to_string(), "Yelda".to_string()),
+                ("en".to_string(), "Samantha".to_string()),
+            ]),
+        );
+        // The base keys the lookup, so `en-US` finds the `en` voice.
+        assert_eq!(speaker.voice_for(Some("EN_us")), Some("Samantha"));
+        assert_eq!(speaker.voice_for(Some("tr")), Some("Yelda"));
+        // A language with no override, and no language at all, use the pinned voice.
+        assert_eq!(speaker.voice_for(Some("de")), Some("Yelda"));
+        assert_eq!(speaker.voice_for(None), Some("Yelda"));
+        // The pinned voice itself is unchanged.
+        assert_eq!(speaker.voice(), Some("Yelda"));
     }
 }

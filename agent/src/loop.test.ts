@@ -124,6 +124,41 @@ test("an unknown tool is a programming error, not an intent", async () => {
   await assert.rejects(run(), (error: unknown) => error instanceof AgentError && error.kind === "unknown_tool");
 });
 
+test("the model-reported language flows into the turn result (step A11)", async () => {
+  const { run } = harness(
+    { text: "Yes, I can hear you.", toolCalls: [], language: "en" },
+    "hello can you hear me",
+  );
+  const result = await run();
+  assert.equal(result.language, "en");
+});
+
+test("a language reported for the tool call flows into the turn result", async () => {
+  // The provider clients already lift `language` off the tool input and into
+  // `LlmTurn.language` (covered in `llm/anthropic.test.ts` and
+  // `llm/openai.test.ts`); the loop forwards it verbatim.
+  const { run } = harness(
+    {
+      language: "en",
+      toolCalls: [
+        { name: "send_payment", input: { amount: "400", asset: "USD", recipient: "bilal" } },
+      ],
+    },
+    "can you send 400 dollar to bilal",
+  );
+  const result = await run();
+  assert.equal(result.language, "en");
+  assert.equal(result.intent?.recipient, "bilal");
+  // The language is metadata, not part of the intent.
+  assert.equal((result.intent as unknown as { language?: string }).language, undefined);
+});
+
+test("no reported language leaves the field absent rather than guessing", async () => {
+  const { run } = harness({ text: "ok", toolCalls: [] }, "hello");
+  const result = await run();
+  assert.equal(result.language, undefined);
+});
+
 test("a provider failure propagates and emits an error event", async () => {
   const bus = createEventBus();
   const events: PolarisEvent[] = [];

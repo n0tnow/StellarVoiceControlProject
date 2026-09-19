@@ -195,3 +195,51 @@ test("session ids are stable per client and well formed", () => {
   assert.match(llm.sessionId, /^ses_[0-9a-f]{32}$/);
   assert.match(newSessionId(), /^ses_[0-9a-f]{32}$/);
 });
+
+test("a leading language tag on a text answer is stripped and reported", async () => {
+  const { impl } = capturing(
+    jsonResponse({ choices: [{ message: { content: "[TR] Hava durumunu bilmiyorum." } }] }),
+  );
+  const llm = new OpenAiCompatibleLlm({ baseUrl: "/agent-api", model: "m", fetchImpl: impl });
+  const turn = await llm.turn({ transcript: "bugün hava nasıl", system: "s", tools });
+  assert.equal(turn.text, "Hava durumunu bilmiyorum.");
+  assert.equal(turn.language, "tr");
+});
+
+test("a language field on a tool call is surfaced (step A11)", async () => {
+  const { impl } = capturing(
+    jsonResponse({
+      choices: [
+        {
+          message: {
+            tool_calls: [
+              {
+                function: {
+                  name: "send_payment",
+                  arguments: '{"amount":"400","asset":"USD","recipient":"bilal","language":"en"}',
+                },
+              },
+            ],
+          },
+        },
+      ],
+    }),
+  );
+  const llm = new OpenAiCompatibleLlm({ baseUrl: "/agent-api", model: "m", fetchImpl: impl });
+  const turn = await llm.turn({ transcript: "can you send 400 dollar to bilal", system: "s", tools });
+  assert.equal(turn.language, "en");
+  assert.deepEqual(turn.toolCalls[0]?.input, {
+    amount: "400",
+    asset: "USD",
+    recipient: "bilal",
+    language: "en",
+  });
+});
+
+test("no language tag means no reported language, and the text is untouched", async () => {
+  const { impl } = capturing(jsonResponse({ choices: [{ message: { content: "Just a reply." } }] }));
+  const llm = new OpenAiCompatibleLlm({ baseUrl: "/agent-api", model: "m", fetchImpl: impl });
+  const turn = await llm.turn({ transcript: "x", system: "s", tools });
+  assert.equal(turn.text, "Just a reply.");
+  assert.equal(turn.language, undefined);
+});

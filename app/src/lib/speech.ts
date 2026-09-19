@@ -26,10 +26,12 @@ export interface SpeechFailure {
 }
 
 const queue = new SpeechQueue(
-  async (text) => {
+  async (text, language) => {
     // A11: the sentence the app will say is already built at this point.
     markTurnPhase("sentence built");
-    const outcome = await invoke<SpeechOutcome>("speak", { text });
+    // The model-reported language travels with the sentence so Rust can pick a
+    // per-language voice; `undefined` keeps the pinned voice.
+    const outcome = await invoke<SpeechOutcome>("speak", { text, language: language ?? null });
     console.info(`speech in ${outcome.latencyMs} ms via ${outcome.backend}`);
   },
   (error) => {
@@ -50,7 +52,7 @@ export function speakTurnResult(
   result: SpokenResult,
   onFailure?: (error: unknown) => void,
 ): void {
-  queue.enqueue(spokenText(result), onFailure);
+  queue.enqueue(spokenText(result), onFailure, result.language);
 }
 
 /** True while an utterance is playing; exposed for tests and future mute UI. */

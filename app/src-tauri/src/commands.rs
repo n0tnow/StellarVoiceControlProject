@@ -101,8 +101,12 @@ pub async fn speak(
     app: AppHandle,
     speaker: State<'_, Arc<dyn Speaker>>,
     text: String,
+    language: Option<String>,
 ) -> Result<SpeechOutcome, SpeechFailure> {
     let characters = text.trim().chars().count();
+    let language = language
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
     let backend = Arc::clone(speaker.inner());
     let task_backend = Arc::clone(&backend);
     let started = Instant::now();
@@ -122,7 +126,12 @@ pub async fn speak(
         );
     };
     let joined = tauri::async_runtime::spawn_blocking(move || {
-        tts::speak_and_log(task_backend.as_ref(), &text, &on_playback_start)
+        tts::speak_and_log(
+            task_backend.as_ref(),
+            &text,
+            language.as_deref(),
+            &on_playback_start,
+        )
     })
     .await;
     timing::mark("playback end");
