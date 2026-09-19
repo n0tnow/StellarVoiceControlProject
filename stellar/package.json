@@ -14,13 +14,14 @@
   "types": "./src/index.ts",
   "scripts": {
     "check": "tsc -p tsconfig.json",
-    "test": "npm run test:keeper && npm run test:anchor && npm run test:payments && npm run test:guard && npm run test:approval && npm run test:schedule",
+    "test": "npm run test:keeper && npm run test:anchor && npm run test:payments && npm run test:guard && npm run test:approval && npm run test:schedule && npm run test:suggest",
     "test:keeper": "node --test \"src/keeper/**/*.test.ts\"",
     "test:anchor": "vitest run src/anchor",
     "test:payments": "vitest run src/payments",
     "test:guard": "vitest run src/guard",
     "test:approval": "vitest run src/approval",
     "test:schedule": "vitest run src/schedule",
+    "test:suggest": "vitest run src/suggest",
     "keeper": "node --env-file-if-exists=../.env src/keeper/cli.ts",
     "keeper:once": "node --env-file-if-exists=../.env src/keeper/cli.ts --once",
     "anchor:e2e": "node src/anchor/e2e.ts"

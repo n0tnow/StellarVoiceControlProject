@@ -64,3 +64,6 @@ export * as approval from "./approval/index.ts";
 
 /** Schedule tools: unsigned `create_schedule`/`cancel_schedule` + "Upcoming payments" view models + time helpers. */
 export * as schedule from "./schedule/index.ts";
+
+/** Deterministic, offline suggestions engine (T3). Pure: never applies a change (D11). */
+export * as suggest from "./suggest/index.ts";
