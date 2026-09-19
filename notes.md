@@ -146,4 +146,12 @@
 - **Pointer:** `docs/confidential-payments.md` §7; `contracts/DEPLOYED.md` "Privacy modes note".
 - **Status:** open (resolved by the CT/SPP spikes)
 
+## 2026-09-19 — PROPOSED: Mixed-Mode Payroll Batch Policy
+- **Idea:** A single payroll batch may mix public and private (CT/SPP) recipients, which can leak intent
+  or confuse the single approval card.
+- **Proposed policy (needs owner confirmation):** refuse mixed-mode batches unless every line resolves
+  cleanly to one mode; otherwise split the batch into two cards (one public, one private).
+- **Pointer:** `docs/confidential-payments.md` §11 risk R7.
+- **Status:** open (PROPOSED — needs owner confirmation)
+
 <!-- New notes are appended chronologically at the bottom. -->

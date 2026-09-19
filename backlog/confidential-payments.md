@@ -71,9 +71,9 @@ Only start these after the corresponding spike reports a **GO**. Each is its own
 | # | Task | Scope | Depends on | Notes |
 |---|---|---|---|---|
 | I1 | CT client (`register`/`deposit`/`merge`/`withdraw`/`confidential_transfer`, decrypt/viewing) | `stellar/src/confidential/` (PLANNED) | CT spike GO | Mirror the spike script into a typed client. |
-| I2 | CT ChainTool wiring: `Intent.mode === "confidential"` → build CT transfer + summary with `privacy.mode`/`recipientRegistered` | `stellar/`, `interfaces/` (reserved fields) | I1 + seam lands | Fail-closed on unregistered recipient. |
+| I2 | CT ChainTool wiring: `Intent.mode === "confidential"` → build CT transfer + summary with `privacy.mode`/`recipientRegistered` | `stellar/`, `interfaces/` (reserved fields) | I1 + seam lands | Fail-closed on unregistered recipient. **Acceptance:** on testnet, a headless script produces the CT transfer + decoded summary that matches the §5 approval-card checklist **and** a refusal case returns the machine-readable `refusal` (design §12 C5/C8). |
 | I3 | SPP client (pool deposit, private transfer, withdraw, note scan, ASP handling, view-key export) | `stellar/src/spp/` (PLANNED) | SPP spike GO | Compliance-first; ASP onboarding in scope. |
-| I4 | SPP ChainTool wiring: `Intent.mode === "private"` → build SPP transfer + summary | `stellar/`, `interfaces/` (reserved fields) | I3 + seam lands | Fail-closed on non-onboarded recipient. |
+| I4 | SPP ChainTool wiring: `Intent.mode === "private"` → build SPP transfer + summary | `stellar/`, `interfaces/` (reserved fields) | I3 + seam lands | Fail-closed on non-onboarded recipient. **Acceptance:** on testnet, a headless script produces the SPP transfer + decoded summary that matches the §5 approval-card checklist **and** a refusal case returns the machine-readable `refusal` (e.g. `not_on_allow_list`/`pool_unavailable`; design §12 C5/C8). |
 | I5 | Approval-card privacy variant + batch payroll card | `app/`, `agent/` (Owner A) | I2/I4 | Checklist in `docs/confidential-payments.md` §5. |
 | I6 | Local encrypted transaction history | `app/` (Owner A) | I5 | Key custody is an open question (design §6). |
 | I7 | Guard boundary caps (deposit cap + client-side per-transfer limit) | `stellar/`, possibly `contracts/` v0.2 | spike Q9 answer | See `backlog/guard-v0.2-hardening.md`. |

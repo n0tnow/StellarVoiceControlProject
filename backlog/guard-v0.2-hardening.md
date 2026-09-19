@@ -8,6 +8,7 @@
 ## Completed
 - Nothing implemented. This file is the batched v0.2 specification for `polaris_guard`, sourced from
   `backlog/contracts-audit.md` (findings F-01…F-12, N-01…N-03) and `backlog/contracts-audit-review.md`.
+- N-03 is documented, not fixed, in v0.2.
 
 ## Preconditions
 1. **Only after the headless slice works** (D1 steps 1–3: real `sendPayment`, guard owner-side TS
@@ -46,8 +47,9 @@
 ### V2-02 — On-chain failure counter / auto-deactivation (F-12)
 - **Finding:** F-12 (Low) — a schedule that can never succeed stays active forever.
 - **Exact change:** add a per-schedule `fail_count: u32` (or a `failed_at` marker); increment on a
-  refused/failed run; deactivate + emit `ScheduleCancelled`/`ScheduleDeactivated` after a threshold
-  (pick the number and document it). Expose it in `get_schedule`/`Schedule`.
+  refused/failed run; deactivate + emit `ScheduleCancelled`/`ScheduleDeactivated` after **3 consecutive
+  failed runs** (default; making this threshold configurable at create time is out of scope for v0.2).
+  Expose it in `get_schedule`/`Schedule`.
 - **Files:** `contracts/polaris_guard/src/lib.rs`, `src/test.rs`,
   `stellar/src/keeper/errors.ts` (drop `inactive` backoff for deactivated schedules),
   `stellar/src/keeper/chain.ts` (`Schedule` interface gains the field), `stellar/src/keeper/README.md`,

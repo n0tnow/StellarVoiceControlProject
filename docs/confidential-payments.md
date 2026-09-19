@@ -65,7 +65,7 @@ preview" status of CT and SPP is not a blocker. Everything shipped and shown mus
 | Proof system | none | Pedersen commitment; verified by Nethermind's **UltraHonk** verifier (Noir circuits, Barretenberg backend); ZK host functions BN254 (CAP-74) and Poseidon/Poseidon2 (CAP-75) since Protocol 25/26 | **Circom** circuits, **Groth16** proofs, Soroban contracts |
 | Operation set | SEP-41 `transfer` | `register / deposit / merge / withdraw / confidential_transfer` | deposit into pool, private transfer, withdraw to a different address, decrypt/scan own notes, ASP membership handling, view-key export |
 | Use case | everyday transparency, demo default | payroll, treasury, B2B settlement — parties already know each other | compliance-oriented shielded transfers ("Tornado Cash / Railgun in idea, but compliance-first") |
-| Status | production | **developer preview — unaudited**, testnet only | **developer preview — unaudited**, testnet only |
+| Status | stable (plain SEP-41 / Stellar payment) | **developer preview — unaudited**, testnet only | **developer preview — unaudited**, testnet only |
 | Mode name in the seam | `"public"` | `"confidential"` | `"private"` |
 
 **Source links (with dates)**
@@ -95,7 +95,7 @@ any mode; addresses are entered manually or resolved from the alias book.
 | **Choose / change default privacy mode** | ❌ never by voice (cannot be changed implicitly by a send) | ✅ settings/privacy tab | ❌ voice: changing a default is a sticky setting, not a per-command intent |
 | Mode-related settings | ❌ | ✅ | ❌ voice |
 | **Batch payroll** ("send the salaries", instant) | ✅ — user is present; one approval card for all lines | ✅ | — |
-| **Schedule** a confidential payment | ❌ | ❌ | ❌ **Out of scope** (D6): the keeper has no sender secret material, so it cannot generate the ZK proof |
+| **Schedule** a confidential payment | ❌ | ❌ | ❌ **Out of scope** (D6) — see §1, scheduled/unattended confidential payments are out of scope |
 | Schedule a **public** payment | ✅ (unchanged) | ✅ | — |
 
 **Notes**
@@ -197,7 +197,7 @@ export interface TxSummary {
     "lines": [
       "Private mode: confidential (CT) — amount hidden on-chain",
       "Deposit 10 USDC into the confidential wrapper, then confidential_transfer to ada",
-      "Recipient GARXWVN... (alias: ada) — registered",
+      "Recipient GARXWVN... (illustrative; the real card shows the full address) (alias: ada) — registered",
       "Network: Test SDF Network ; September 2015"
     ],
     "estimatedFee": "0.00001 XLM",
@@ -307,9 +307,8 @@ leg** — the contract never sees the number.
   guard can bind. Deposit caps become the enforceable envelope for private spending.
 - **Client-side per-transfer limit.** The app knows the amount *before* encrypting, so it enforces the
   per-transfer limit in the client. The **approval card is the gate** (Touch ID / approval click).
-- **Keeper exclusion.** The keeper cannot run confidential schedules (D6) because it holds no sender
-  secret material and therefore cannot produce the proof. Public scheduled payments via
-  `polaris_guard` + keeper are unchanged.
+- **Keeper exclusion.** See §1, scheduled/unattended confidential payments are out of scope (D6);
+  public scheduled payments via `polaris_guard` + keeper are unchanged.
 - **Alias book vs registration state.** The alias→address book stays the **single contact list**.
   CT registration state is tracked **separately** per contact (`ctRegistered: boolean`), checked before
   building an intent result. The alias book does not imply registration; removing/re-pointing an alias
@@ -344,10 +343,9 @@ with the user present and **one approval card**.
 8. **Results / history** — per-line status is surfaced, and the whole batch is written to the local
    encrypted history (§6).
 
-**Why scheduled confidential payments are out of scope:** the keeper is untrusted and holds only a fee
-key — it has **no sender secret material**, so it cannot generate the zero-knowledge proof a private
-transfer requires. A schedule for a public payment continues to work through
-`polaris_guard` + keeper; a schedule for a confidential/private payment does not exist by design.
+**Why scheduled confidential payments are out of scope:** see §1, scheduled/unattended confidential
+payments are out of scope (D6). A schedule for a public payment continues to work through
+`polaris_guard` + keeper.
 
 ---
 
@@ -410,7 +408,7 @@ Both live under Owner B's `stellar/` scope. No file in this repo backs these pat
 
 | Area | Owner |
 |---|---|
-| Voice intent, agent, manual privacy tab / approval UI, local encrypted history | **Owner A** (Fatih) |
+| Voice intent, agent, manual privacy tab / approval UI, local encrypted history | **Owner A** |
 | `stellar/src/confidential/`, `stellar/src/spp/`, CT/SPP client + proof plumbing, guard interaction | **Owner B** (the user) |
 | Spike execution, go/no-go report | Owner B |
 
@@ -432,6 +430,8 @@ All of the following are from the notes' "Unknowns" list and are to be resolved 
 | Q8 | **ASP allow-list onboarding for SPP** | SPP is unusable until the recipient is in an association set | spike | SPP |
 | Q9 | **Can `polaris_guard` gate `deposit`/`withdraw` on-chain?** | Determines whether the private-spend envelope is contract-enforced or only client-side (§7) | spike decision + possible v0.2 contract | CT (primary), SPP |
 
+Cross-references to the proposed defaults in §12: Q3 → C7; Q5 → C3; Q8 → C5; Q9 → C9.
+
 ---
 
 ## 11. Risks (each with a default)
@@ -443,8 +443,8 @@ All of the following are from the notes' "Unknowns" list and are to be resolved 
 | R3 | **Registration friction**: a recipient not registered blocks every private send | Fail-closed refusal text (§4.4) + clear pointer to the manual privacy tab; never downgrade to public. |
 | R4 | **Deposit/withdraw leg is public**, so privacy is incomplete | State it explicitly on the approval card and in the demo talking points; never claim "fully private". |
 | R5 | **Guard cannot enforce limits on the confidential leg** | Cap at the public boundary (deposit) + client-side per-transfer limit + approval card as the gate (§7). |
-| R6 | **Key custody for the local encrypted history** is unresolved | Default: a separate Keychain item for the history key (not derived from the Stellar secret) until the spike says otherwise; testnet only. |
-| R7 | **Mixed payroll batches** (public + private recipients) leak or confuse | Default: refuse mixed-mode batches unless every line resolves cleanly; otherwise split into two cards. |
+| R6 | **Key custody for the local encrypted history** is unresolved | Default candidate (pending the spike; key custody is Open Question 3): a separate Keychain item for the history key (not derived from the Stellar secret); testnet only. |
+| R7 | **Mixed payroll batches** (public + private recipients) leak or confuse | **PROPOSED** (needs owner confirmation, see `notes.md` 2026-09-19): refuse mixed-mode batches unless every line resolves cleanly; otherwise split into two cards. |
 | R8 | **Stellar preview status changes** (contract/API churn under us) | Pin the versions/addresses found in the spike, record them in the spike report, and treat any change as a re-spike trigger. |
 
 ---
@@ -452,3 +452,26 @@ All of the following are from the notes' "Unknowns" list and are to be resolved 
 *Cross-references: `docs/interfaces.md` (reserved seam), `docs/reports/2026-09-19-privacy-on-stellar-research.md`
 (research archive), `backlog/confidential-payments.md` (spike task definitions),
 `contracts/DEPLOYED.md` (guard v0.1 limitations), `backlog/guard-v0.2-hardening.md` (v0.2 plan).*
+
+---
+
+## 12. Design decisions to confirm (PROPOSED defaults)
+
+> **PROPOSED — needs owner confirmation; items marked (spike) are settled by the spike results.**
+
+These close the implementability gaps identified in `backlog/docs-plan-review.md`, without inventing
+contract behaviour: anything that depends on what CT/SPP actually does says **(spike)**. Each default is
+grounded in D1–D8 of the source notes.
+
+| # | Question | PROPOSED default | Why | Resolved/confirmed by |
+|---|---|---|---|---|
+| C1 | Transaction composition of a CT send (deposit + `confidential_transfer`) | One approval covers the whole sequence; executed as **separate transactions in order**; if a later step fails, stop, report, and record history status `partial`; never retry automatically. **(spike: whether the ops can be combined in one tx)** | The CT send composes two actions but the tx model was undefined (§8); makes partial failure explicit instead of silent. | Owner A + Owner B; spike settles combinability |
+| C2 | Where `ctRegistered` lives | A `ctRegistered` (and `sppReady`) flag **per contact in the local contacts file**, re-checked **LIVE** against chain at intent time before building any result; the cache is for display only. | §7 says CT registration is tracked separately but never says where; a live re-check keeps the fail-closed rule honest. | Owner A (contacts file) + Owner B (chain check) |
+| C3 | `aliases.json` spec | Planned path `stellar/config/aliases.json`; schema `{ "<alias>": { "address": "G...", "network": "testnet", "ctRegistered"?: boolean, "sppReady"?: boolean } }`; precedence: **guarded mode → on-chain `get_alias` wins; direct mode → local file**; if both exist and differ → **refuse** and ask the user to reconcile (never pick one silently). Testnet addresses only. | D1 requires committed alias resolution first but never defines path, schema or precedence versus the on-chain alias. | Owner B; covered by the slice tests |
+| C4 | Mode disambiguation | "secretly" / "confidentially" / "amount hidden" → `confidential` (CT: identities visible, amount hidden); "anonymously" / "privately" / "nobody can see who" → `private` (SPP: identities and amount hidden); if the user has a saved default private mode, a bare "privately" uses it; otherwise the agent asks **one** clarifying question; never guess. | §3 mapped "secretly"/"privately" to either CT or SPP without a rule; guessing wrong changes what is hidden. | Owner A (intent parsing); confirmed in the slice |
+| C5 | SPP summary shape and refusal | `TxSummary.privacy` for SPP carries at least `{ mode:"private", poolReady:boolean, aspStatus:"allowed"\|"denied"\|"unknown" }` (exact fields settled by the SPP spike); refusals are machine-readable: `refusal: { code: "not_registered" \| "not_on_allow_list" \| "pool_unavailable" \| "insufficient_private_balance", message: string }`. | §4.1 left the SPP summary as an ellipsis and §4.4 had no branchable refusal state. | SPP spike (fields); Owner B (refusal shape) |
+| C6 | Payroll list | Planned local file `payroll.json`: `{ "<listName>": [ { "alias": "...", "amount": "...", "asset": "USDC" } ] }`; "send the salaries" resolves to a list named `salaries` (or the only list); zero or several candidate lists → the agent asks; every line must reference a known contact; the batch card shows the total per asset. | §8 step 1 referred to "a saved payroll list" with no storage, schema or resolution rule. | Owner A (file + card) + Owner B (resolution/validation) |
+| C7 | Local encrypted history format | Append-only **JSON Lines** file on the device, each record encrypted (**AEAD**) with a key held in the **macOS Keychain**; fields as in §6 plus `status` (`submitted\|confirmed\|failed\|partial`). **(spike: key custody/derivation is Open Question 3)** | §6 listed stored fields but no format, encryption scheme or key provisioning, so it had no testable acceptance. | Owner A (storage) + spike Q3 (key custody) |
+| C8 | Acceptance criteria for integration tasks | I2/I4 pass when, on testnet, a headless script produces a transfer + decoded summary that matches the approval-card checklist in §5 **AND** a refusal case returns the machine-readable refusal above. Added as measurable criteria on I2/I4 in `backlog/confidential-payments.md`. | I2/I4 were "build CT/SPP transfer + summary" with no measurable pass condition. | Owner B (I2/I4 tests); reviewer signs off |
+| C9 | Guard boundary cap (Open Question 9) | **Client-side cap** on the public deposit/withdraw amount, enforced by the app before building the intent result; on-chain gating only if the spike shows the guard can call the wrapper. **(spike)** | Whether the deposit cap is contract-enforced or client-only was open; the client cap is implementable now and fail-closed at the approval card. | CT spike (on-chain gating); Owner B + Owner A (client cap) |
+| C10 | Batch failure semantics for payroll | Continue-on-error is **OFF** by default; on the first failed line, **stop**, show which lines succeeded, and record each line in history. | An instant batch had no defined behaviour when one line fails mid-batch. | Owner A (card/UX) + Owner B (per-line results) |

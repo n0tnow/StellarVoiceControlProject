@@ -11,7 +11,7 @@
 - **The seam is half-real.** `Intent`/`ChainTool`/`PolarisEvent` are defined (`interfaces/src/index.ts`), but `SigningService` has **zero implementations**, `sendPayment` is a stub that throws (`stellar/src/index.ts:44`), and **alias resolution is missing everywhere** off-chain.
 - **The single biggest gap for "send 10 USDC to ada":** there is **no payment ChainTool** and **no signing path**. The anchor tools return a SEP-10 challenge / trustline, not a plain payment, and require a multi-step session.
 - **Agent runs in the webview** on `feat/a2-llm` (`app/src/lib/agent.ts`) with a real OpenAI-compatible client; on `main` it is a `MockLlm` skeleton only. No chain tool is registered anywhere.
-- **Fatih's branches add exactly the missing voice half** (hotkey+mic, on-device STT, LLM intent, TTS) but none is merged; `main` has only the monorepo skeleton.
+- **Owner A's branches add exactly the missing voice half** (hotkey+mic, on-device STT, LLM intent, TTS) but none is merged; `main` has only the monorepo skeleton.
 - **Shortest path:** typed-text input → agent `Intent` (exists on a2) → **build one real `sendPayment`** (unsigned XDR + summary) → approval card → Rust approval gate + key release → TS sign/submit → `tx_submitted`. Touch ID is a stretch; a dev software signer with an approval click is the demo-safe floor.
 - **Voice is NOT on the critical path:** steps S2–S7 below can land with typed text while A0/A1 merge in parallel.
 - **Coordinator must decide first:** merge order of the four branches that all edit `interfaces/src/index.ts` (`a0`, `a1`, `a2`, `docs/rule-types-and-decisions`) and the signer option (F).
@@ -173,7 +173,7 @@ Missing for a builder who must demo TRY deposit by voice:
 
 ---
 
-## E. App side (`app/`, plus Fatih's branches)
+## E. App side (`app/`, plus Owner A's branches)
 
 ### E.1 What exists on `main`
 

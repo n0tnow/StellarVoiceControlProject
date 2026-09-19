@@ -314,7 +314,7 @@ batched v0.2 fix plan is in [`backlog/guard-v0.2-hardening.md`](../backlog/guard
 | F-12 | Low | Failed schedules are retried forever with no auto-deactivation. | Simulation failures cost no fee; owner can always cancel manually. | Y |
 | N-01 | Info | `list_due(cursor, 0)` returns `([], 0)`, indistinguishable from end-of-space. | Latent only — the keeper always requests `>= 1`. | Y |
 | N-02 | Info | Rule / executor / alias mutations emit no events. | Off-chain monitoring must diff storage; no demo impact. | Y |
-| N-03 | Info | Keeper's `execute_schedule` bumps the owner's `Rule` TTL (third party pays rent). | Rent-transfer nuance, bounded; no demo impact. | Y |
+| N-03 | Info | Keeper's `execute_schedule` bumps the owner's `Rule` TTL (third party pays rent). | Rent-transfer nuance — documented only; keeper pays the rent, bounded (~120 days); no demo impact. | N |
 
 ### Demo talking points
 

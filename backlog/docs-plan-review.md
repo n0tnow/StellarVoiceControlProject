@@ -7,7 +7,7 @@
 
 The documentation is faithful to the ground-truth notes D1–D8 and the CT/SPP facts check out; the two
 tiny fixes (F-09/F-10) and the audit-finding table are correct, and the deployment table/contract
-IDs/hashes were left untouched. Two concrete issues remain: a real personal name (`Fatih`) was
+IDs/hashes were left untouched. Two concrete issues remain: a real personal name (masked here as `Owner A`) was
 introduced into committed files (constitution "no user-specific data"), and finding N-03 is marked
 "v0.2: Y" in `DEPLOYED.md` although the v0.2 spec has no corresponding item. Both are small, exact fixes.
 
@@ -28,9 +28,9 @@ introduced into committed files (constitution "no user-specific data"), and find
 
 ## Blocking issues (must fix before merge)
 
-1. **Personal name in committed files.** `docs/confidential-payments.md:413` ("**Owner A** (Fatih)"),
-   `backlog/2026-09-19-slice-gap-analysis.md:14` ("**Fatih's branches**") and `:176`
-   ("`app/`, plus Fatih's branches"). This violates the constitution rule that nothing user-specific
+1. **Personal name in committed files.** `docs/confidential-payments.md:413` ("**Owner A** (name redacted)"),
+   `backlog/2026-09-19-slice-gap-analysis.md:14` ("**Owner A's branches**") and `:176`
+   ("`app/`, plus Owner A's branches"). This violates the constitution rule that nothing user-specific
    goes into committed files (`AGENTS.md` "Local notes"; review check 8).
    **Fix:** replace each occurrence with "Owner A" (e.g. `**Owner A**`, `Owner A's branches`) so the
    committed tree keeps only the role label, as `notes.md`/`sprints.md` already do.
