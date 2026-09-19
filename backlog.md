@@ -12,6 +12,7 @@
 
 | Date | Task | Worker/Agent | Status | Report | Priority |
 |---|---|---|---|---|---|
+| 2026-09-19 | **A1 — STT (cloud-first)** implementation on `feat/a1-stt`, awaiting a `GROQ_API_KEY` + human 5-command / <2 s acceptance run; local whisper.cpp backend and a failed-recording retry path are handed off | opencode worker (deepseek-v4.1-flash) | pushed, no PR — acceptance pending key + human | [`backlog/2026-09-19-a1-stt.md`](backlog/2026-09-19-a1-stt.md) | P0 |
 | 2026-09-19 | Modifier-gesture hardening: VoiceOver on/off toggle (needs a settings surface) + `NSWorkspace` sleep/lock force-stop | opencode worker | open | `backlog/2026-09-19-modifier-only-and-horizontal-expand.md` | P2 |
 ## Round-2 Reports (2026-09-19)
 > Index of the round-2 worker reports. PRs #10 (`a8c4416`), #9 (`259dbe9`) and #11 (`a01d6a1`)

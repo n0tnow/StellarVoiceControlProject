@@ -56,6 +56,13 @@
 > left/right only. Build/test/clippy/typecheck all green; the gesture, the Accessibility grant,
 > and the animation still need a human on the real machine. See
 > `backlog/2026-09-19-modifier-only-and-horizontal-expand.md`.
+>
+> 2026-09-19 — **A1 cloud-first STT** (`feat/a1-stt`): a finished capture is transcribed
+> automatically by a `GroqTranscriber` behind a `Transcriber` trait; the overlay shows
+> "Thinking" and never the transcript, which travels on `transcript { text, final }` and
+> the Rust terminal. WAV retention (delete-on-success, cap 10, keep failures) lands here.
+> Build/test/clippy/typecheck all green; real-provider latency and the 5-command
+> acceptance run are **unverified** (no API key in this environment). See the A1 report.
 
 #### A0 — Push-to-talk + notch overlay harness ✅
 > Design pivot (2026-09-19): the dashboard/log-pane harness was replaced by the notch
@@ -69,9 +76,10 @@
 - **Accept:** app runs and the overlay is positioned from real AppKit geometry (verified: idle pill matches the measured cutout 179×32 pt, expanded 680×66 pt on the built-in display); holding the hotkey to produce a WAV is **not yet verified by a human** — see `backlog/2026-09-19-a0-push-to-talk-notch.md`.
 
 #### A1 — STT (speech → text) 🔲
-- [ ] Model choice (decide, record in notes.md): local `whisper.cpp` (Metal) first; cloud API fallback only if quality fails.
-- [ ] Wire: captured audio → STT → transcript into the log pane.
-- **Accept:** speak 5 different commands, all transcribe correctly, <2s latency on release.
+- [x] Model choice (decided, recorded in notes.md): **cloud-first** — Groq `whisper-large-v3-turbo` behind a one-method `Transcriber` trait, so a local `whisper.cpp` backend can be added without touching call sites (2026-09-19, branch `feat/a1-stt`).
+- [x] Wire: captured audio → STT → `transcript { text, final }` on the event stream + Rust terminal; overlay shows "Thinking" only and never the transcript (2026-09-19).
+- [x] Retention (A0 review MAJOR-3): delete a recording after a successful transcription, keep failed ones, cap the recordings dir at 10 (2026-09-19).
+- [ ] **Accept:** speak 5 different commands, all transcribe correctly, <2s latency on release — **blocked on a `GROQ_API_KEY` and a human run** (latency unmeasured so far; see `backlog/2026-09-19-a1-stt.md`).
 
 #### A2 — LLM roundtrip (text → agent → response) 🔲
 - [ ] Agent core (Claude tool-use) receives transcript, returns a structured answer to the log pane.

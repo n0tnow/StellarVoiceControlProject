@@ -138,4 +138,36 @@
      placement/level/collection/click-through are untouched.
 - **Status:** decided (user visual check on the real display still pending)
 
+## 2026-09-19 — A1: Cloud-first STT (Groq), retention, and the language choice
+- **Idea:** Implement step A1 (speech-to-text) under a hard deadline: turn the A0 WAV into a
+  transcript, show "Thinking" in the notch while it runs, and never paint the transcript in the
+  overlay.
+- **Discussion:** The A1 checklist originally said "local `whisper.cpp` (Metal) first; cloud API
+  fallback only if quality fails". The user overrode that for the deadline: **cloud first**
+  (Groq `whisper-large-v3-turbo`), with the code shaped so a local backend drops in later without
+  touching call sites. The A0 review also assigned the missing WAV retention policy (MAJOR-3) to
+  A1.
+- **Decision:**
+  1. **Cloud-first, one trait.** `stt::Transcriber` (`transcribe(&Path) -> Result<Transcription,
+     SttError>`) is the seam; `GroqTranscriber` is the only impl today. A `WhisperCpp` impl needs
+     no changes outside `lib.rs`. `Transcriber` is deliberately one method — not a plugin system.
+  2. **Auto-detect the language.** No `language` param by default, even though Groq's docs say an
+     explicit hint improves accuracy/latency. Commands are code-switched (Turkish sentence +
+     English entities like `USDC`), and forcing `tr` would phoneticise those entities, which are
+     exactly what the chain parser needs. `POLARIS_STT_LANGUAGE=tr` overrides.
+  3. **The transcript is not UI.** It travels on the existing `transcript { text, final }` event
+     and is printed to the Rust terminal; the overlay shows only "Thinking". The ear is ~92 pt and
+     the camera housing has no pixels, so text visual design waits for A2.
+  4. **Key handling.** `GROQ_API_KEY` from the environment, with an optional gitignored `.env`
+     walked up from the working directory. Real environment variables win; the value is never
+     logged or written. Missing key is a runtime state, not a crash: overlay "No STT key",
+     terminal instructions, capture unaffected.
+  5. **Retention = delete-on-success + cap 10.** A successfully transcribed WAV is deleted; a
+     failed one is kept (only copy); the directory is pruned to 10 newest otherwise.
+  6. **`CaptureStatus` gains `label`.** A short, overlay-safe label for A1 failures ("No STT
+     key", "Net error", …). A0 microphone errors keep `label: null` and the generic "Mic error".
+- **Status:** decided (implemented on `feat/a1-stt`; real-provider latency and the 5-command
+  acceptance run still need a key and the user's voice — see
+  `backlog/2026-09-19-a1-stt.md`)
+
 <!-- New notes are appended chronologically at the bottom. -->
