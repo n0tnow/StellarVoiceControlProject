@@ -115,4 +115,27 @@
      (objc2 0.6.4 / app-kit 0.3.2 / foundation 0.3.2) — verified with `cargo tree -i objc2`.
 - **Status:** decided
 
+## 2026-09-19 — Notch shape fix (idle must coincide with the cutout)
+- **Idea:** The A0 overlay was visible but did not match the physical camera housing; it read as a
+  separate black blob. Make the idle pill coincide with the cutout and make the expanded shell grow
+  out of it with correct asymmetric corners (step after A0 on the same branch).
+- **Discussion:** Two causes. (1) `notch.rs` inflated the measured housing: 179x32 became 199x36
+  (`housing + 20`, `safe_top + 4`). (2) `index.css` hardcoded `border-radius: 0 0 25px 25px` and an
+  18 px shoulder that was present even at rest. Research: hardware cutout corners are ~4 pt (top) /
+  ~8 pt (bottom) and the bottom flares wider (notchbay.com); boring.notch's `NotchShape` defaults
+  to a 6 pt concave top ear and 14 pt convex bottom.
+- **Decision:**
+  1. Idle geometry is the measured cutout, no inflation. **Do not overdraw the ~5 pt menu-bar
+     margin**: macOS already draws that strip behind our transparent window; painting black into a
+     light menu bar is the blob failure we are removing.
+  2. Four radii (`pillTop`, `pillBottom`, `shellEar`, `shellBottom`) are derived in Rust from the
+     measured heights and flow through `NotchGeometry` → React → CSS custom properties; no CSS px
+     constants decide the shape.
+  3. Keep the CSS radial-gradient ears (parameterised by a registered `@property --ear`, zero while
+     idle) rather than a single SVG path: CSS transitions width/height/radius together without
+     per-frame JS, and reproduces the top-concave / bottom-convex silhouette.
+  4. Do not regress A0: capture, hotkey, event stream, state machine, and the native window
+     placement/level/collection/click-through are untouched.
+- **Status:** decided (user visual check on the real display still pending)
+
 <!-- New notes are appended chronologically at the bottom. -->

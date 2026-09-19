@@ -22,6 +22,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 ### Removed
 - Temporary `dev_self_test` command (replaced by the real hotkey + capture path).
 
+### Fixed
+- Notch overlay now matches the physical camera housing: the idle pill is the measured cutout
+  (179x32 pt on a 14", previously 199x36), and four corner radii (`pillTop`, `pillBottom`,
+  `shellEar`, `shellBottom`) are derived from the display and flow through `NotchGeometry` to CSS
+  custom properties instead of hardcoded `border-radius`/shoulder constants.
+
 ## [0.1.0] — 2026-09-19
 
 ### Added
