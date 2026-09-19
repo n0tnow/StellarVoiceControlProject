@@ -330,9 +330,12 @@ mod tests {
     }
 
     /// `play_file` must announce playback only once `afplay` has actually
-    /// started — a silent WAV is enough to prove the callback fires. It is
-    /// macOS-only by construction (the whole crate is).
+    /// started — a silent WAV is enough to prove the callback fires. It spawns a
+    /// real player, so it is `#[ignore]`d to keep the default `cargo test` silent
+    /// and offline (the neighbouring live-audio tests in `tts.rs` are too). Run
+    /// it manually with `--ignored`.
     #[test]
+    #[ignore = "plays real audio through afplay; run manually with --ignored"]
     fn playback_start_fires_when_the_player_really_starts() {
         // A minimal, valid, silent 16-bit PCM WAV written with the same crate the
         // capture layer uses. 8 kHz, 1 channel, 80 ms of silence.
