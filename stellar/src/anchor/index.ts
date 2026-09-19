@@ -51,7 +51,7 @@ export { balanceOf, explorerAccountUrl, explorerTxUrl, hasTrustline, loadAccount
 export { simulateBankTransfer } from "./sandbox.ts";
 export { AnchorSession, type AnchorSessionConfig } from "./session.ts";
 export { runDepositFlow, runWithdrawFlow, type DepositFlowOptions, type DepositFlowResult, type WithdrawFlowOptions, type WithdrawFlowResult } from "./flows.ts";
-export { EnvSigner } from "./testSigner.ts";
+// EnvSigner (test-only) lives behind `@polaris/stellar/anchor/testing`, never in this barrel.
 export {
   configureAnchor,
   depositTry,
