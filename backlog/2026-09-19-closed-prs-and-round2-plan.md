@@ -3,7 +3,7 @@
 - **Date:** 2026-09-19
 - **Worker/Agent:** coordination docs worker (L3)
 - **Branch/Worktree:** `docs/round2-status` @ `.worktrees/docs-round2`
-- **PR:** docs PR opened from this branch (link in the coordinator hand-off)
+- **PR:** https://github.com/n0tnow/StellarVoiceControlProject/pull/12 (`docs/round2-status` → `main`)
 
 ## Closed unmerged PRs (#5, #6)
 
@@ -22,8 +22,10 @@ The work is **not lost**. It is preserved in local rescue branches:
 | `rescue/a0-harness` | `7a024a6` | A0 push-to-talk harness code + `backlog/2026-09-19-a0-harness.md` |
 | `rescue/model-ladder-restore` | `4ac06b0` | `backlog/2026-09-19-model-ladder-restore.md` (the model-ladder file itself is gitignored/local-only) |
 
-The remote branches `origin/feat/a0-harness` and `origin/fix/ladder-restore` still exist; the local
-feature branches were deleted. The rescue branches are local-only and were not pushed.
+The remote branches `origin/feat/a0-harness` and `origin/fix/ladder-restore` were **deleted on
+origin**; only stale local remote-tracking refs remain (they will disappear on the next
+`git fetch --prune`). Rescue first, then prune: the work is already rescued in the local branches
+above. The rescue branches are local-only and were not pushed.
 
 ### How to resume
 
@@ -48,20 +50,31 @@ The rescued reports are now indexed in the root `backlog.md` under "Round-2 Repo
 |---|---|---|---|---|
 | 1 | [#8](https://github.com/n0tnow/StellarVoiceControlProject/pull/8) | `docs/rule-types-and-decisions` | docs: rule/schedule types, guard ABI and 2026-09-19 decisions | open (draft); **awaits Owner A review** — the only gate |
 | 2 | [#10](https://github.com/n0tnow/StellarVoiceControlProject/pull/10) | `feat/guard-rules-schedule` | feat(guard): on-chain rule engine + scheduler for `polaris_guard`, deployed to testnet | open (draft); locally reviewed (`review-pr10` worktree); tests green per [`backlog/guard-rules-schedule.md`](guard-rules-schedule.md) |
-| 3 | [#9](https://github.com/n0tnow/StellarVoiceControlProject/pull/9) | `feat/keeper` | feat(keeper): off-chain keeper that triggers due `polaris_guard` schedules | open (draft); first of the shared-file pair (`stellar/package.json`, `stellar/tsconfig.json`) to merge — no rebase needed if it lands here |
-| 4 | [#11](https://github.com/n0tnow/StellarVoiceControlProject/pull/11) | `feat/anchor-sep6` | feat(anchor): SEP-6 anchor client (deposit + withdraw) with explain-log | open (draft); locally reviewed (`review-pr11`); 111/111 anchor tests green per [`backlog/anchor-sep6.md`](anchor-sep6.md); **rebases over #9** (shared files, see below) |
-| 5 | docs PR | `docs/round2-status` | docs: round-2 status, rescued reports and merge plan | this PR; merges last so its index links resolve |
+| 3 | [#9](https://github.com/n0tnow/StellarVoiceControlProject/pull/9) | `feat/keeper` | feat(keeper): off-chain keeper that triggers due `polaris_guard` schedules | open (draft); first of the shared-file pair to merge — no rebase needed if it lands here (five shared files, see below) |
+| 4 | [#11](https://github.com/n0tnow/StellarVoiceControlProject/pull/11) | `feat/anchor-sep6` | feat(anchor): SEP-6 anchor client (deposit + withdraw) with explain-log | open (draft); locally reviewed (`review-pr11`); 111/111 anchor tests green per [`backlog/anchor-sep6.md`](anchor-sep6.md); **rebases over #9** (five shared files, see below) |
+| 5 | [PR #12](https://github.com/n0tnow/StellarVoiceControlProject/pull/12) | `docs/round2-status` | docs: round-2 status, rescued reports and merge plan | this PR; merges last so its index links resolve |
+
+> Dependency notes: **#8 is independent of #9/#10/#11** — it may merge before or after #10. The
+> hard dependencies are **#9 before #11** (five shared files) and **this docs PR (#12) last** (it
+> indexes report files that land with #8–#11).
 
 > PR [#7](https://github.com/n0tnow/StellarVoiceControlProject/pull/7) (notch research) is open and
 > non-draft; it is **not** part of this plan and is unaffected by the merge order above.
 
 ### Shared-file rule (PR #9 ↔ PR #11)
 
-PR #9 and PR #11 both change `stellar/package.json` and `stellar/tsconfig.json`.
-**Whichever merges second rebases onto `main` and resolves the conflict as follows:**
+PR #9 and PR #11 both change **five shared files**: `.env.example`, `package-lock.json`,
+`stellar/package.json`, `stellar/src/index.ts`, `stellar/tsconfig.json` (the `.env.example` and
+`stellar/src/index.ts` hunks overlap).
+**Whichever merges second rebases onto `main` and resolves the conflicts as follows** — per the
+merge order above, **PR #11 owns the resolution**:
 
-- keeper keeps `node --test` **scoped to `src/keeper`** (`node --test "src/keeper/**/*.test.ts"`);
+- keeper's `test` script becomes `node --test` **scoped to `src/keeper`**
+  (`node --test "src/keeper/**/*.test.ts"`); #9 currently ships the broader
+  `node --test "src/**/*.test.ts"`, so this is a change, not a "keep";
 - anchor keeps `vitest` **scoped to `src/anchor`** (`test:anchor`);
+- `stellar/src/index.ts` re-exports both `./anchor` and `./keeper`;
+- `.env.example` documents both sets of variables;
 - the combined `test` script (running both scopes) and the `scripts/check.sh` integration
   (a single entry point for all workspaces) land as a **small follow-up PR after both merge**.
   Do not cross-reference the other PR's scripts from either PR — they are not on `main` yet.
@@ -83,9 +96,11 @@ PR #9 and PR #11 both change `stellar/package.json` and `stellar/tsconfig.json`.
   Command: `git worktree remove .worktrees/<name>` (from the main clone).
 - Local branches to delete after their PRs merge: `feat/anchor-sep6`, `feat/guard-rules-schedule`,
   `feat/keeper`, `docs/rule-types-and-decisions`, `docs/round2-status`, `chore/local-notes`.
-- Remote branches to delete after merge (GitHub may auto-delete): the same branch names under
-  `origin`, including the already-closed `origin/feat/a0-harness` and `origin/fix/ladder-restore`
-  whose work lives on in the rescue branches.
+- Remote branches to delete after merge (GitHub may auto-delete): `feat/anchor-sep6`,
+  `feat/guard-rules-schedule`, `feat/keeper`, `docs/rule-types-and-decisions`, `docs/round2-status`.
+  **Already deleted upstream — do not wait on them:** `origin/chore/local-notes`,
+  `origin/feat/a0-harness`, `origin/fix/ladder-restore`; their stale local remote-tracking refs
+  clear on the next `git fetch --prune` (the #5/#6 work is already rescued, see above).
 
 ## Open questions / uncertainty
 
