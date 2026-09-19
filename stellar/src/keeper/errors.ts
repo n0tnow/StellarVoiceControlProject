@@ -50,7 +50,8 @@ export interface GuardErrorDef {
 /**
  * `polaris_guard` error codes -> names/kinds. Mirrors the `#[contracterror]`
  * enum in `contracts/polaris_guard/src/lib.rs` (codes start at 100 on purpose so
- * they never collide with the token's 1..13; discriminants are public ABI).
+ * they never collide with the built-in contract range 1..15 (code 1 reserved,
+ * 2..15 mapped in `TOKEN_ERRORS`); discriminants are public ABI).
  * `errors.test.ts` parses the contract source and fails if this table drifts.
  *
  * Only some of these can come out of `execute_schedule` (the keeper's only

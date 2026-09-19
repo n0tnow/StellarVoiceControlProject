@@ -40,8 +40,9 @@
   codes are routed by range so a token error is never read as guard policy. Mapping onto the existing back-off
   classes is in `errors.ts` (e.g. #110 -> `not_due`, #116 -> `allowance_missing`, #111/#109 -> `inactive`,
   #100/#103/#104/#106 -> `rule_violated`). A drift test parses the contract's `#[contracterror]` enum
-  (`GUARD_SRC=<path>` overrides the location; it skips itself while `contracts/polaris_guard` on main predates the enum;
-  I ran it against W1's source: green).
+  (`GUARD_SRC=<path>` overrides the location; `npm -w` runs the test with cwd `stellar/`, so use
+  `GUARD_SRC=../../guard-rules/contracts/polaris_guard/src/lib.rs` or an absolute path; it skips itself while
+  `contracts/polaris_guard` on main predates the enum; I ran it against W1's source: green).
 - Missed runs are skipped, not replayed: the keeper has no catch-up logic; `executed` log lines now carry an `after`
   object (`next_run_at`, `runs_left`, `active`) read back via `get_schedule`. Tests model the contract's skip rule and
   prove: 50 missed intervals -> one run; a week of refusals then a fix -> one run, not a burst; a stale `list_due`
@@ -85,8 +86,8 @@ code+tests only — no live testnet E2E until the guard worker's final redeploy 
   added to `stellar/package.json`.
 - Tests now: **64**, 63 pass, 0 fail, **1 conditional skip** (the guard-source drift test skips because this worktree's
   `contracts/polaris_guard` predates the `#[contracterror]` enum; run with
-  `GUARD_SRC=.worktrees/guard-rules/contracts/polaris_guard/src/lib.rs` it is 64/64 with 0 skips). Workspace-wide
-  `npm run check` green.
+  `GUARD_SRC=../../guard-rules/contracts/polaris_guard/src/lib.rs` from `stellar/` — or an absolute path — it is
+  64/64 with 0 skips). Workspace-wide `npm run check` green.
 
 ### Round 4 (2026-09-19): live E2E against the FINAL guard deployment
 Final guard: `CDRLSFJ5WIC5UMF2LWPF3NRVDOKE7CN3DAYGKDWQ5TJJMVB7FRHRCK4D` (deploy tx
@@ -152,7 +153,40 @@ id 10 one-shot 3 (revocation test). Keeper runs used `KEEPER_POLL_SECONDS=10`, `
 ```
 5. **Money check:** payee SAC balance `150000000` raw (= 15 KE2E = 2 + 3x1 + 3x1 + 4x1 + 3) and guard
    `spent_today` `150000000` — exactly the sum of all executed schedules: every payment once, no duplicates, no
-   catch-up. (id 9 kept 1 unused run; nothing depends on it.)
+   catch-up. (id 9 kept 1 unused run at that point; consumed by the Round 5 sanity run.)
+
+### Round 5 (2026-09-19): review F1 — persistent sweep cursor (starvation fix)
+The round-2 independent review (PR #9, issuecomment-5742582532) requested changes: `tick()` reset the scan cursor to
+0 every tick and capped a tick at 10 pages x `limit` ids, so with the default `KEEPER_MAX_PER_TICK=5` only ids 1..50
+were ever scanned. Guard ids are global and never reused, so any due schedule above that window was silently starved
+(cross-tenant: any owner creating schedules grows the id space). Reviewer repro: due id 999, 20 ticks -> 200
+`list_due` calls always from cursor 0, 0 executions.
+
+- `keeper.ts` now keeps `sweepCursor` on the `Keeper` instance: each tick resumes where the previous one stopped and
+  wraps to 0 only when the contract reports the end of the id space (a non-advancing cursor is treated as
+  end-of-space). Per-tick work stays bounded (10 pages, `KEEPER_MAX_PER_TICK` candidates). A failed page sets the
+  resume cursor to that page so the next tick retries it rather than skipping ids. `state()` exposes `sweepCursor`
+  and the debug `tick` log carries `cursorFrom`/`cursorTo`. Restart behavior is explicit: the cursor is in-memory,
+  so a new process starts a fresh sweep at id 0 (documented in `keeper.ts` and the README).
+- Tests (3 new, 67 total): the reviewer's exact repro (id space 1000, due id 999, 10 pages x 5 ids per tick) is
+  executed on tick 20 with strictly increasing, unique cursors and no per-tick reset; a cross-tenant case where a
+  front-page due id (1) is paid once and does not monopolize the sweep while a far tenant id (999) is still reached
+  by tick 20; and a small-space resume/wrap test (12-id space, due id 11) asserting `sweepCursor` 0 -> 11 -> 12 -> 0
+  across ticks. Existing loop tests were adjusted for resume semantics (backed-off pages are no longer re-scanned:
+  the cursor resumes past them).
+- Minor review fixes: the guard-table comment in `errors.ts` now says the built-in range is 1..15 (code 1 reserved,
+  2..15 mapped) instead of "1..13"; the `GUARD_SRC` note in this report now uses a path that works from `stellar/`
+  (`../../guard-rules/...`), since `npm -w` sets the cwd there.
+- Live sanity against the deployed guard (no full E2E repeat): a short `keeper` run with `KEEPER_MAX_PER_TICK=1`,
+  `KEEPER_LOG_LEVEL=debug` showed the window sliding across ticks and wrapping:
+```
+{"event":"tick","due":[9],"candidates":[9],"limit":1,"pages":9,"cursorFrom":0,"cursorTo":10}
+{"event":"executed","id":9,"hash":"7aafbc260ddc9e284aa12ea93d899ecb712576ed409072c8b666517dfa6239bf","status":"SUCCESS","ledger":4760846,"after":{"next_run_at":"1789827092","runs_left":0,"active":false}}
+{"event":"tick","due":[],"candidates":[],"limit":1,"pages":1,"cursorFrom":10,"cursorTo":0}
+```
+  (id 9's last run was consumed; the next tick resumed at cursor 10 and wrapped at the end of the id space instead of
+  re-scanning ids 1..9.)
+- Tests now: **67**, 66 pass, 0 fail, **1 conditional skip**; `npm run check` green.
 
 
 ### End-to-end on testnet, round 1 (superseded deployment `CB5CQHV6…`): DONE
@@ -227,9 +261,9 @@ was started *before* they were due.
 (An earlier smoke test against a throwaway stand-in contract, before W1's push, is superseded by the above.)
 
 ## Unfinished (handed off)
+- Review F1 is fixed (Round 5) and awaiting the reviewer's re-check on PR #9.
 - The live E2E against the final deployment is done (Round 4); the four undone verifications listed in Round 3 are
-  all evidenced there. Leftover: id 9 kept 1 unused run (harmless; the schedule stays active until it runs or is
-  cancelled by its owner).
+  all evidenced there.
 - `scripts/check.sh` does not run `npm test`; adding it there was out of scope (shared file).
 
 ## Blockers

@@ -34,9 +34,10 @@ Consequences:
 ## What one tick does
 
 1. Resolve any earlier transaction that has no final status yet.
-2. Simulate `list_due` from the keeper account, page by page (bounded: stops at
-   `KEEPER_MAX_PER_TICK` eligible ids, at the end of the list, when the cursor
-   stops advancing, or after 10 pages).
+2. Simulate `list_due` from the keeper account, page by page, resuming where the
+   previous tick stopped and wrapping only at the end of the id space (bounded:
+   stops at `KEEPER_MAX_PER_TICK` eligible ids, at the end of the list, when the
+   cursor stops advancing, or after 10 pages).
 3. For each due id (up to `KEEPER_MAX_PER_TICK`, one at a time):
    `getAccount` -> build `execute_schedule(id)` -> `simulateTransaction` ->
    (if the simulation asks for it, `RestoreFootprint` for archived entries and
@@ -80,8 +81,18 @@ backlog. Each `executed` log line includes an `after` object
 
   Backed-off ids do not starve other schedules: the `list_due` page size grows
   by the number of suppressed ids.
+- **The sweep cursor is remembered across ticks.** A tick resumes at the page
+  where the previous one stopped and wraps to 0 only when the contract reports
+  the end of the id space, so a due schedule behind one tick's page budget
+  (10 pages x `limit` ids) is reached within a bounded number of ticks instead
+  of never — the guard id space is global and only grows, so ids near the top
+  must not require a reset to 0. The cursor is in-memory like the rest of the
+  state: a keeper restart starts a fresh sweep from id 0 (worst case, one extra
+  sweep window before a far id is re-reached).
 - **RPC failures** never crash the loop: a failing `list_due` is logged and the
-  next attempt waits with growing delay (up to 2 min), then resumes.
+  next attempt waits with growing delay (up to 2 min), then resumes. A page that
+  fails mid-sweep is retried by the next tick (the cursor does not advance past
+  it).
 - **Sequence numbers** always come fresh from the network (`getAccount`) for
   every attempt; submissions are sequential, so there is no local counter to
   drift. A `txBadSeq` is classified as transient and retried.
