@@ -2,9 +2,11 @@
  * `e2e:setup` — provision the throwaway testnet environment.
  *
  *   npm run e2e:setup -w @polaris/stellar -- --live
- *   npm run e2e:setup -w @polaris/stellar -- --live --reset
+ *   npm run e2e:setup -w @polaris/stellar -- --live --reset [--yes]
  *
  * Without `--live` it only prints the plan (no network access at all).
+ * `--reset` destroys the previous throwaway keys and asks for the same strict
+ * lowercase `y`/`yes` approval as `e2e:tool` (`--yes` skips it for scripts).
  * Public output only; secrets live in the keys file.
  */
 import { Horizon, rpc as StellarRpc } from "@stellar/stellar-sdk";
@@ -23,6 +25,7 @@ import {
   issueAsset,
   waitForHorizonAccount,
 } from "./assets.ts";
+import { interactiveConfirm } from "./confirm.ts";
 import { e2eAsset } from "./e2e.ts";
 import { fundWithFriendbot } from "./friendbot.ts";
 import { KEY_ROLES, keypairOf, loadOrCreateKeys, writeKeys } from "./keys.ts";
@@ -49,6 +52,18 @@ function plan(config: LiveConfig, reset: boolean): string {
     "",
     "  --reset overwrites the previous throwaway keys.json (new keys; the stored",
     "  asset record is dropped). No backup is kept; these are throwaway keys only.",
+    "  With --live, --reset asks for the strict y/yes confirmation (or pass --yes).",
+  ].join("\n");
+}
+
+/** Card shown before a destructive `--reset`. */
+function resetCard(config: LiveConfig): string {
+  return [
+    "┌─ DESTRUCTIVE RESET ─────────────────────────",
+    `│ e2e:setup --reset will overwrite ${config.keysPath}`,
+    "│ The previous throwaway keys and their asset record are destroyed;",
+    "│ no backup is kept and they cannot be recovered.",
+    "└─────────────────────────────────────────────",
   ].join("\n");
 }
 
@@ -122,6 +137,7 @@ async function setup(opts: SetupOptions): Promise<void> {
 export async function main(argv: readonly string[], overrides: LoadLiveConfigOptions = {}): Promise<number> {
   const live = argv.includes("--live");
   const reset = argv.includes("--reset");
+  const yes = argv.includes("--yes");
   let config: LiveConfig;
   try {
     config = loadLiveConfig({ argv, ...overrides });
@@ -134,7 +150,15 @@ export async function main(argv: readonly string[], overrides: LoadLiveConfigOpt
     process.stdout.write(`${plan(config, reset)}\n`);
     return 0;
   }
-  if (reset) process.stdout.write("reset: a fresh key set will be generated\n");
+  if (reset) {
+    if (!yes && !(await interactiveConfirm(resetCard(config)))) {
+      process.stdout.write("aborted: the previous throwaway keys were not changed.\n");
+      return 0;
+    }
+    process.stdout.write(
+      "reset: the previous throwaway keys were destroyed; a fresh key set will be generated\n",
+    );
+  }
 
   await setup({ config, reset });
   process.stdout.write("e2e:setup done\n");

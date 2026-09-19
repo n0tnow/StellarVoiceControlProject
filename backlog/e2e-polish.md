@@ -13,7 +13,7 @@
 - **Uniform timeouts (review #1):** every network call in `submit.ts` and the live modules is hard-bounded (30 s) and submissions honour a whole-operation deadline (120 s) with typed errors.
 - **`e2e:status`:** read-only snapshot (addresses, balances, rule, executor, alias, `spent_today`, SAC allowance, schedules with local + UTC next-run), `--json`, `--help`; without `--live` it prints a plan and touches no network.
 - **`e2e:tool`:** 12 commands; every state-changing command builds with the production tools, decodes the card **from the XDR**, requires an explicit `y/N` (default NO) or `--yes`, signs the **exact displayed XDR**, submits, waits and reads the result back.
-- **Live smoke passed on Stellar TESTNET** using the existing throwaway accounts; the tool fired a scheduled payment through the untouched keeper CLI (8 s after due) and cancelled a second schedule. Hashes below.
+- **Live smoke passed on Stellar TESTNET** using the existing throwaway accounts; the tool fired a scheduled payment through the untouched keeper CLI (7 s after due) and cancelled a second schedule. Hashes below.
 - Offline gates green: `check` clean, `test:live` **84 passed**, full `test` **894 passed / 0 failed**.
 
 ## Scope / files changed
@@ -122,7 +122,7 @@ Explorer: `https://stellar.expert/explorer/testnet/tx/<hash>`. All hashes were p
 | cancel #16 | `e2e:tool cancel --live --to ada --yes` | cancel_schedule tx [`a0af9381…`](https://stellar.expert/explorer/testnet/tx/a0af9381dd9ab4f0ce4ebd6a9da8839a79e0b511080b27467e859175195708b4), ledger 4765957; read-back #16 `active=false` |
 | json | `e2e:status --live --json` | valid JSON, no bigints |
 
-**Measured schedule delay:** `first_run_at` = `1789853220` (21:27:00 UTC); keeper execution ledger close = 21:27:08 UTC → **8 s** (well inside the 15–25 s guidance; keeper poll 5 s).
+**Measured schedule delay:** `first_run_at` = `1789853220` (21:27:00 UTC); keeper execution ledger close = `1789853227` = 21:27:07 UTC → **7 s** (well inside the 15–25 s guidance; keeper poll 5 s). Corrected from 8 s per the independent review §1.
 
 **Final on-chain state (read back by the tool):** owner 9728 E2EUSD, recipient 272, `spent_today` 247, SAC allowance 4793, `get_executor` null, `get_alias(ada)` = recipient, no active schedules. No `enable-auto`/`tighten` was needed to reach the state the smoke required — the current state already had `per_tx 100 / daily 2000 / auto 0 / executor revoked`, and guarded payments were owner-signed (`pay_owner`).
 
@@ -174,3 +174,98 @@ Sum = 67+111+121+133+112+121+145+84 = **894 passed, 0 failed** (previous baselin
 - Live smoke hashes exist on-chain (Soroban `getTransaction` for `fbf7c3a1…`, `a0d73201…`, `60cf3292…`, `e3b40c09…`, `a0af9381…`).
 - `e2e:tool` never signs before `y`/`yes` (offline test "defaults to DENY") and signs exactly the card's XDR (offline test "signedHashes[0] === displayed").
 - `grep -E "S[A-Z2-7]{55}"` over the diff, the report and the README is empty.
+
+## Review fixes
+
+This section applies the independent review `backlog/e2e-polish-review.md`
+(approve with corrections) to the same branch. Offline only: no network, no
+keys/accounts touched.
+
+### Blocking
+
+- **B3 — STRICT approval gate.** Extracted the pure `parseConfirmation(answer)`
+  into `stellar/src/live/confirm.ts`. It approves ONLY the exact lowercase `y`
+  or `yes` after removing at most one trailing `\n`; there is no trimming and no
+  case folding, so `Y`, `Y `, ` y`, `YES`, `Yes`, `yes please`, `1`, `""` and EOF
+  all abort (`yes\n` approves; `y\r\n` does not). `interactiveConfirm` now uses
+  it and the prompt reads
+  `Type y or yes (lowercase) to approve, anything else aborts: `. `tool.ts`
+  re-exports the two functions for backwards compatibility.
+- **B1 — default-deny is now tested.** New `confirm.test.ts`: a table over
+  every approve/abort input above (including the explicit `yes\n` /
+  `y\r\n` newline rules) plus `interactiveConfirm` end-to-end with **injected
+  input/output streams** (`PassThrough`), asserting `true` only for exact
+  lowercase `y`/`yes`, and `false` on uppercase/padded input, on EOF, and on an
+  idle timeout.
+- **B2 — displayed-vs-signed hash check is now tested.** New `tool.test.ts`
+  case "refuses to submit when the displayed payload hash is for a different
+  XDR": an injected `buildPlan` returns a `PlanStep` whose `payloadHash` is the
+  hash of a different XDR than `unsignedXdr`; the test asserts exit code `1`,
+  `sendTransaction` called **0** times and stderr matching
+  `/does not equal the displayed payload hash/`.
+
+### Non-blocking (all applied)
+
+1. **Bounded prompt** — `interactiveConfirm` waits at most
+   `DEFAULT_CONFIRM_TIMEOUT_MS` (120 s), then returns `false` and prints
+   `approval timed out; nothing was signed or submitted.` (covered by a test).
+2. **Report delay corrected** — 8 s → **7 s** (`1789853227`), per §1 above.
+3. **`e2e:setup --reset` confirmation** — prints the destructive warning and
+   asks for the same strict `y`/`yes` gate (or `--yes`); on approval it prints
+   that the previous throwaway keys were destroyed, on denial nothing is
+   changed.
+4. **`repairPermissions` symlink guard** — uses `lstat` and refuses to chmod a
+   symlinked file (or a symlinked parent directory), skipping with a warning; a
+   `keys.test.ts` case proves the link target keeps its mode.
+5. **Atomic key writes** — `writeKeys` writes a `0600` temp file in the same
+   directory, `fsync`s it and renames it over the destination; a test asserts
+   no temp file is left behind and the final mode is `0600`.
+6. **Duplicated flags are a usage error** — `parseCommandLine` rejects any flag
+   given more than once (no more silent last-wins); covered in `args.test.ts`.
+7. **Single timeout implementation** — `timeout.ts` remains the only source;
+   `rpc.ts` now delegates to `withNetworkTimeout` and keeps
+   `RpcTimeoutError` / `withTimeout` / `DEFAULT_RPC_TIMEOUT_MS` as
+   backwards-compatible exports.
+
+### Mutation proof (tests fail against the old behaviour)
+
+Each mutation was applied to the worktree, `npm run test:live` run, then
+reverted (files restored from the pre-mutation copies).
+
+| # | Temporary mutation | Result |
+|---|---|---|
+| B1 | `parseConfirmation` reverted to the old `answer.trim().toLowerCase()` compare | **caught**: `1 failed | 11 passed` files, `11 failed | 101 passed` tests (only `confirm.test.ts` fails) |
+| B2 | the `signedHash !== payloadHash` check removed from `signExact` | **caught**: `1 failed | 11 passed` files, `1 failed | 111 passed` tests (exactly the new B2 case fails) |
+
+### Files touched by this round
+
+`stellar/src/live/confirm.ts` (new), `__tests__/confirm.test.ts` (new),
+`tool.ts`, `setup.ts`, `keys.ts`, `rpc.ts`, `args.ts`,
+`__tests__/{tool,keys,args}.test.ts`, `README.md`, and this report. Nothing
+under `stellar/src/{payments,guard,approval,schedule,keeper,anchor}` or
+`contracts/**` was touched; no key material is present anywhere in the diff.
+
+### Gates (verbatim)
+
+`npm run check -w @polaris/stellar` → `tsc -p tsconfig.json`, exit 0, no diagnostics.
+
+`npm run test:live -w @polaris/stellar`:
+```
+ Test Files  12 passed (12)
+      Tests  112 passed (112)
+```
+
+`npm test -w @polaris/stellar` (exit 0):
+```
+test:keeper     ℹ tests 67   / ℹ pass 67   / ℹ fail 0
+test:anchor     Test Files  5 passed (5)  / Tests  111 passed (111)
+test:payments   Test Files  7 passed (7)  / Tests  121 passed (121)
+test:guard      Test Files  7 passed (7)  / Tests  133 passed (133)
+test:approval   Test Files  4 passed (4)  / Tests  112 passed (112)
+test:schedule   Test Files  5 passed (5)  / Tests  121 passed (121)
+test:suggest    Test Files  4 passed (4)  / Tests  145 passed (145)
+test:live       Test Files 12 passed (12) / Tests  112 passed (112)
+```
+Sum = 67+111+121+133+112+121+145+112 = **922 passed, 0 failed** (was 894; +28 new offline live tests).
+
+DONE polish-fix

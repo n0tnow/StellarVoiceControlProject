@@ -39,7 +39,9 @@ npm run e2e:setup -w @polaris/stellar -- --live --reset
 ```
 
 `--reset` overwrites `~/.polaris-e2e/keys.json` with a brand-new key set and
-drops the stored asset record; the old throwaway keys are unrecoverable.
+drops the stored asset record; the old throwaway keys are unrecoverable. Before
+destroying anything it prints that warning and asks for the same strict
+lowercase `y`/`yes` confirmation as `e2e:tool` (pass `--yes` for scripted runs).
 
 ## 1. Read the current state
 
@@ -65,14 +67,18 @@ Every state-changing command follows the same safe pipeline:
 1. **BUILD** with the production chain-lane tools (the same code the app uses).
 2. **CARD** — the approval card is decoded from the produced XDR (title, route,
    signer, fee, payload hash, explorer link, warnings), never from the flags.
-3. **CONFIRM** — an interactive `y/N` prompt (default NO; anything but `y`/`yes`
-   aborts). Scripted runs pass `--yes`.
+3. **CONFIRM** — a strict prompt: only the exact lowercase `y` or `yes`
+   approves. `Y`, `Y `, ` y`, `YES`, `yes please`, `1`, an empty line and EOF
+   all abort (no trimming, no case folding). The prompt waits at most 120 s and
+   then aborts as timed out, so an idle terminal cannot hang a run. Scripted
+   runs pass `--yes`.
 4. **SIGN** the exact displayed XDR with the correct key; the signed hash is
    re-checked against the card before submission.
 5. **SUBMIT + VERIFY** — the tx hash, ledger and explorer link are printed, then
    the result is read back from chain.
 
-`--help` works everywhere; an unknown flag is a usage error (exit code 2).
+`--help` works everywhere; an unknown flag, a value flag without a value, or a
+flag repeated on the command line is a usage error (exit code 2).
 
 ### Scenarios
 
@@ -132,9 +138,12 @@ Only valid `G...` keys are accepted. Added aliases are stored locally
 **H. Schedule a payment and watch the keeper fire it** (the headline scenario):
 
 ```bash
-# pick a time ~3 minutes ahead, in Europe/Istanbul (or any IANA zone)
+# pick ~5 minutes from now, in Europe/Istanbul (or any IANA zone); the date is
+# computed relative to today so the example works on any day (macOS or Linux)
+D=$(date -v+5M +%Y-%m-%d 2>/dev/null || date -d '+5 minutes' +%Y-%m-%d)
+T=$(date -v+5M +%H:%M 2>/dev/null || date -d '+5 minutes' +%H:%M)
 npm run e2e:tool -w @polaris/stellar -- --live schedule \
-  --to ada --amount 2 --date 2026-09-20 --time 00:30 --tz Europe/Istanbul --yes
+  --to ada --amount 2 --date "$D" --time "$T" --tz Europe/Istanbul --yes
 
 # start the existing keeper CLI in the foreground (max 300 s)
 npm run e2e:tool -w @polaris/stellar -- --live keeper-watch --seconds 240
@@ -176,16 +185,21 @@ the ledger close time.
 ```bash
 npm run e2e:setup -w @polaris/stellar -- --live --reset
 ```
-Generates a fresh key set and asset record. The previous throwaway accounts and
-balances are abandoned (they remain on testnet but you no longer hold the keys).
+Generates a fresh key set and asset record. It prints that the previous
+throwaway keys are destroyed and asks for the strict `y`/`yes` confirmation
+(add `--yes` to skip it). The previous throwaway accounts and balances are
+abandoned (they remain on testnet but you no longer hold the keys).
 
 ## Safety notes
 
 - Testnet only. The run refuses any other RPC/Horizon/friendbot host or network
   passphrase.
 - Keys stay in `~/.polaris-e2e/keys.json`; the tools never print a secret seed.
+  Writes are atomic (temp file + `fsync` + rename), and permission repair never
+  follows a symlink.
 - These keys are throwaway: never reuse them anywhere real.
-- `e2e:setup --reset` overwrites the key file with no backup.
+- `e2e:setup --reset` overwrites the key file with no backup after a strict
+  `y`/`yes` confirmation.
 - `e2e:run --live` is **not idempotent**: it asserts the fresh baseline and must
   be followed by a `--reset` setup before it is run again.
 

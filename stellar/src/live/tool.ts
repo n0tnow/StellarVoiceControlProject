@@ -44,6 +44,7 @@ import {
   UsageError,
   type ArgSpec,
 } from "./args.ts";
+import { interactiveConfirm } from "./confirm.ts";
 import { loadLiveConfig, type LiveConfig, type LoadLiveConfigOptions } from "./config.ts";
 import { e2eAssetRegistry, txUrl, liveGuardClient, EXPLORER_BASE } from "./e2e.ts";
 import { loadOrCreateKeys, type KeyRole, type KeysFile } from "./keys.ts";
@@ -59,7 +60,7 @@ export type SignerRole = Extract<KeyRole, "owner" | "executor">;
 export interface ToolIO {
   stdout(text: string): void;
   stderr(text: string): void;
-  /** Print the card and ask; `true` only for an explicit `y`/`yes`. */
+  /** Print the card and ask; `true` only for the exact lowercase `y`/`yes`. */
   confirm(card: string): Promise<boolean>;
 }
 
@@ -139,7 +140,10 @@ const TOOL_SPEC: ArgSpec = {
   description: "manual-test the TESTNET chain lane with an explicit approval step",
   globalFlags: {
     live: { type: "boolean", description: "build, show the card, confirm, sign and submit on testnet" },
-    yes: { type: "boolean", description: "skip the interactive y/N prompt (for scripted runs)" },
+    yes: {
+      type: "boolean",
+      description: "skip the strict lowercase y/yes prompt and approve (for scripted runs)",
+    },
   },
   commands: {
     pay: {
@@ -1072,18 +1076,9 @@ async function buildPlan(
 
 // ── IO + entry point ─────────────────────────────────────────────────────────
 
-/** Default interactive confirmation: anything but `y`/`yes` aborts. */
-export async function interactiveConfirm(card: string): Promise<boolean> {
-  const readline = await import("node:readline");
-  process.stdout.write(`${card}\n\n`);
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  const answer = await new Promise<string>((resolve) => {
-    rl.question("Type 'y' or 'yes' to approve and sign, anything else aborts: ", resolve);
-  });
-  rl.close();
-  const normalized = answer.trim().toLowerCase();
-  return normalized === "y" || normalized === "yes";
-}
+// The strict approval gate lives in `confirm.ts`; re-exported so existing
+// importers keep working. `parseConfirmation` itself is unit-tested there.
+export { interactiveConfirm, parseConfirmation, DEFAULT_CONFIRM_TIMEOUT_MS } from "./confirm.ts";
 
 function defaultIO(): ToolIO {
   return {

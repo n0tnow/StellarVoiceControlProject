@@ -61,6 +61,12 @@ describe("parseCommandLine", () => {
     expect(() => parseCommandLine(["pay", "extra"], SPEC)).toThrowError(/unexpected argument/);
   });
 
+  it("rejects a duplicated flag instead of silently taking the last value (non-blocking #6)", () => {
+    expect(() => parseCommandLine(["pay", "--to", "a", "--to", "b"], SPEC)).toThrowError(/more than once/);
+    expect(() => parseCommandLine(["pay", "--to=a", "--to", "b"], SPEC)).toThrowError(/more than once/);
+    expect(() => parseCommandLine(["pay", "--live", "--live"], SPEC)).toThrowError(/more than once/);
+  });
+
   it("accepts --help anywhere", () => {
     expect(parseCommandLine(["pay", "--help"], SPEC).help).toBe(true);
     expect(parseCommandLine(["--help"], SPEC).help).toBe(true);

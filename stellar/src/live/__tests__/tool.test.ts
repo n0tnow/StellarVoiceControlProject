@@ -258,6 +258,40 @@ describe("runTool confirmation gate and pipeline", () => {
     expect(cap.out()).toContain(`${EXPLORER_BASE}/tx/${displayed}`);
   });
 
+  it("refuses to submit when the displayed payload hash is for a different XDR (B2)", async () => {
+    const spy: FakeChainSpy = { sendTransactionCalls: 0, signedHashes: [] };
+    const honest = planStep("owner", "set_alias", [
+      scAddressToScVal(OWNER),
+      nativeToScVal("bob", { type: "string" }),
+      scAddressToScVal(PAYEE),
+    ]);
+    // A DIFFERENT XDR than the one on the card: the hash check must catch it.
+    const otherXdr = xdrFor(honest.signerAddress, "set_alias", [
+      scAddressToScVal(OWNER),
+      nativeToScVal("eve", { type: "string" }),
+      scAddressToScVal(PAYEE),
+    ]);
+    const otherHash = payloadHashOf(otherXdr, TESTNET);
+    expect(otherHash).not.toBe(honest.payloadHash);
+    const tampered: Plan = {
+      command: "alias-add",
+      title: "polaris_guard: set_alias",
+      steps: [{ ...honest, payloadHash: otherHash }],
+      notes: [],
+      verify: async () => "SHOULD-NOT-VERIFY",
+    };
+    const cap = captureIO(async () => true);
+    const code = await runTool(["alias-add", "--live", "--yes", "--name", "bob", "--address", PAYEE], {
+      io: cap.io,
+      config: baseConfig(),
+      createChain: (config, k) => fakeChain(config, k, spy),
+      buildPlan: async () => tampered,
+    });
+    expect(code).toBe(1);
+    expect(spy.sendTransactionCalls).toBe(0);
+    expect(cap.err()).toMatch(/does not equal the displayed payload hash/);
+  });
+
   it("never prints a secret seed", async () => {
     const spy: FakeChainSpy = { sendTransactionCalls: 0, signedHashes: [] };
     const cap = captureIO(async () => false);

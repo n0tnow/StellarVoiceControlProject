@@ -6,6 +6,7 @@
  *   - every accepted flag is declared up front; an **unknown flag is a usage
  *     error**, never silently ignored;
  *   - a value-taking flag without a value is a usage error;
+ *   - a flag repeated on the command line is a usage error (never "last wins");
  *   - `--flag=value` is accepted; booleans never take a value.
  *
  * Pure: no I/O, no network. `--help` short-circuits.
@@ -61,6 +62,13 @@ export function parseCommandLine(argv: readonly string[], spec: ArgSpec): Parsed
   let command: string | undefined;
   let help = wantsHelp;
 
+  const setFlag = (name: string, value: string | boolean): void => {
+    if (Object.prototype.hasOwnProperty.call(flags, name)) {
+      throw new UsageError(`flag "--${name}" was provided more than once`);
+    }
+    flags[name] = value;
+  };
+
   for (let i = 0; i < argv.length; i += 1) {
     const token = argv[i] as string;
 
@@ -83,21 +91,21 @@ export function parseCommandLine(argv: readonly string[], spec: ArgSpec): Parsed
 
       if (declared.type === "boolean") {
         if (eq >= 0) throw new UsageError(`flag "--${name}" does not take a value`);
-        flags[name] = true;
+        setFlag(name, true);
         continue;
       }
 
       if (eq >= 0) {
         const value = body.slice(eq + 1);
         if (value.length === 0) throw new UsageError(`flag "--${name}" needs a value`);
-        flags[name] = value;
+        setFlag(name, value);
         continue;
       }
       const next = argv[i + 1];
       if (next === undefined || next.startsWith("--")) {
         throw new UsageError(`flag "--${name}" needs a value ${declared.value ?? ""}`.trim());
       }
-      flags[name] = next;
+      setFlag(name, next);
       i += 1;
       continue;
     }

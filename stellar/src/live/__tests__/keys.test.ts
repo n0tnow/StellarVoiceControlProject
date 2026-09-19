@@ -1,4 +1,13 @@
-import { chmodSync, mkdtempSync, rmSync, statSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+} from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
@@ -7,6 +16,7 @@ import {
   loadOrCreateKeys,
   newKeysFile,
   publicAddresses,
+  repairPermissions,
   writeKeys,
 } from "../keys.ts";
 
@@ -70,5 +80,40 @@ describe("key store", () => {
     loadOrCreateKeys(target);
     expect(statSync(join(dir, "repair")).mode & 0o777).toBe(0o700);
     expect(statSync(target).mode & 0o777).toBe(0o600);
+  });
+
+  it("writes atomically and leaves no temp file behind (non-blocking #5)", () => {
+    const atomicDir = join(dir, "atomic");
+    const target = join(atomicDir, "keys.json");
+    writeKeys(target, newKeysFile());
+    expect(readdirSync(atomicDir)).toEqual(["keys.json"]);
+    expect(statSync(target).mode & 0o777).toBe(0o600);
+    expect((JSON.parse(readFileSync(target, "utf8")) as { version: number }).version).toBe(1);
+  });
+
+  it("refuses to chmod through a symlinked key file (non-blocking #4)", () => {
+    const realDir = join(dir, "symlink-real");
+    mkdirSync(realDir, { recursive: true });
+    const real = join(realDir, "keys.json");
+    writeKeys(real, newKeysFile());
+    chmodSync(real, 0o644);
+
+    const linkDir = join(dir, "symlink-link");
+    mkdirSync(linkDir, { recursive: true });
+    const link = join(linkDir, "keys.json");
+    symlinkSync(real, link);
+
+    const warnings: string[] = [];
+    repairPermissions(link, (message) => warnings.push(message));
+    // The symlink target keeps its (wrong) mode; nothing was chmodded through it.
+    expect(statSync(real).mode & 0o777).toBe(0o644);
+    expect(warnings.join("\n")).toMatch(/symlink/i);
+
+    // The same guard holds on the load path (`loadOrCreateKeys`).
+    const moreWarnings: string[] = [];
+    const loaded = loadOrCreateKeys(link, { warn: (message) => moreWarnings.push(message) });
+    expect(loaded.network).toBe("testnet");
+    expect(statSync(real).mode & 0o777).toBe(0o644);
+    expect(moreWarnings.join("\n")).toMatch(/symlink/i);
   });
 });
