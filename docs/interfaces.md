@@ -170,12 +170,13 @@ Events added to `PolarisEvent` (§4):
 | Function | Auth | Behaviour |
 |---|---|---|
 | `set_rule(owner, rule)` | owner (Touch ID) | Create or replace the owner's rule. |
-| `set_executor(owner, executor)` / `revoke_executor(owner[, executor])` | owner (Touch ID) | Register / revoke the executor key. |
-| `set_alias(owner, alias, address)` | owner (Touch ID) | Add a known recipient to the alias book. |
+| `set_executor(owner, executor)` | owner (Touch ID) | Register the executor key (loosens the wallet, so Touch ID). |
+| `revoke_executor(owner[, executor])` | owner | Revoke the executor key (tightens; whether it needs Touch ID is up to the app). |
+| `set_alias(owner, alias, address)` | owner | Add a known recipient to the alias book. |
 | `pay_owner(owner, to, asset, amount)` | owner (Touch ID) | Payment above the auto-approve limit; **hard caps only** (per-tx, daily, asset). |
 | `pay_executor(executor, owner, to, asset, amount)` | executor | Only if `amount <= auto_approve_limit` and within per-tx/daily limits, the asset is allowed and the recipient is known when required; otherwise a typed error (`GuardError`). |
 | `create_schedule(owner, to, asset, amount, first_run_at, interval_secs, runs) -> id` | owner (Touch ID) | Create a scheduled payment, returns its id. |
-| `cancel_schedule(owner, id)` | owner | Cancel a schedule. |
+| `cancel_schedule(owner, id)` | owner | Cancel a schedule (tightens; Touch ID not mandated). |
 | `execute_schedule(id)` | none (keeper) | One run per call; the contract validates due time and limits. |
 | `get_rule`, `get_executor`, `get_alias`, `get_schedule`, `list_schedules(owner)`, `list_due(limit)`, `spent_today(owner)` | none (reads) | Views for the UI and the keeper. |
 
