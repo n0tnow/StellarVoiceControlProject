@@ -39,24 +39,17 @@ function todo(tool: string): ChainTool {
  * summary decoded from it (`docs/interfaces.md` §2).
  *
  * TODO(B): implement in this order — `sendPayment` first (it is the M2 vertical
- * slice), then `depositTry` (SEP-10/38/6 mock anchor), then `swap`/`guardPolicy`.
+ * slice), then `swap`/`guardPolicy`. `depositTry` (SEP-10/38/6 anchor) is in ./anchor.
  */
 export const sendPayment = todo("sendPayment");
-export const depositTry = todo("depositTry");
 export const swap = todo("swap");
 export const guardPolicy = todo("guardPolicy");
 
-export interface SubmitResult {
-  hash: string;
-  explorerUrl: string;
-}
+// Anchor client (SEP-1/10/12/38/6): `depositTry`, `withdrawTry` and `submitSignedTx` live in
+// ./anchor/chainTools.ts. `submitSignedTx` receives XDR only after the shell's Touch ID gate
+// has approved the payload hash.
+export { depositTry, withdrawTry, submitSignedTx, type SubmitResult } from "./anchor/chainTools.ts";
+export * as anchor from "./anchor/index.ts";
 
-/**
- * Submits a signed envelope. Receives XDR only after the shell's Touch ID gate
- * (`SigningService`, `docs/interfaces.md` §3) has approved the payload hash.
- *
- * TODO(B): submit via RPC and return an explorer URL (Stellar.Expert / Lab).
- */
-export async function submitSignedTx(signedXdr: string): Promise<SubmitResult> {
-  throw new NotImplementedError(`submitSignedTx (${signedXdr.length} chars of XDR)`);
-}
+/** Off-chain keeper that triggers due `polaris_guard` schedules (untrusted; see src/keeper/README.md). */
+export * as keeper from "./keeper/index.ts";

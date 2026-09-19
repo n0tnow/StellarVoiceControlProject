@@ -14,6 +14,9 @@ WITH_CHAIN=0
 echo "== JS: typecheck all workspaces"
 npm run check --workspaces --if-present
 
+echo "== JS: workspace tests (keeper node:test + anchor vitest)"
+caffeinate -i npm test -w @polaris/stellar
+
 echo "== JS: production build of the shell (vite)"
 npm run build -w @polaris/app
 
