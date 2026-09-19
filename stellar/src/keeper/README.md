@@ -34,7 +34,9 @@ Consequences:
 ## What one tick does
 
 1. Resolve any earlier transaction that has no final status yet.
-2. Simulate `list_due(limit)` from the keeper account.
+2. Simulate `list_due` from the keeper account, page by page (bounded: stops at
+   `KEEPER_MAX_PER_TICK` eligible ids, at the end of the list, when the cursor
+   stops advancing, or after 10 pages).
 3. For each due id (up to `KEEPER_MAX_PER_TICK`, one at a time):
    `getAccount` -> build `execute_schedule(id)` -> `simulateTransaction` ->
    (if the simulation asks for it, `RestoreFootprint` for archived entries and
@@ -44,6 +46,17 @@ Consequences:
 
 A schedule the contract refuses is already rejected at simulation time, so a
 refused run costs no fee.
+
+## Missed runs are skipped, not replayed
+
+This is the contract's rule and the keeper never assumes otherwise: if the
+keeper (or the RPC) is down for many intervals, `execute_schedule` settles **one**
+payment and moves `next_run_at` to the first slot strictly after now; the missed
+slots are dropped and `runs_left` drops by one. So the keeper has no catch-up
+logic, never loops on a schedule, and a schedule that was refused for a week
+(say, the allowance was revoked) pays once when the cause is fixed, not a
+backlog. Each `executed` log line includes an `after` object
+(`next_run_at`, `runs_left`, `active`) read back from the contract.
 
 ## Robustness
 
@@ -56,12 +69,12 @@ refused run costs no fee.
   | Class | Meaning | Backoff |
   |---|---|---|
   | `already_executed` | someone else ran it | 1 min .. 10 min |
-  | `not_due` | ledger-clock skew | 15 s .. 2 min |
-  | `inactive` | cancelled / no runs left | 5 min .. 1 h |
-  | `rule_violated` | the user's rules forbid this run | 1 min .. 1 h |
-  | `allowance_missing` | allowance/balance not there | 1 min .. 1 h |
-  | `unknown_contract` | unmapped contract error code | 1 min .. 30 min |
-  | `auth_required` | needs a foreign signature | 5 min .. 1 h |
+  | `not_due` | ledger-clock skew (`ScheduleNotDue` #110) | 15 s .. 2 min |
+  | `inactive` | cancelled / exhausted / unknown id (#109, #111, #112) | 5 min .. 1 h |
+  | `rule_violated` | the owner's rule forbids this run (#100-#106, #114) | 1 min .. 1 h |
+  | `allowance_missing` | SAC allowance revoked/short (`InsufficientAllowance` #116) or token balance too low | 1 min .. 1 h |
+  | `unknown_contract` | unmapped contract error code, `Overflow` #115 | 1 min .. 30 min |
+  | `auth_required` | needs a foreign signature (#107, #108, #113; or auth found at simulation) | 5 min .. 1 h |
   | `keeper_funds` | keeper underfunded / fee above cap | 1 min .. 10 min |
   | `bad_seq`, `tx_expired`, `rpc` | transient | 5 s .. 1 min |
 
@@ -127,13 +140,28 @@ Events: `config`, `keeper_started`, `executed`, `dry_run`, `pending`, `failed`,
 
 ## Contract ABI used
 
-- read (simulated): `list_due(limit: u32) -> Vec<u32>`,
-  `get_schedule(id: u32) -> Schedule` (only for dry-run logs)
-- write: `execute_schedule(id: u32)` — no caller auth required.
+Deployed `polaris_guard` (see `contracts/DEPLOYED.md`); multi-tenant, no init/admin.
 
-`GUARD_ERRORS` in `errors.ts` maps the contract's error codes to the classes
-above; update it when the `#[contracterror]` enum in `contracts/polaris_guard`
-changes. Unmapped codes still work (class `unknown_contract`, backed off).
+- read (simulated by the keeper account):
+  - `list_due(limit: u32) -> Vec<u32>`: ids due at the current ledger time. Only
+    `SorobanChain.listDue` in `chain.ts` knows this signature; the keeper loop
+    talks to a paged interface (`listDue(cursor, limit) -> { ids, nextCursor }`).
+  - `get_schedule(id: u32) -> Option<Schedule>` (`null` when unknown); used for
+    the `after` state in logs and for dry-run output.
+- write: `execute_schedule(id: u32)`, no caller auth, one run per call.
+
+### Error codes
+
+Guard errors start at **100** on purpose, so a code below 100 came from the
+token (Stellar Asset Contract, 1-13) or the host, never from guard policy.
+`GUARD_ERRORS` and `TOKEN_ERRORS` in `errors.ts` map both ranges to the classes
+above (e.g. `#110 ScheduleNotDue` -> `not_due`, `#116 InsufficientAllowance` ->
+`allowance_missing`, SAC `#9 AllowanceError` -> `allowance_missing`). A test
+parses the contract's `#[contracterror]` enum and fails if the table drifts.
+Unmapped codes still work (`unknown_contract`, backed off).
+
+Only a few codes can come out of `execute_schedule` in practice: `#109`, `#110`,
+`#111`, `#116`, plus the rule checks (`#100`, `#103`, `#104`, `#106`).
 
 ## Tests
 
