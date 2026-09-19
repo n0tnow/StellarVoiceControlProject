@@ -39,8 +39,11 @@ export const RECURRENCE_AMOUNT_TOLERANCE_PCT = 10;
 /** Recurrence proposal: a finite number of future runs is always proposed, never "infinite". */
 export const DEFAULT_SCHEDULE_RUNS = 12;
 
-/** Hard cap on a proposed schedule's runs (finite by construction). */
-export const MAX_SCHEDULE_RUNS = 52;
+/**
+ * Bound for advancing a proposed `firstRunAt` to the first regular slot strictly after `now` (B3).
+ * Keeps the advance loop O(bounded); a direct arithmetic fallback handles pathological intervals.
+ */
+export const MAX_FIRST_RUN_ADVANCE_STEPS = 10_000;
 
 /** `tighten_dormant`: auto-pay on but no `pay_executor` route used for more than 30 days. */
 export const DORMANT_DAYS = 30;

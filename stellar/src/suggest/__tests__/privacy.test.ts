@@ -43,7 +43,11 @@ function allKindsFixture(): HistoryRecord[] {
 }
 
 function allKindsContext() {
-  return ctx({ autoPayEnabled: true, rule: { autoApproveLimit: "0" } });
+  return ctx({
+    autoPayEnabled: true,
+    autoPayEnabledSince: NOW - 40 * DAY,
+    rule: { autoApproveLimit: "0" },
+  });
 }
 
 describe("toLlmSafeEvidence", () => {

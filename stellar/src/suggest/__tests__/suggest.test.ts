@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { explainNoSuggestions, suggest } from "../suggest.ts";
+import {
+  SuggestInputError,
+  explainNoSuggestions,
+  suggest,
+  toLlmSafeEvidence,
+  validateSuggestContext,
+} from "../suggest.ts";
 import type { DisableAutoPay, HistoryRecord, NoChange, RuleDraft, ScheduleDraft, SuggestOptions, Suggestion } from "../types.ts";
 import {
   DAY,
@@ -172,10 +178,21 @@ describe("auto_pay_threshold", () => {
   });
 
   it("only considers known contacts when a contact list is supplied", () => {
-    const history = [...capPool(), rec({ id: "stranger", ts: NOW - DAY, amountRaw: raw("1000") })];
+    const known = Array.from({ length: 8 }, (_, index) =>
+      rec({
+        id: `k${index}`,
+        ts: NOW - (index + 1) * DAY,
+        recipientAddress: addr(0),
+        amountRaw: raw(String(10 + index)),
+      }),
+    );
+    const history = [
+      ...known,
+      rec({ id: "stranger", ts: NOW - DAY, recipientAddress: addr(500), amountRaw: raw("1000") }),
+    ];
     const context = ctx({ knownContacts: new Set([addr(0)]) });
     const threshold = find(suggest(history, context), "auto_pay_threshold");
-    expect(threshold?.evidence).toMatchObject({ count: 1, median: "10", p90: "10", max: "10" });
+    expect(threshold?.evidence).toMatchObject({ count: 8, median: "13.5", p90: "17", max: "17" });
   });
 
   it("returns no threshold when the rule cap is zero or negative", () => {
@@ -205,6 +222,60 @@ describe("auto_pay_threshold", () => {
     const threshold = find(suggest(pool(9), ctx()), "auto_pay_threshold");
     expect(threshold?.evidence.count).toBe(9);
     expect(threshold?.rationale).toMatch(/9 payments/);
+  });
+});
+
+describe("auto_pay_threshold outlier robustness (B1)", () => {
+  /** 9 records: 8 x 10 plus a single 1000 in the last 7 days (span 7d). */
+  function outlierFixture(): HistoryRecord[] {
+    return [
+      ...Array.from({ length: 8 }, (_, index) =>
+        rec({
+          id: `o${index}`,
+          ts: NOW - (index + 1) * DAY,
+          recipientAddress: addr(index),
+          amountRaw: raw("10"),
+        }),
+      ),
+      rec({ id: "outlier", ts: NOW - DAY, recipientAddress: addr(900), amountRaw: raw("1000") }),
+    ];
+  }
+
+  it("never lets a single outlier become the auto-approve threshold", () => {
+    const threshold = find(suggest(outlierFixture(), ctx()), "auto_pay_threshold");
+    expect(threshold).toBeDefined();
+    expect(threshold?.id).toBe("auto_pay_threshold:USDC:10");
+    expect((threshold?.proposedChange as RuleDraft).autoApproveLimit).toBe("10");
+    expect(threshold?.evidence).toMatchObject({ count: 8, median: "10", p90: "10", max: "10" });
+  });
+
+  it("fires the unusual alert for the same outlier fixture", () => {
+    const alert = find(suggest(outlierFixture(), ctx()), "unusual_payment_alert");
+    expect(alert).toBeDefined();
+    expect(alert?.evidence.amount).toBe("1000");
+    expect(alert?.evidence.p90).toBe("10");
+  });
+
+  it("is stable for all-identical amounts (nothing is excluded)", () => {
+    const threshold = find(suggest(pool(10), ctx()), "auto_pay_threshold");
+    expect(threshold?.evidence).toMatchObject({ count: 10, median: "10", p90: "10", max: "10" });
+    expect((threshold?.proposedChange as RuleDraft).autoApproveLimit).toBe("10");
+  });
+
+  it("requires minPayments to remain after outlier exclusion", () => {
+    // 8 records total, 7 x 10 + 1 x 1000: after exclusion only 7 remain -> no threshold.
+    const history = [
+      ...Array.from({ length: 7 }, (_, index) =>
+        rec({
+          id: `s${index}`,
+          ts: NOW - (index + 1) * DAY,
+          recipientAddress: addr(index),
+          amountRaw: raw("10"),
+        }),
+      ),
+      rec({ id: "outlier", ts: NOW - 8 * DAY, recipientAddress: addr(900), amountRaw: raw("1000") }),
+    ];
+    expect(find(suggest(history, ctx()), "auto_pay_threshold")).toBeUndefined();
   });
 });
 
@@ -244,6 +315,26 @@ describe("daily_limit", () => {
   });
 });
 
+describe("daily_limit cap invariant (B2)", () => {
+  it("clamps the fallback to the rule perTxLimit and carries the cap into the draft", () => {
+    const { history, contacts } = workedExampleHistory();
+    const context = ctx({ knownContacts: contacts, rule: { perTxLimit: "15" } });
+    const daily = find(suggest(history, context), "daily_limit");
+    expect(daily).toBeDefined();
+    const draft = daily?.proposedChange as RuleDraft;
+    expect(draft.autoApproveLimit).toBe("15");
+    expect(draft.perTxLimit).toBe("15");
+    expect(draft.dailyLimit).toBe("60");
+    expect(daily?.rationale).toMatch(/capped at your existing on-chain per-transaction limit of 15/);
+  });
+
+  it("drops the daily suggestion when the rule ordering cannot hold", () => {
+    const { history, contacts } = workedExampleHistory();
+    const context = ctx({ knownContacts: contacts, rule: { autoApproveLimit: "50", perTxLimit: "15" } });
+    expect(find(suggest(history, context), "daily_limit")).toBeUndefined();
+  });
+});
+
 describe("schedule_from_recurrence", () => {
   const repeated = addr(999);
   const filler = pool(9);
@@ -271,7 +362,46 @@ describe("schedule_from_recurrence", () => {
     expect(draft.amount).toBe("10");
     expect(draft.intervalSecs).toBe(7 * DAY);
     expect(draft.runs).toBe(12);
-    expect(draft.firstRunAt).toBe(NOW);
+    // B3: strictly after `now` (the next regular slot, not the already-due one).
+    expect(draft.firstRunAt).toBe(NOW + 7 * DAY);
+  });
+
+  function recurringSeconds(offsets: number[], amounts: string[]): HistoryRecord[] {
+    return offsets.map((offset, index) =>
+      rec({
+        id: `s${index}`,
+        ts: NOW - offset,
+        recipientAddress: repeated,
+        recipientAlias: "ada",
+        amountRaw: raw(amounts[index] ?? "10"),
+      }),
+    );
+  }
+
+  it("accepts interval jitter at exactly 10% (boundary)", () => {
+    // intervals 19s, 20s, 21s -> range 2s, mean 20s -> jitter exactly 10%.
+    const history = [...filler, ...recurringSeconds([60, 41, 21, 0], ["10", "10", "10", "10"])];
+    expect(find(suggest(history, ctx()), "schedule_from_recurrence")).toBeDefined();
+  });
+
+  it("rejects interval jitter just above 10% (boundary)", () => {
+    // intervals 9s, 10s, 10s -> range 1s, mean 29/3s -> jitter ~10.34%.
+    const history = [...filler, ...recurringSeconds([29, 20, 10, 0], ["10", "10", "10", "10"])];
+    expect(find(suggest(history, ctx()), "schedule_from_recurrence")).toBeUndefined();
+  });
+
+  it("never proposes a firstRunAt in the past (B3)", () => {
+    // Weekly recurrence whose last payment was 16 days ago (still inside the 30-day window).
+    const history = [...filler, ...recurring([30, 23, 16], ["10", "10", "10"])];
+    const schedule = find(suggest(history, ctx()), "schedule_from_recurrence");
+    expect(schedule).toBeDefined();
+    const draft = schedule?.proposedChange as ScheduleDraft;
+    expect(draft.firstRunAt).toBeGreaterThan(NOW);
+  });
+
+  it("does not propose a zero-amount schedule", () => {
+    const history = [...filler, ...recurring([28, 21, 14], ["0", "0", "0"])];
+    expect(find(suggest(history, ctx()), "schedule_from_recurrence")).toBeUndefined();
   });
 
   it("accepts interval jitter within 10%", () => {
@@ -315,12 +445,42 @@ describe("schedule_from_recurrence", () => {
 });
 
 describe("tighten_dormant", () => {
-  it("fires when auto-pay is on and pay_executor was never used", () => {
-    const dormant = find(suggest(pool(9), ctx({ autoPayEnabled: true })), "tighten_dormant");
+  it("fires when auto-pay has been enabled longer than 30 days with no use", () => {
+    const context = ctx({ autoPayEnabled: true, autoPayEnabledSince: NOW - 40 * DAY });
+    const dormant = find(suggest(pool(9), context), "tighten_dormant");
     expect(dormant).toBeDefined();
-    expect(dormant?.evidence.unusedDays).toBe(30);
+    expect(dormant?.evidence.unusedDays).toBe(40);
     expect(dormant?.evidence.lastUsedDays).toBeUndefined();
     expect((dormant?.proposedChange as DisableAutoPay).kind).toBe("disable_auto_pay");
+  });
+
+  it("does not fire 'never used' without autoPayEnabledSince (conservative)", () => {
+    expect(find(suggest(pool(9), ctx({ autoPayEnabled: true })), "tighten_dormant")).toBeUndefined();
+  });
+
+  it("does not fire when auto-pay was just enabled", () => {
+    const context = ctx({ autoPayEnabled: true, autoPayEnabledSince: NOW - 5 * DAY });
+    expect(find(suggest(pool(9), context), "tighten_dormant")).toBeUndefined();
+  });
+
+  it("honours a recent lastAutoPayUse hint for confidential usage", () => {
+    const context = ctx({
+      autoPayEnabled: true,
+      autoPayEnabledSince: NOW - 40 * DAY,
+      lastAutoPayUse: NOW - 3 * DAY,
+    });
+    expect(find(suggest(pool(9), context), "tighten_dormant")).toBeUndefined();
+  });
+
+  it("fires when the lastAutoPayUse hint is older than 30 days", () => {
+    const context = ctx({
+      autoPayEnabled: true,
+      autoPayEnabledSince: NOW - 40 * DAY,
+      lastAutoPayUse: NOW - 35 * DAY,
+    });
+    const dormant = find(suggest(pool(9), context), "tighten_dormant");
+    expect(dormant).toBeDefined();
+    expect(dormant?.evidence.unusedDays).toBe(35);
   });
 
   it("fires when the last pay_executor use is older than 30 days (larger window)", () => {
@@ -420,7 +580,11 @@ describe("sorting", () => {
     }
     records.push(rec({ id: "outlier", ts: NOW - DAY, recipientAddress: addr(900), amountRaw: raw("50") }));
 
-    const context = ctx({ autoPayEnabled: true, rule: { autoApproveLimit: "0" } });
+    const context = ctx({
+      autoPayEnabled: true,
+      autoPayEnabledSince: NOW - 40 * DAY,
+      rule: { autoApproveLimit: "0" },
+    });
     const kinds = suggest(records, context).map((suggestion) => suggestion.kind);
     expect(kinds).toEqual([
       "auto_pay_threshold",
@@ -501,5 +665,50 @@ describe("aliases in evidence", () => {
         expect(JSON.stringify(suggestion.evidence)).not.toContain(alias);
       }
     }
+  });
+});
+
+describe("data hygiene", () => {
+  it("de-duplicates history records by id (keeps the first occurrence)", () => {
+    const base = pool(9);
+    const first = base[0] as HistoryRecord;
+    const duplicate = rec({ ...first, amountRaw: raw("10") });
+    const history = [...base, duplicate];
+    const threshold = find(suggest(history, ctx()), "auto_pay_threshold");
+    // Without de-duplication this would count 10 records.
+    expect(threshold?.evidence.count).toBe(9);
+  });
+
+  it("toLlmSafeEvidence returns a deep copy", () => {
+    const { history, contacts } = workedExampleHistory();
+    const suggestion = find(
+      suggest(history, ctx({ knownContacts: contacts })),
+      "auto_pay_threshold",
+    ) as Suggestion;
+    const safe = toLlmSafeEvidence(suggestion);
+    safe.evidence.count = 12345;
+    (safe.proposal as Record<string, number | string>).autoApproveLimit = "999";
+    expect(suggestion.evidence.count).toBe(14);
+    expect((suggestion.proposedChange as RuleDraft).autoApproveLimit).toBe("20");
+  });
+
+  it("does not throw on a malformed rule string and drops the affected kind", () => {
+    const { history, contacts } = workedExampleHistory();
+    const context = ctx({ knownContacts: contacts, rule: { perTxLimit: "not-a-number" } });
+    expect(() => suggest(history, context)).not.toThrow();
+    expect(find(suggest(history, context), "auto_pay_threshold")).toBeUndefined();
+    expect(find(suggest(history, context), "daily_limit")).toBeUndefined();
+  });
+
+  it("drops only the daily suggestion when rule.dailyLimit is malformed", () => {
+    const { history, contacts } = workedExampleHistory();
+    const context = ctx({ knownContacts: contacts, rule: { dailyLimit: "oops" } });
+    expect(find(suggest(history, context), "daily_limit")).toBeUndefined();
+    expect(find(suggest(history, context), "auto_pay_threshold")).toBeDefined();
+  });
+
+  it("exposes a typed SuggestInputError only from the explicit validator", () => {
+    expect(() => validateSuggestContext(ctx({ rule: { perTxLimit: "x" } }))).toThrow(SuggestInputError);
+    expect(() => validateSuggestContext(ctx())).not.toThrow();
   });
 });

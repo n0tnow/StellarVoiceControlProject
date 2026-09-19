@@ -121,3 +121,87 @@ median `9.5`, p90 `18.4`, max `22` → threshold `20`; p95 daily total `38` × 1
 - T4: implement the history reader that produces `HistoryRecord[]` (local encrypted store + Horizon/`Paid`
   events), then T5 wires `suggest()` into the suggestions panel with Accept/Dismiss and LLM phrasing from
   `toLlmSafeEvidence`.
+
+## Review fixes (T3 corrections, 2026-09-19)
+
+Applied the blocking and non-blocking corrections from `backlog/suggest-engine-review.md`. All changes stay
+inside `stellar/src/suggest/**` (code + tests); no network, no commit/push. Every fix has a committed
+regression test. "Fails without the fix" was proven by temporarily reverting the fix in `suggest.ts`
+(backup + restore; `diff` confirmed identical), running `npm run test:suggest -w @polaris/stellar`, and
+recording the failures below.
+
+### B1 — outlier-robust auto-approve threshold (safety)
+- New `stats.dropAmountOutliers(sorted, multiplier)`: drops amounts `> UNUSUAL_MULTIPLIER (3) × median`
+  (median is robust) before the p90 is taken. `auto_pay_threshold` now derives its pool and p90 from the
+  robust set and requires at least `minPayments` to remain, else it returns no threshold. Evidence
+  (`count`/`median`/`p90`/`max`) is computed on the robust pool.
+- `unusual_payment_alert` now compares against the outlier-robust baseline (robust p90 from the
+  median-excluded pool) and reports that baseline as its `p90` evidence, so the 9-record `8×10 + 1×1000`
+  fixture both yields a safe `10` threshold and fires the alert for the `1000`.
+- Documented worked example is unchanged: 14 payments, median `9.5`, p90 `18.4`, max `22`; `3 × 9.5 =
+  28.5 > 22`, so nothing is excluded and the threshold stays `20`. The exclusion factor (`3`, i.e.
+  `UNUSUAL_MULTIPLIER`) was therefore kept as-is.
+- Tests: `auto_pay_threshold outlier robustness (B1)` — outlier fixture (safe `10` threshold + alert
+  fires), all-identical pool, and `minPayments`-after-exclusion.
+- **Fails without the fix:** reverting both `dropAmountOutliers(amounts, …)` calls to `amounts` →
+  **3 failed / 137 passed** (safe-threshold, alert-fires, minPayments-remain).
+
+### B2 — `daily_limit` cap invariant
+- Extracted one shared `computeAutoApproveThreshold(p90, max, context, decimals)` helper used by both the
+  `auto_pay_threshold` path and the `daily_limit` fallback. It rounds up, never exceeds the rounded-up
+  maximum, and clamps to `rule.perTxLimit` (reporting `capped`/`capDisplay`).
+- `dailyLimitSuggestion` now clamps its fallback to `rule.perTxLimit`, carries an existing `perTxLimit`
+  into the draft, and appends "capped at your existing on-chain per-transaction limit of …" to the
+  rationale. A pure `isRuleDraftOrdered` check enforces `0 <= autoApproveLimit <= perTxLimit <= dailyLimit`
+  and drops a draft that cannot satisfy it.
+- Test: rule `{perTxLimit:"15"}` with p90 `18.4` → draft `{autoApproveLimit:"15", perTxLimit:"15",
+  dailyLimit:"60"}`; plus a rule-ordering drop test.
+- **Fails without the fix:** uncapping the fallback and dropping the per-tx carry → **3 failed / 137
+  passed** (both B2 tests, plus the malformed-rule hygiene test).
+
+### B3 — recurrence `firstRunAt` strictly in the future
+- New bounded `advanceFirstRunAt(lastTs, interval, now)`: starts at `lastTs + interval` and advances by
+  whole intervals while `<= now` (loop bounded by `MAX_FIRST_RUN_ADVANCE_STEPS`, arithmetic fallback).
+- Zero/negative-amount recurrences are skipped (`medianAmount <= 0n`) so no `"0"` schedule draft is
+  proposed. The existing weekly test now expects `NOW + 7d`.
+- Tests: weekly recurrence ending 16 days ago → `firstRunAt > now`; zero-amount recurrence → no schedule.
+- **Fails without the fix:** `firstRunAt = lastTs + interval` → **2 failed / 138 passed**; removing the
+  zero-amount guard → **1 failed / 139 passed**.
+
+### Jitter boundary
+- Added exact-10 % (accepted: intervals 19s/20s/21s, range 2s, mean 20s) and just-over-10 % (rejected:
+  9s/10s/10s, ≈10.34 %) fixtures.
+- **Fails without the fix:** jitter reject `>` → `>=` → **1 failed / 139 passed** (exact-10 % rejected).
+
+### Dormant over-firing
+- `SuggestContext` gained optional `autoPayEnabledSince` and `lastAutoPayUse` (hint for confidential
+  auto-pay usage the engine cannot see). `tighten_dormant` fires only when auto-pay has been enabled for
+  more than `DORMANT_DAYS`; without `autoPayEnabledSince` it does **not** claim "never used" (conservative).
+  The most recent of visible `pay_executor` history and the hint is used as "last used".
+- Tests: enabled 40 days with no use fires; no `autoPayEnabledSince` does not; just-enabled does not;
+  recent `lastAutoPayUse` hint suppresses; old hint fires.
+- **Fails without the fix:** reverting to the old "never used always fires" logic → **2 failed / 138
+  passed**.
+
+### Data hygiene
+- History is de-duplicated by `id` (first occurrence kept) inside `guard()`.
+- `toLlmSafeEvidence` returns a deep copy (`structuredClone`) of evidence and proposal.
+- Removed the dead `MAX_SCHEDULE_RUNS` constant; `runs = DEFAULT_SCHEDULE_RUNS` (12).
+- Malformed rule strings no longer throw out of `suggest()`: rule amounts are parsed with a non-throwing
+  `tryParseAmount` and only the affected suggestion kind is dropped. `SuggestInputError` +
+  `validateSuggestContext()` are exposed for callers that want to fail loudly at a trust boundary.
+- Tests: de-dup count, deep-copy mutation isolation, malformed `perTxLimit`/`dailyLimit` no-throw +
+  per-kind drop, typed validator.
+- **Fails without the fix:** removing de-dup → **1 failed**; returning evidence by reference →
+  **1 failed**; making `tryParseAmount` throw → **3 failed**.
+
+### Privacy wording (docs updated separately)
+- Added to `Suggestion.title`/`rationale` doc comments: **"LOCAL-UI ONLY: may contain
+  aliases/addresses; send ONLY `toLlmSafeEvidence(...)` to an LLM."**
+- Confidential auto-pay usage is not visible to the engine (public-only guard); `context.lastAutoPayUse`
+  is the accepted caller hint.
+
+### Final gates (this worktree)
+- `npm run check -w @polaris/stellar` → passes (tsc, 0 errors).
+- `npm run test:suggest -w @polaris/stellar` → **4 files / 140 tests passed** (was 121).
+- `npm test -w @polaris/stellar` → keeper **67**, anchor **111**, suggest **140** (**318** total), all green.

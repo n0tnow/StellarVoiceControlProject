@@ -8,4 +8,10 @@ export * from "./types.ts";
 export * from "./constants.ts";
 export * from "./amount.ts";
 export * from "./stats.ts";
-export { explainNoSuggestions, suggest, toLlmSafeEvidence } from "./suggest.ts";
+export {
+  explainNoSuggestions,
+  suggest,
+  toLlmSafeEvidence,
+  SuggestInputError,
+  validateSuggestContext,
+} from "./suggest.ts";

@@ -21,7 +21,7 @@ import {
   DEFAULT_SCHEDULE_RUNS,
   DEFAULT_WINDOW_DAYS,
   DORMANT_DAYS,
-  MAX_SCHEDULE_RUNS,
+  MAX_FIRST_RUN_ADVANCE_STEPS,
   RECURRENCE_AMOUNT_TOLERANCE_PCT,
   RECURRENCE_CONFIDENCE_HIGH_OCCURRENCES,
   RECURRENCE_CONFIDENCE_MEDIUM_OCCURRENCES,
@@ -33,7 +33,16 @@ import {
   DAY_SECONDS,
 } from "./constants.ts";
 import { formatAmount, mulDivCeil, parseAmount, roundUpToDisplayMultiple } from "./amount.ts";
-import { dailyTotals, maxOf, median, medianInt, percentileNearestRank, sortBigints, spanDays } from "./stats.ts";
+import {
+  dailyTotals,
+  dropAmountOutliers,
+  maxOf,
+  median,
+  medianInt,
+  percentileNearestRank,
+  sortBigints,
+  spanDays,
+} from "./stats.ts";
 import type {
   Confidence,
   HistoryRecord,
@@ -47,6 +56,48 @@ import type {
   SuggestionChange,
   SuggestionKind,
 } from "./types.ts";
+
+/**
+ * Typed input error. Thrown **only** by the explicit `validateSuggestContext` validator; `suggest()`
+ * itself is defensive and never throws on a malformed rule string (B2/hygiene).
+ */
+export class SuggestInputError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SuggestInputError";
+  }
+}
+
+/** Parse an optional decimal rule string without throwing; `undefined` = absent, `null` = malformed. */
+function tryParseAmount(display: string | undefined, decimals: number): bigint | null | undefined {
+  if (display === undefined) return undefined;
+  try {
+    return parseAmount(display, decimals);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Explicit input validator for a trust boundary. `suggest()` tolerates malformed rule strings by
+ * dropping the affected suggestion; call this when you want to fail loudly instead.
+ */
+export function validateSuggestContext(context: SuggestContext): void {
+  const decimals = context.assetDecimals ?? DEFAULT_ASSET_DECIMALS;
+  if (!Number.isInteger(decimals) || decimals < 0 || decimals > 100) {
+    throw new SuggestInputError(`invalid assetDecimals: ${decimals}`);
+  }
+  const rule = context.rule;
+  if (!rule) return;
+  const keys = ["autoApproveLimit", "perTxLimit", "dailyLimit"] as const;
+  for (const key of keys) {
+    const value = rule[key];
+    if (value === undefined) continue;
+    if (tryParseAmount(value, decimals) === null) {
+      throw new SuggestInputError(`invalid rule.${key}: ${JSON.stringify(value)}`);
+    }
+  }
+}
 
 interface Resolved {
   windowDays: number;
@@ -79,7 +130,16 @@ function resolve(context: SuggestContext, options?: SuggestOptions): Resolved {
  */
 function guard(history: readonly HistoryRecord[], context: SuggestContext, resolved: Resolved): GuardResult {
   const start = context.now - resolved.windowDays * DAY_SECONDS;
-  const records = history.filter(
+  // Defensive hygiene: the history reader may merge local + chain sources and see the same record
+  // twice. Keep the first occurrence of each `id` so counts/percentiles are not inflated.
+  const seen = new Set<string>();
+  const deduped: HistoryRecord[] = [];
+  for (const record of history) {
+    if (seen.has(record.id)) continue;
+    seen.add(record.id);
+    deduped.push(record);
+  }
+  const records = deduped.filter(
     (record) =>
       record.status === "confirmed" &&
       record.mode === "public" &&
@@ -139,16 +199,19 @@ interface AmountStats {
   maxRaw: bigint;
 }
 
-function amountStats(records: readonly HistoryRecord[], decimals: number): AmountStats {
-  const amounts = sortBigints(records.map((record) => record.amountRaw));
+function amountStatsFromSorted(amounts: readonly bigint[], decimals: number): AmountStats {
   return {
-    count: records.length,
+    count: amounts.length,
     median: formatAmount(median(amounts), decimals),
     p90: formatAmount(percentileNearestRank(amounts, 90), decimals),
     max: formatAmount(maxOf(amounts), decimals),
     p90Raw: percentileNearestRank(amounts, 90),
     maxRaw: maxOf(amounts),
   };
+}
+
+function amountStats(records: readonly HistoryRecord[], decimals: number): AmountStats {
+  return amountStatsFromSorted(sortBigints(records.map((record) => record.amountRaw)), decimals);
 }
 
 /**
@@ -178,6 +241,66 @@ function baseEvidence(
   };
 }
 
+interface ThresholdComputation {
+  proposedRaw: bigint;
+  capped: boolean;
+  capDisplay: string;
+}
+
+/**
+ * Shared auto-approve-threshold computation (used by both `auto_pay_threshold` and the
+ * `daily_limit` draft's required `autoApproveLimit`). Rounds `p90Raw` UP to the display step, never
+ * above the rounded-up maximum observed, then clamps to `rule.perTxLimit` when present (B2).
+ * Returns `null` when the rule cap is zero/negative or malformed.
+ */
+function computeAutoApproveThreshold(
+  p90Raw: bigint,
+  maxRaw: bigint,
+  context: SuggestContext,
+  decimals: number,
+): ThresholdComputation | null {
+  let proposedRaw = roundUpToDisplayMultiple(p90Raw, decimals, ROUNDING_STEP_DISPLAY);
+  // Guard: never propose more than the maximum observed payment, rounded up by one step.
+  const roundedMax = roundUpToDisplayMultiple(maxRaw, decimals, ROUNDING_STEP_DISPLAY);
+  if (proposedRaw > roundedMax) proposedRaw = roundedMax;
+
+  let capped = false;
+  let capDisplay = "";
+  if (context.rule?.perTxLimit !== undefined) {
+    const capRaw = tryParseAmount(context.rule.perTxLimit, decimals);
+    if (capRaw === null || capRaw === undefined || capRaw <= 0n) return null;
+    capDisplay = formatAmount(capRaw, decimals);
+    if (proposedRaw > capRaw) {
+      proposedRaw = capRaw;
+      capped = true;
+    }
+  }
+  return { proposedRaw, capped, capDisplay };
+}
+
+/**
+ * Pure check of the contract rule ordering `0 <= autoApproveLimit <= perTxLimit <= dailyLimit`.
+ * When `perTxLimit` is absent the `dailyLimit` (if present) must still be `>= autoApproveLimit`.
+ * A draft that cannot satisfy the ordering is dropped rather than proposed (B2).
+ */
+function isRuleDraftOrdered(draft: RuleDraft, decimals: number): boolean {
+  const autoApprove = tryParseAmount(draft.autoApproveLimit, decimals);
+  if (autoApprove === null || autoApprove === undefined || autoApprove < 0n) return false;
+  const perTx = tryParseAmount(draft.perTxLimit, decimals);
+  if (perTx === null || (perTx !== undefined && perTx < 0n)) return false;
+  const daily = tryParseAmount(draft.dailyLimit, decimals);
+  if (daily === null || (daily !== undefined && daily < 0n)) return false;
+  if (perTx !== undefined && autoApprove > perTx) return false;
+  if (daily !== undefined) {
+    if (perTx !== undefined) {
+      if (daily < perTx) return false;
+    } else if (daily < autoApprove) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function autoPayThresholdSuggestion(
   result: GuardResult,
   context: SuggestContext,
@@ -186,41 +309,34 @@ function autoPayThresholdSuggestion(
   const pool = thresholdPool(result.records, context);
   if (pool.length === 0) return null;
   const amounts = sortBigints(pool.map((record) => record.amountRaw));
-  const p90Raw = percentileNearestRank(amounts, 90);
+  // B1: derive the threshold from an outlier-robust pool. The median is robust, so amounts above
+  // `UNUSUAL_MULTIPLIER × median` are dropped BEFORE the p90 is taken. A single outlier can no
+  // longer become the auto-approve threshold, and a small sample cannot silently auto-approve it.
+  const robustAmounts = dropAmountOutliers(amounts, UNUSUAL_MULTIPLIER);
+  if (robustAmounts.length < resolved.minPayments) return null;
+  const stats = amountStatsFromSorted(robustAmounts, resolved.decimals);
+  const p90Raw = stats.p90Raw;
   if (p90Raw <= 0n) return null;
-  const maxRaw = maxOf(amounts);
 
-  let proposedRaw = roundUpToDisplayMultiple(p90Raw, resolved.decimals, ROUNDING_STEP_DISPLAY);
-  // Guard: never propose more than the maximum observed payment, rounded up by one step.
-  const roundedMax = roundUpToDisplayMultiple(maxRaw, resolved.decimals, ROUNDING_STEP_DISPLAY);
-  if (proposedRaw > roundedMax) proposedRaw = roundedMax;
-
-  let capped = false;
-  let capDisplay = "";
-  if (context.rule?.perTxLimit !== undefined) {
-    const capRaw = parseAmount(context.rule.perTxLimit, resolved.decimals);
-    if (capRaw <= 0n) return null;
-    capDisplay = formatAmount(capRaw, resolved.decimals);
-    if (proposedRaw > capRaw) {
-      proposedRaw = capRaw;
-      capped = true;
-    }
-  }
+  const computation = computeAutoApproveThreshold(p90Raw, stats.maxRaw, context, resolved.decimals);
+  if (!computation) return null;
+  const { proposedRaw, capped, capDisplay } = computation;
 
   if (context.autoPayEnabled && context.rule?.autoApproveLimit !== undefined) {
-    const currentRaw = parseAmount(context.rule.autoApproveLimit, resolved.decimals);
-    if (currentRaw >= p90Raw) return null; // already covers p90 — nothing to re-suggest
+    const currentRaw = tryParseAmount(context.rule.autoApproveLimit, resolved.decimals);
+    if (currentRaw === null) return null;
+    if (currentRaw !== undefined && currentRaw >= p90Raw) return null; // already covers p90
   }
 
   const proposedDisplay = formatAmount(proposedRaw, resolved.decimals);
-  const count = pool.length;
+  const count = robustAmounts.length;
   const windowDays = resolved.windowDays;
   const contactPhrase =
     context.knownContacts.size > 0 ? `${count} payments to saved contacts` : `${count} payments`;
   let rationale =
     `Over the last ${windowDays} days you sent ${contactPhrase}, all under ${proposedDisplay} ` +
-    `${context.displayAsset} (median ${formatAmount(median(amounts), resolved.decimals)}, ` +
-    `p90 ${formatAmount(p90Raw, resolved.decimals)}). Allow automatic payments up to ` +
+    `${context.displayAsset} (median ${stats.median}, ` +
+    `p90 ${stats.p90}). Allow automatic payments up to ` +
     `${proposedDisplay} ${context.displayAsset}?`;
   if (capped) {
     rationale += ` Capped at your existing on-chain per-transaction limit of ${capDisplay} ${context.displayAsset}.`;
@@ -235,13 +351,14 @@ function autoPayThresholdSuggestion(
     source: `suggested from the last ${windowDays} days of payments`,
   };
   if (context.rule?.perTxLimit === undefined) draft.perTxLimit = proposedDisplay;
+  if (!isRuleDraftOrdered(draft, resolved.decimals)) return null;
 
   return {
     id: `auto_pay_threshold:${context.displayAsset}:${proposedDisplay}`,
     kind: "auto_pay_threshold",
     title: `Allow auto-pay up to ${proposedDisplay} ${context.displayAsset}`,
     rationale,
-    evidence: baseEvidence(resolved, amountStats(pool, resolved.decimals)),
+    evidence: baseEvidence(resolved, stats),
     proposedChange: draft,
     confidence: confidenceFor(count, result.spanDays),
   };
@@ -262,8 +379,9 @@ function dailyLimitSuggestion(
   const proposedRaw = roundUpToDisplayMultiple(target, resolved.decimals, ROUNDING_STEP_DISPLAY);
 
   if (context.rule?.dailyLimit !== undefined) {
-    const currentRaw = parseAmount(context.rule.dailyLimit, resolved.decimals);
-    if (currentRaw === proposedRaw) return null;
+    const currentRaw = tryParseAmount(context.rule.dailyLimit, resolved.decimals);
+    if (currentRaw === null) return null;
+    if (currentRaw !== undefined && currentRaw === proposedRaw) return null;
   }
 
   const proposedDisplay = formatAmount(proposedRaw, resolved.decimals);
@@ -275,27 +393,45 @@ function dailyLimitSuggestion(
   evidence.dailyMax = formatAmount(dailyMax, resolved.decimals);
 
   // `RuleDraft.autoApproveLimit` is required by the seam. This suggestion only changes the daily
-  // mandate, so keep the rule's existing per-tx threshold, or fall back to the p90-based threshold.
-  const fallbackThreshold = formatAmount(
-    roundUpToDisplayMultiple(stats.p90Raw, resolved.decimals, ROUNDING_STEP_DISPLAY),
-    resolved.decimals,
-  );
+  // mandate, so keep the rule's existing per-tx threshold, or fall back to the shared threshold
+  // computation (B2) which is clamped to the rule's per-tx limit so the draft can never violate
+  // `autoApproveLimit <= perTxLimit`.
+  const fallback = computeAutoApproveThreshold(stats.p90Raw, stats.maxRaw, context, resolved.decimals);
+  if (!fallback) return null;
+  let autoApproveLimit: string;
+  let fallbackCapped = false;
+  if (context.rule?.autoApproveLimit !== undefined) {
+    const currentRaw = tryParseAmount(context.rule.autoApproveLimit, resolved.decimals);
+    if (currentRaw === null || currentRaw === undefined || currentRaw < 0n) return null;
+    autoApproveLimit = context.rule.autoApproveLimit;
+  } else {
+    autoApproveLimit = formatAmount(fallback.proposedRaw, resolved.decimals);
+    fallbackCapped = fallback.capped;
+  }
   const draft: RuleDraft = {
-    autoApproveLimit: context.rule?.autoApproveLimit ?? fallbackThreshold,
+    autoApproveLimit,
     dailyLimit: proposedDisplay,
     assets: [context.displayAsset],
     knownRecipientsOnly: true,
     source: `suggested from the last ${resolved.windowDays} days of daily totals`,
   };
+  // Carry an existing per-tx cap so accepting the draft cannot silently drop it (B2).
+  if (context.rule?.perTxLimit !== undefined) draft.perTxLimit = context.rule.perTxLimit;
+  if (!isRuleDraftOrdered(draft, resolved.decimals)) return null;
+
+  let rationale =
+    `Over the last ${resolved.windowDays} days your busiest typical day reached ${p95Display} ` +
+    `${context.displayAsset} (p95), so a daily limit of ${proposedDisplay} ${context.displayAsset} ` +
+    `(1.5× with headroom) keeps auto-pay bounded. This is the agent's real daily mandate.`;
+  if (fallbackCapped) {
+    rationale += ` The auto-pay threshold is capped at your existing on-chain per-transaction limit of ${fallback.capDisplay} ${context.displayAsset}.`;
+  }
 
   return {
     id: `daily_limit:${context.displayAsset}:${proposedDisplay}`,
     kind: "daily_limit",
     title: `Set a daily limit of ${proposedDisplay} ${context.displayAsset}`,
-    rationale:
-      `Over the last ${resolved.windowDays} days your busiest typical day reached ${p95Display} ` +
-      `${context.displayAsset} (p95), so a daily limit of ${proposedDisplay} ${context.displayAsset} ` +
-      `(1.5× with headroom) keeps auto-pay bounded. This is the agent's real daily mandate.`,
+    rationale,
     evidence,
     proposedChange: draft,
     confidence: confidenceFor(stats.count, result.spanDays),
@@ -315,6 +451,25 @@ function groupByRecipient(records: readonly HistoryRecord[]): Map<string, Histor
 function byTimestampThenId(a: HistoryRecord, b: HistoryRecord): number {
   if (a.ts !== b.ts) return a.ts - b.ts;
   return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+}
+
+/**
+ * First regular run strictly AFTER `now` (B3). Starts at `lastTs + interval` and advances by whole
+ * intervals; the loop is bounded and falls back to direct arithmetic for pathological intervals
+ * (e.g. a one-second cadence observed long ago).
+ */
+function advanceFirstRunAt(lastTs: number, interval: number, now: number): number {
+  let firstRunAt = lastTs + interval;
+  let steps = 0;
+  while (firstRunAt <= now && steps < MAX_FIRST_RUN_ADVANCE_STEPS) {
+    firstRunAt += interval;
+    steps += 1;
+  }
+  if (firstRunAt <= now) {
+    const needed = Math.floor((now - lastTs) / interval) + 1;
+    firstRunAt = lastTs + needed * interval;
+  }
+  return firstRunAt;
 }
 
 function scheduleSuggestion(
@@ -347,6 +502,8 @@ function scheduleSuggestion(
   const minAmount = amounts[0] as bigint;
   const maxAmount = amounts[amounts.length - 1] as bigint;
   const medianAmount = median(amounts);
+  // A zero (or negative) amount is not a payable schedule; never propose a "0" draft.
+  if (medianAmount <= 0n) return null;
   if ((maxAmount - minAmount) * 100n > BigInt(RECURRENCE_AMOUNT_TOLERANCE_PCT) * medianAmount) {
     return null;
   }
@@ -354,8 +511,9 @@ function scheduleSuggestion(
   const proposedInterval = medianInt(intervals);
   if (proposedInterval <= 0) return null;
   const amountDisplay = formatAmount(medianAmount, resolved.decimals);
-  const runs = Math.min(DEFAULT_SCHEDULE_RUNS, MAX_SCHEDULE_RUNS);
-  const firstRunAt = (sorted[sorted.length - 1] as HistoryRecord).ts + proposedInterval;
+  const runs = DEFAULT_SCHEDULE_RUNS;
+  const lastTs = (sorted[sorted.length - 1] as HistoryRecord).ts;
+  const firstRunAt = advanceFirstRunAt(lastTs, proposedInterval, context.now);
   const alias = sorted.find((record) => record.recipientAlias)?.recipientAlias;
   const label = alias ?? address;
   const cadenceDays = proposedInterval / DAY_SECONDS;
@@ -422,25 +580,48 @@ function dormantSuggestion(
   resolved: Resolved,
 ): Suggestion | null {
   if (!context.autoPayEnabled) return null;
+
+  // Visible `pay_executor` usage, plus the caller's `lastAutoPayUse` hint (confidential auto-pay
+  // usage is invisible to the engine, so the hint is the only way to avoid over-firing). The most
+  // recent of the two is the conservative "last used" value.
   const used = result.records.filter((record) => record.route === "pay_executor");
-  const lastUsedTs = used.length > 0 ? Math.max(...used.map((record) => record.ts)) : undefined;
-  const unusedDays =
-    lastUsedTs === undefined ? resolved.windowDays : Math.floor((context.now - lastUsedTs) / DAY_SECONDS);
+  const historyLastUsed = used.length > 0 ? Math.max(...used.map((record) => record.ts)) : undefined;
+  const lastUsedTs =
+    historyLastUsed !== undefined && context.lastAutoPayUse !== undefined
+      ? Math.max(historyLastUsed, context.lastAutoPayUse)
+      : historyLastUsed ?? context.lastAutoPayUse;
+
+  const enabledSince = context.autoPayEnabledSince;
+  const enabledDays =
+    enabledSince === undefined ? undefined : Math.floor((context.now - enabledSince) / DAY_SECONDS);
+
   const neverUsed = lastUsedTs === undefined;
-  if (!neverUsed && unusedDays <= DORMANT_DAYS) return null;
+  let unusedDays: number;
+  if (neverUsed) {
+    // Conservative (B1/non-blocking): without `autoPayEnabledSince` the engine cannot distinguish
+    // "just enabled" from "idle 31 days", so it does NOT claim auto-pay was never used.
+    if (enabledSince === undefined || enabledDays === undefined) return null;
+    if (enabledDays <= DORMANT_DAYS) return null;
+    unusedDays = enabledDays;
+  } else {
+    unusedDays = Math.floor((context.now - lastUsedTs) / DAY_SECONDS);
+    if (unusedDays <= DORMANT_DAYS) return null;
+    // If we know when auto-pay was enabled, it must also have been on long enough to be "dormant".
+    if (enabledDays !== undefined && enabledDays <= DORMANT_DAYS) return null;
+  }
 
   const stats = amountStats(result.records, resolved.decimals);
   const evidence = baseEvidence(resolved, stats);
   evidence.unusedDays = unusedDays;
-  if (lastUsedTs !== undefined) evidence.lastUsedDays = unusedDays;
+  if (!neverUsed) evidence.lastUsedDays = unusedDays;
 
   return {
     id: `tighten_dormant:${context.displayAsset}`,
     kind: "tighten_dormant",
     title: `Turn off auto-pay for ${context.displayAsset}?`,
     rationale: neverUsed
-      ? `Auto-pay is on but no automatic (pay_executor) payment was used in the last ` +
-        `${unusedDays} days. Revoking the executor reduces risk.`
+      ? `Auto-pay has been on for ${unusedDays} days but no automatic (pay_executor) payment was ` +
+        `used in that period. Revoking the executor reduces risk.`
       : `Auto-pay is on but has not been used for ${unusedDays} days ` +
         `(threshold ${DORMANT_DAYS} days). Consider revoking the executor.`,
     evidence,
@@ -456,10 +637,14 @@ function unusualSuggestions(
 ): Suggestion[] {
   if (result.records.length === 0) return [];
   const amounts = sortBigints(result.records.map((record) => record.amountRaw));
-  const p90Raw = percentileNearestRank(amounts, 90);
-  if (p90Raw <= 0n) return [];
+  // B1: compare against an outlier-robust baseline. The outlier itself is excluded from the
+  // baseline pool (median-based exclusion), so it can no longer hide inside the p90 it is compared
+  // against — this makes the alert fire for the 9-record 8×10 + 1×1000 fixture.
+  const baselineAmounts = dropAmountOutliers(amounts, UNUSUAL_MULTIPLIER);
+  const baselineRaw = percentileNearestRank(baselineAmounts, 90);
+  if (baselineRaw <= 0n) return [];
   const cutoff = context.now - UNUSUAL_WINDOW_DAYS * DAY_SECONDS;
-  const thresholdRaw = BigInt(UNUSUAL_MULTIPLIER) * p90Raw;
+  const thresholdRaw = BigInt(UNUSUAL_MULTIPLIER) * baselineRaw;
   const unusual = result.records
     .filter((record) => record.ts >= cutoff && record.amountRaw > thresholdRaw)
     .sort(byTimestampThenId);
@@ -467,7 +652,7 @@ function unusualSuggestions(
   return unusual.map((record) => {
     const amountDisplay = formatAmount(record.amountRaw, resolved.decimals);
     // Ratio with one decimal, computed in integers (tenths).
-    const ratioTenths = (record.amountRaw * 10n) / p90Raw;
+    const ratioTenths = (record.amountRaw * 10n) / baselineRaw;
     const ratio = `${ratioTenths / 10n}.${ratioTenths % 10n}`;
     return {
       id: `unusual_payment_alert:${context.displayAsset}:${record.id}`,
@@ -475,10 +660,11 @@ function unusualSuggestions(
       title: `Unusual payment of ${amountDisplay} ${context.displayAsset}`,
       rationale:
         `A payment of ${amountDisplay} ${context.displayAsset} in the last ${UNUSUAL_WINDOW_DAYS} days ` +
-        `is ${ratio}× your typical p90 of ${formatAmount(p90Raw, resolved.decimals)} ` +
+        `is ${ratio}× your typical p90 of ${formatAmount(baselineRaw, resolved.decimals)} ` +
         `${context.displayAsset}. Consider requiring extra confirmation next time.`,
       evidence: {
         ...baseEvidence(resolved, amountStats(result.records, resolved.decimals)),
+        p90: formatAmount(baselineRaw, resolved.decimals),
         amount: amountDisplay,
         ratio,
         ratioWindowDays: UNUSUAL_WINDOW_DAYS,
@@ -542,8 +728,9 @@ export function suggest(
 export function toLlmSafeEvidence(suggestion: Suggestion): LlmSafeSuggestion {
   return {
     kind: suggestion.kind,
-    evidence: suggestion.evidence,
-    proposal: numericProposal(suggestion.kind, suggestion.proposedChange),
+    // Deep copy (hygiene): a caller mutating the safe payload must never mutate the suggestion.
+    evidence: structuredClone(suggestion.evidence),
+    proposal: structuredClone(numericProposal(suggestion.kind, suggestion.proposedChange)),
   };
 }
 

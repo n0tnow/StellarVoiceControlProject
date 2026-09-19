@@ -109,6 +109,23 @@ export function recipientFrequency(records: readonly HistoryRecord[]): Map<strin
   return counts;
 }
 
+/**
+ * Drop amounts strictly greater than `multiplier × median` from a sorted-ascending amount list (B1).
+ *
+ * The median is robust to a small number of large outliers, so this yields the pool used to derive
+ * the auto-pay threshold and the unusual-payment baseline. For `multiplier >= 1` the median itself
+ * always survives, so the result is never empty for a non-empty input. Only the values are
+ * filtered; callers must still require a minimum remaining count.
+ */
+export function dropAmountOutliers(sortedAsc: readonly bigint[], multiplier: number): bigint[] {
+  if (sortedAsc.length === 0) throw new Error("dropAmountOutliers: empty input");
+  if (!Number.isInteger(multiplier) || multiplier < 1) {
+    throw new Error(`dropAmountOutliers: multiplier must be an integer >= 1, got ${multiplier}`);
+  }
+  const cutoff = BigInt(multiplier) * median(sortedAsc);
+  return sortedAsc.filter((value) => value <= cutoff);
+}
+
 /** Integer median (used for recurrence intervals in seconds). */
 export function medianInt(values: readonly number[]): number {
   if (values.length === 0) throw new Error("medianInt: empty input");

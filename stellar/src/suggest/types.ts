@@ -121,6 +121,17 @@ export interface SuggestContext {
   /** The current on-chain rule, if any. */
   rule?: RuleView;
   autoPayEnabled: boolean;
+  /**
+   * Unix seconds when auto-pay was enabled, if known. `tighten_dormant` needs this to distinguish
+   * "just enabled" from "idle for 30+ days": without it the engine will not claim auto-pay was
+   * never used (conservative — confidential auto-pay usage is invisible to the engine).
+   */
+  autoPayEnabledSince?: number;
+  /**
+   * Caller-supplied hint: unix seconds of the last auto-pay (`pay_executor`) use, including
+   * confidential payments the engine cannot see. Treated as a lower bound on "last used".
+   */
+  lastAutoPayUse?: number;
   /** Recipient addresses considered "saved contacts". Empty set = treat all public recipients as candidates. */
   knownContacts: Set<string>;
   /** Dismissed suggestion ids and/or kinds. A suggestion is dropped if either matches. */
@@ -181,7 +192,13 @@ export interface Suggestion {
   /** Deterministic, hash-free, stable id, e.g. `auto_pay_threshold:USDC:20`. */
   id: string;
   kind: SuggestionKind;
+  /**
+   * LOCAL-UI ONLY: may contain aliases/addresses; send ONLY `toLlmSafeEvidence(...)` to an LLM.
+   */
   title: string;
+  /**
+   * LOCAL-UI ONLY: may contain aliases/addresses; send ONLY `toLlmSafeEvidence(...)` to an LLM.
+   */
   rationale: string;
   evidence: SuggestionEvidence;
   proposedChange: SuggestionChange;
