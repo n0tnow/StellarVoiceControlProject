@@ -374,3 +374,36 @@
   Rust 100 → 104; typecheck, build and clippy clean.
 - **Status:** implemented on `feat/a4-speak-intent` — packaged launch and the human
   mic run are still unverified. `backlog/2026-09-19-a6-webview-agent-transport.md`.
+
+## 2026-09-19 — A8: one continuous notch session, no debug panel
+- **Owner feedback:** the shell collapses to the idle pill in the middle of a turn,
+  and the `<AgentTrace>` box under the notch looks like debug UI and should not be
+  on screen.
+- **Root cause (already traced):** capture returns to `idle` *before* the final
+  transcript is emitted, and `speakingVisual` could not appear until capture was
+  idle again; with the `ready` dwell collapsing the shell too, nothing held it
+  open between "recording finished" and "audio starts" — it shrank, then re-expanded.
+- **Decision — model a turn as one explicit session, not several overlapping
+  visuals.** `app/src/lib/turnSession.ts` is a pure reducer: a session starts at
+  capture `recording` (hotkey down) and ends exactly once, at `speech_finished` or
+  after a failure's `settled` dwell. Capture `ready`/`transcribing`/`idle` only
+  advance or hold the stage, so `idle` (the STT gap) no longer collapses the shell.
+  Stages: `listening → thinking → checking → speaking`; `checking` is the owner's
+  suggested name for the intent-validation phase. Timing (5 s failure dwell, 60 s
+  stuck-turn watchdog) stays in `App.tsx` and arrives as signals, keeping the
+  machine deterministic.
+- **Decision — cross-fade the label and share one indicator treatment.** A plain
+  text swap is a hard cut; `StageLabel` keeps the outgoing label on top for 240 ms
+  while the incoming one fades in. Thinking/checking/speaking now share a single
+  CSS rule for the bars so they never restart between stages. No width change per
+  stage: one open at turn start, one close at turn end.
+- **Removed:** `AgentTrace.tsx`, the already-unused `EventLog.tsx`, their CSS, and
+  the dead `LogLine`/`describeEvent`/`makeLine`/`nowLabel` helpers plus
+  `subscribeAgentEvents`. Diagnostics stay in the console and the Rust terminal.
+- **Verification:** app stage-machine tests 0 → 9 (`node:test`; a successful turn
+  never yields an idle/collapsed visual, a failing turn settles exactly once);
+  agent 40, Rust 104 passed / 2 ignored, clippy clean, typecheck + build green.
+  The dev app is left running for the coordinator.
+- **Status:** implemented on `feat/a4-speak-intent`. **The visual animation was not
+  observed** (no screen) — the state machine is proven by tests; the on-screen
+  smoothness still needs a human eye. `backlog/2026-09-19-a8-notch-session.md`.
