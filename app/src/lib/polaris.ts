@@ -103,6 +103,20 @@ export function describeEvent(event: PolarisEvent): Omit<LogLine, "id" | "at"> {
       return { origin: "rust", title: "Transaction submitted", detail: event.hash, tone: "ok" };
     case "error":
       return { origin: "rust", title: "Error", detail: event.message, tone: "danger" };
+    case "anchor_step":
+      return {
+        origin: "agent",
+        title: `Anchor: ${event.step} — ${event.what}`,
+        detail: event.why,
+        tone: "neutral",
+      };
+    case "approval_required":
+      return {
+        origin: "agent",
+        title: `Touch ID required — ${event.reason}`,
+        detail: event.intent.source,
+        tone: "warn",
+      };
   }
 }
 
