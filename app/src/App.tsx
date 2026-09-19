@@ -119,10 +119,11 @@ export default function App() {
     let receivedStatus = false;
     let retry: ReturnType<typeof setTimeout> | undefined;
 
-    // A final transcript is the input to the agent loop, and the point the turn
-    // moves from "thinking" to "checking". The guard keeps a StrictMode
-    // double-listener (or a re-emitted transcript) from starting two model calls
-    // for one utterance.
+    // A final transcript is the input to the agent loop; the turn is already on
+    // "thinking" and stays there through the model call. `agentBusyRef` keeps a
+    // StrictMode double-listener (or a re-emitted transcript) from starting two
+    // model calls for one utterance.
+    //
     // Speaks a successful turn, settling "thinking" if the utterance produced no
     // audio at all. With A9's real-playback "Speaking", a TTS failure emits no
     // `speech_status`, so without this the notch would wait for the watchdog.
