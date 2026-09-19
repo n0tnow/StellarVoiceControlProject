@@ -1,9 +1,14 @@
 //! Tauri commands — the webview's entry points into the Rust core.
 
+use std::sync::Arc;
+use std::time::Instant;
+
 use serde::Serialize;
 use tauri::{AppHandle, State};
 
 use crate::capture::Capture;
+use crate::events::{self, PolarisEvent};
+use crate::tts::{self, Speaker};
 use crate::types::CaptureStatus;
 
 /// Testnet only — mainnet is an explicit non-goal (`docs/architecture.md` §1).
@@ -49,6 +54,72 @@ pub fn capture_stop(capture: State<'_, Capture>) -> CaptureStatus {
 #[tauri::command]
 pub fn capture_status(capture: State<'_, Capture>) -> CaptureStatus {
     capture.status()
+}
+
+/// What a successful utterance looked like. Mirrors the latency log line so the
+/// UI can show which backend actually spoke (Fish, or local after a fallback).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpeechOutcome {
+    pub backend: String,
+    pub latency_ms: u64,
+    pub characters: usize,
+}
+
+/// A failed utterance. `label` is the short UI-safe copy; `detail` is the full
+/// explanation for the log, matching step A1's error split.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpeechFailure {
+    pub label: String,
+    pub detail: String,
+}
+
+/// Speaks `text` aloud (step A3). Blocking playback can take seconds, so the
+/// work is moved to the blocking pool — never the Tauri main thread and never an
+/// async worker. The returned latency covers synthesis *and* playback. Failures
+/// are also pushed on the event stream as a short `error` label, with the full
+/// detail printed to the Rust terminal.
+#[tauri::command]
+pub async fn speak(
+    app: AppHandle,
+    speaker: State<'_, Arc<dyn Speaker>>,
+    text: String,
+) -> Result<SpeechOutcome, SpeechFailure> {
+    let characters = text.trim().chars().count();
+    let backend = Arc::clone(speaker.inner());
+    let task_backend = Arc::clone(&backend);
+    let started = Instant::now();
+    let joined = tauri::async_runtime::spawn_blocking(move || {
+        tts::speak_and_log(task_backend.as_ref(), &text)
+    })
+    .await;
+    let result = match joined {
+        Ok(result) => result,
+        Err(error) => Err(tts::TtsError::Local(format!(
+            "the speech task did not finish: {error}"
+        ))),
+    };
+
+    match result {
+        Ok(()) => Ok(SpeechOutcome {
+            backend: backend.name().to_string(),
+            latency_ms: started.elapsed().as_millis() as u64,
+            characters,
+        }),
+        Err(error) => {
+            events::emit(
+                &app,
+                PolarisEvent::Error {
+                    message: format!("TTS: {}", error.label()),
+                },
+            );
+            Err(SpeechFailure {
+                label: error.label().to_string(),
+                detail: error.detail(),
+            })
+        }
+    }
 }
 
 #[cfg(test)]

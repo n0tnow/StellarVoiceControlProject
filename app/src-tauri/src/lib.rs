@@ -15,6 +15,7 @@ mod hotkey;
 mod hotkey_flags;
 mod notch;
 mod stt;
+mod tts;
 mod types;
 
 use tauri::Manager;
@@ -38,6 +39,7 @@ pub fn run() {
             commands::capture_start,
             commands::capture_stop,
             commands::capture_status,
+            commands::speak,
             notch::notch_geometry,
             hotkey::hotkey_permission,
         ])
@@ -63,6 +65,12 @@ pub fn run() {
                 capture.clone(),
             );
             app.manage(capture);
+
+            // Step A3: text-to-speech. The backend is selected once at startup
+            // (Fish Audio with a mandatory local macOS fallback) and shared with
+            // the `speak` command through managed state; it logs its choice and
+            // any missing config itself.
+            app.manage(tts::build_backend());
 
             // Registers the Control+Option monitor and the Control+Option+Space
             // fallback; both feed the same capture latch.
