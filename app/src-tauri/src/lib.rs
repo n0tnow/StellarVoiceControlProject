@@ -24,7 +24,7 @@ use tauri::Manager;
 
 pub use commands::{AppInfo, NETWORK};
 pub use events::{AgentStage, HotkeyState, PolarisEvent, SpeechState, POLARIS_EVENT_NAME};
-pub use notch::{NotchGeometry, NotchWindowFlags};
+pub use notch::{NotchActivationPolicy, NotchGeometry, NotchWindowFlags};
 pub use types::CaptureStatus;
 
 /// Starts the desktop shell. Called from `main.rs`.
@@ -35,7 +35,7 @@ pub fn run() {
     // here is logged beyond the file path.
     env::load();
 
-    let app = tauri::Builder::default()
+    let mut app = tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             commands::app_info,
             commands::capture_start,
@@ -93,6 +93,12 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building Polaris");
 
+    // Step A15: make Polaris an accessory (agent) app **before the run loop opens
+    // the overlay window**. This is the gate that actually lets the overlay float
+    // over *another* app's fullscreen Space; the window level and collection
+    // behaviour A14 set are necessary but not sufficient (see `notch.rs`).
+    apply_activation_policy(&mut app);
+
     app.run(|app_handle, event| {
         // The monitors are process-global AppKit objects; unregister them on
         // the main thread before the process goes away.
@@ -101,3 +107,29 @@ pub fn run() {
         }
     });
 }
+
+/// macOS: makes Polaris an accessory (`LSUIElement`) app.
+///
+/// A regular-policy application's windows are **not** layered over another
+/// app's fullscreen Space, regardless of window level or collection behaviour —
+/// that is what A14's flag-level fix missed. Accessory policy is the documented
+/// mechanism overlay utilities use; it also removes the Dock icon and the app
+/// menu bar, which a notch companion has no use for.
+///
+/// The policy must be set here — on the `App` and before `run()` — rather than
+/// in the `setup` closure: Tauri creates the config window *before* `setup`
+/// runs, and the WindowServer binds the window's Space behaviour when it is
+/// created. Setting it in `setup` (as the Tauri docs suggest) would be too late.
+/// This path goes through tao's activation-policy state, which is applied at
+/// `applicationDidFinishLaunching`, i.e. before the config window is built.
+///
+/// No-op off macOS, where the crate must still compile.
+#[cfg(target_os = "macos")]
+fn apply_activation_policy(app: &mut tauri::App) {
+    app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+}
+
+/// Non-macOS: there is no AppKit activation policy; kept so `run` is identical
+/// on every platform.
+#[cfg(not(target_os = "macos"))]
+fn apply_activation_policy(_app: &mut tauri::App) {}

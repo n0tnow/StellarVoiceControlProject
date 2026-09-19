@@ -40,7 +40,10 @@ reqwest = { version = "0.13", default-features = false, features = ["blocking", 
 # mismatched major would link two incompatible objc2 crates.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3", features = ["NSScreen", "NSWindow"] }
+# `NSRunningApplication` is needed only to *read back* the app's activation
+# policy for the notch diagnostics (step A15); `NSApplicationActivationPolicy`
+# is exported under that same feature.
+objc2-app-kit = { version = "0.3", features = ["NSScreen", "NSWindow", "NSRunningApplication"] }
 # `NSGeometry` carries NSPoint/NSRect/NSSize/NSEdgeInsets; `NSEnumerator`
 # unlocks NSArray::iter, used to scan screens for the notched display.
 objc2-foundation = { version = "0.3", features = ["NSEnumerator", "NSGeometry"] }

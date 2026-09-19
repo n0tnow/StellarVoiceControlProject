@@ -21,11 +21,17 @@ const WINDOW_HEIGHT: f64 = 120.0;
 /// The overlay is the app's only window; the label is pinned by the config.
 pub const WINDOW_LABEL: &str = "main";
 
-/// `NSPopUpMenuWindowLevel` (101): above the menu bar (25) *and* above the
-/// window a fullscreen app is promoted to, so the overlay reads as a system HUD
-/// over a fullscreen Space (step A14). `NSStatusWindowLevel` (25) was above the
-/// ordinary desktop/menu bar but lost to a fullscreen window, which is why the
-/// overlay vanished as soon as an app went fullscreen.
+/// `NSPopUpMenuWindowLevel` (101): above the menu bar (25) and above an
+/// ordinary window, so the overlay reads as a system HUD rather than a window
+/// (step A14).
+///
+/// The level is **necessary but not sufficient** over *another* app's
+/// fullscreen Space: A14 raised it here and the overlay still vanished, because
+/// a regular-policy app is not layered into that Space at all. Step A15 fixed
+/// the real gate by making Polaris an accessory app (see
+/// [`activation_policy_of`] and `lib.rs::apply_activation_policy`); the level and
+/// the collection behaviour below still matter for keeping the overlay on top
+/// once that Space is joined.
 #[cfg(target_os = "macos")]
 const OVERLAY_WINDOW_LEVEL: isize = 101;
 
@@ -173,18 +179,56 @@ pub fn setup(app: &tauri::App) -> tauri::Result<()> {
     println!("polaris: notch geometry {:?}", outcome.geometry);
     // Step A14: log the actual window flags the overlay ended up with, so the
     // fullscreen behaviour is inspectable from the running process rather than
-    // assumed from the config.
+    // assumed from the config. Step A15 added `activation_policy` to that line:
+    // it must read `Accessory` or the overlay will not float over *another*
+    // app's fullscreen Space, whatever the level and behaviour say.
     println!("polaris: notch window flags {:?}", outcome.flags);
+    #[cfg(target_os = "macos")]
+    if outcome.flags.activation_policy != NotchActivationPolicy::Accessory {
+        eprintln!(
+            "polaris: WARNING overlay activation policy is {:?}, not Accessory — \
+             the overlay will not float over another app's fullscreen Space",
+            outcome.flags.activation_policy
+        );
+    }
     window.show()?;
     Ok(())
 }
 
-/// The AppKit window flags the overlay was configured with (step A14).
+/// The app's `NSApplicationActivationPolicy`, mirrored for the diagnostics
+/// payload (step A15).
+///
+/// A **regular** app's windows are not layered over *another* app's fullscreen
+/// Space, however high the window level or however wide the collection
+/// behaviour. Only an **accessory** (agent) app — `LSUIElement`,
+/// `NSApplicationActivationPolicyAccessory` — gets that layering. This enum is
+/// the inspectable form of the policy the overlay is actually running under.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum NotchActivationPolicy {
+    /// Dock icon and app menu bar; not layered over other apps' fullscreen.
+    Regular,
+    /// Agent app: no Dock icon / menu bar, and windows may float over other
+    /// apps' fullscreen Spaces. This is what step A15 requires.
+    Accessory,
+    /// Can neither activate nor be seen — not used by Polaris.
+    Prohibited,
+    /// An AppKit value this build does not know (forward compatibility).
+    Unknown,
+    /// Non-macOS: AppKit activation policy does not exist on this platform.
+    Unsupported,
+}
+
+/// The AppKit window flags the overlay was configured with (steps A14/A15).
 ///
 /// This is the inspectable evidence that the overlay can float over a
 /// fullscreen Space: it is returned by [`notch_window_flags`] and logged at
-/// startup, straight from the live `NSWindow` rather than read back from
-/// `tauri.conf.json` (which cannot express either field).
+/// startup, straight from the live `NSWindow` / `NSApplication` rather than read
+/// back from `tauri.conf.json` (which cannot express any of these fields).
+///
+/// A14 proved that `level` + `collection_behavior` alone are not enough over
+/// *another* app's fullscreen Space; `activation_policy` is the value A15 added
+/// because it is the piece that actually gates that layering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NotchWindowFlags {
@@ -199,6 +243,10 @@ pub struct NotchWindowFlags {
     pub can_join_all_spaces: bool,
     /// Whether the window can become key, i.e. whether it could activate Polaris.
     pub focusable: bool,
+    /// The process's live `NSApplicationActivationPolicy` (step A15). Must be
+    /// [`NotchActivationPolicy::Accessory`] for the overlay to float over
+    /// another app's fullscreen Space.
+    pub activation_policy: NotchActivationPolicy,
 }
 
 /// The AppKit bits for `NSWindowCollectionBehaviorFullScreenAuxiliary` (1 << 8)
@@ -208,6 +256,28 @@ pub struct NotchWindowFlags {
 const FULL_SCREEN_AUXILIARY_BIT: u64 = 1 << 8;
 #[cfg(target_os = "macos")]
 const CAN_JOIN_ALL_SPACES_BIT: u64 = 1 << 0;
+
+/// Maps the live AppKit activation policy to the diagnostics enum (step A15).
+///
+/// A plain `if` chain over the documented `NSApplicationActivationPolicy`
+/// constants, with an [`NotchActivationPolicy::Unknown`] fallback: the AppKit
+/// type is a raw `NSInteger`, so a future OS value must not be silently
+/// misreported as one of the three known policies.
+#[cfg(target_os = "macos")]
+fn activation_policy_of(
+    policy: objc2_app_kit::NSApplicationActivationPolicy,
+) -> NotchActivationPolicy {
+    use objc2_app_kit::NSApplicationActivationPolicy;
+    if policy == NSApplicationActivationPolicy::Accessory {
+        NotchActivationPolicy::Accessory
+    } else if policy == NSApplicationActivationPolicy::Regular {
+        NotchActivationPolicy::Regular
+    } else if policy == NSApplicationActivationPolicy::Prohibited {
+        NotchActivationPolicy::Prohibited
+    } else {
+        NotchActivationPolicy::Unknown
+    }
+}
 
 /// Re-reads the display geometry and repositions the overlay. Called on startup
 /// and periodically by the webview so display topology changes are picked up.
@@ -270,7 +340,7 @@ struct ConfigureOutcome {
 #[cfg(target_os = "macos")]
 fn configure(app: &AppHandle) -> Result<ConfigureOutcome, Box<dyn std::error::Error + Send + Sync>> {
     use objc2::MainThreadMarker;
-    use objc2_app_kit::{NSScreen, NSWindow};
+    use objc2_app_kit::{NSRunningApplication, NSScreen, NSWindow};
     use objc2_foundation::{NSPoint, NSRect, NSSize};
 
     let mtm = MainThreadMarker::new().ok_or("notch geometry requires the main thread")?;
@@ -317,12 +387,19 @@ fn configure(app: &AppHandle) -> Result<ConfigureOutcome, Box<dyn std::error::Er
     // fullscreen app without stealing the keyboard. The flags are read straight
     // off the live NSWindow as the inspectable evidence for that.
     let behavior = native.collectionBehavior().0 as u64;
+    // Step A15: the process's activation policy is read off the running app, not
+    // the config, because it is set in `run()` before the window exists (and so
+    // is not expressed anywhere in `tauri.conf.json`). `NSRunningApplication` is
+    // thread-safe and needs no main-thread marker.
+    let activation_policy =
+        activation_policy_of(NSRunningApplication::currentApplication().activationPolicy());
     let flags = NotchWindowFlags {
         level: native.level(),
         collection_behavior: behavior,
         full_screen_auxiliary: behavior & FULL_SCREEN_AUXILIARY_BIT != 0,
         can_join_all_spaces: behavior & CAN_JOIN_ALL_SPACES_BIT != 0,
         focusable: native.canBecomeKeyWindow(),
+        activation_policy,
     };
 
     let desired = NSRect::new(
@@ -374,6 +451,7 @@ fn configure(app: &AppHandle) -> Result<ConfigureOutcome, Box<dyn std::error::Er
             full_screen_auxiliary: false,
             can_join_all_spaces: false,
             focusable: false,
+            activation_policy: NotchActivationPolicy::Unsupported,
         },
     })
 }
@@ -485,5 +563,44 @@ mod tests {
         let raw = behavior.0 as u64;
         assert!(raw & FULL_SCREEN_AUXILIARY_BIT != 0);
         assert!(raw & CAN_JOIN_ALL_SPACES_BIT != 0);
+    }
+
+    /// Step A15: the diagnostics must report the live activation policy honestly.
+    /// The three documented AppKit policies map to their names, and an unknown
+    /// raw value is not silently folded into one of them.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_activation_policy_maps_from_appkit() {
+        use objc2_app_kit::NSApplicationActivationPolicy as Policy;
+        assert_eq!(
+            activation_policy_of(Policy::Regular),
+            NotchActivationPolicy::Regular
+        );
+        assert_eq!(
+            activation_policy_of(Policy::Accessory),
+            NotchActivationPolicy::Accessory
+        );
+        assert_eq!(
+            activation_policy_of(Policy::Prohibited),
+            NotchActivationPolicy::Prohibited
+        );
+        assert_eq!(
+            activation_policy_of(Policy(42)),
+            NotchActivationPolicy::Unknown
+        );
+    }
+
+    /// The new field is part of the `notch_window_flags` payload contract, so its
+    /// serialized spelling is pinned here (camelCase, like the rest of the crate).
+    #[test]
+    fn activation_policy_serializes_as_camel_case() {
+        assert_eq!(
+            serde_json::to_string(&NotchActivationPolicy::Accessory).unwrap(),
+            "\"accessory\""
+        );
+        assert_eq!(
+            serde_json::to_string(&NotchActivationPolicy::Regular).unwrap(),
+            "\"regular\""
+        );
     }
 }
