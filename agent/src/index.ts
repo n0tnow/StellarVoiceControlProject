@@ -22,6 +22,13 @@ export {
 } from "./loop.ts";
 export { POLARIS_SYSTEM_PROMPT } from "./prompt.ts";
 export {
+  confirmationSentence,
+  SpeechQueue,
+  spokenText,
+  type SpeakFn,
+  type SpokenResult,
+} from "./speech.ts";
+export {
   AGENT_API_KEY_ENV,
   AGENT_BASE_URL_ENV,
   AGENT_MODEL_ENV,
