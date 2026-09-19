@@ -8,11 +8,21 @@ Testnet only. No mainnet deployment exists and none is planned for this mileston
 |---|---|
 | Contract | `polaris_guard` |
 | Network | Stellar **testnet** (`Test SDF Network ; September 2015`) |
-| Contract ID | `CB5CQHV6OK6AF5ANTE7YHJ6UPG5QAIPHB6UVLRLDKNQ22VEQOHU22RYY` |
+| Contract ID | `CDIWQTYA7OBF2FKLLHQWYZ2Q2L4PAEBLLMFRXVY4R7MAM45LX7Q2R2XB` |
 | Deployer / demo owner | `GCLBGU2PR36SFHKPSI5WPHD3ZNPZRIXJYQGUVIR6PR4R6R6U3XNNG46E` (CLI identity `w1`) |
-| Deploy tx | [`72746951…`](https://stellar.expert/explorer/testnet/tx/72746951ee191dae8ee8822ef3e2bd11d10132b857c6c9acde3e74466dd9386a) |
-| Wasm | `contracts/target/wasm32v1-none/release/polaris_guard.wasm`, 22,367 bytes |
-| Explorer | https://stellar.expert/explorer/testnet/contract/CB5CQHV6OK6AF5ANTE7YHJ6UPG5QAIPHB6UVLRLDKNQ22VEQOHU22RYY |
+| Wasm | `contracts/target/wasm32v1-none/release/polaris_guard.wasm`, 23,261 bytes |
+| Explorer | https://stellar.expert/explorer/testnet/contract/CDIWQTYA7OBF2FKLLHQWYZ2Q2L4PAEBLLMFRXVY4R7MAM45LX7Q2R2XB |
+
+### Superseded deployments
+
+| Contract ID | Status | Why |
+|---|---|---|
+| `CB5CQHV6OK6AF5ANTE7YHJ6UPG5QAIPHB6UVLRLDKNQ22VEQOHU22RYY` | **DEPRECATED — do not use** | Carried a global cap of 200 active schedules backed by one shared `ActiveScheds` list. A handful of funded accounts could fill it with far-future schedules only they could cancel, permanently blocking `create_schedule` for everyone else; with no admin and no upgrade path the only remedy was a redeploy. Its `list_due(limit)` ABI is also gone. |
+
+Because the guard has no upgrade entrypoint, a fix means a new contract ID and every
+owner re-publishing their rule and allowance against it. That is the cost this
+milestone accepts in exchange for having nothing upgradeable to attack; it is also
+the reason to get the storage layout right before anyone depends on it.
 
 Demo identities (all testnet, all created with `stellar keys generate --fund`; the
 secrets live in the stellar-cli keystore and are never committed):
@@ -140,6 +150,7 @@ Notes that cost time to discover:
 
 ```bash
 # 1. Publish the rule. i128 fields must be JSON *strings*.
+#    `allowed_assets` currently accepts at most ONE asset — see below.
 stellar contract invoke --id <GUARD> --network testnet --source-account w1 \
   -- set_rule --owner <OWNER> --rule '{
        "auto_approve_limit":"100000000",
@@ -157,6 +168,86 @@ stellar contract invoke --id <GUARD> --network testnet --source-account w1 \
   -- set_alias --owner <OWNER> --alias ada --address <G...>
 ```
 
+## What the rule actually promises — read before writing app copy
+
+Three things about the rule are easy to state wrongly to a user, and two of them
+place a hard requirement on the client.
+
+### 1. `daily_limit` is the agent's real mandate, not `auto_approve_limit`
+
+`auto_approve_limit` is a **per-transaction** ceiling. Nothing in the contract caps
+how *many* payments the agent makes. With the demo rule (auto-approve 10, daily
+200), a compromised or misbehaving executor key can settle **twenty** payments of 10
+to an address of its choosing, every day, indefinitely — each one individually
+inside the mandate.
+
+So a user told *"auto-approve under 10 USDC"* will not infer *"the agent can move
+200 a day unattended"*, but that is the truth. **App copy must present `daily_limit`
+as the agent's real spending mandate**; `auto_approve_limit` is only "how big a
+single unattended payment may be". `known_recipients_only` is the only brake on
+*where* the money goes, and it is off by default — recommend turning it on.
+
+A per-day transaction-count cap is a sensible follow-up and is tracked in the
+backlog.
+
+### 2. Never forward an agent-supplied `asset` into `pay_owner`
+
+`pay_owner` deliberately does **not** check `asset` against `allowed_assets`, so the
+owner can never be locked out of their own guard by a misconfigured list. The
+consequence is that `pay_owner` will call whatever contract address it is handed.
+
+A contract that merely mimics SEP-41 can return `i128::MAX` from `allowance`, do
+nothing at all in `transfer_from`, and the guard will still record the spend and
+publish a `Paid` event. **`Paid` and `spent_today` are therefore evidence that the
+guard authorised a payment, not that value moved.** Confirm real movement by reading
+the token's own `transfer` event or the recipient's balance.
+
+The exposure is bounded — the owner signs the call, and they hold no allowance on a
+token they never approved — but in this product the *agent* proposes the parameters
+and the user approves with Touch ID, so a compromised agent chooses the asset
+address. **Required of the client: resolve `asset` from the owner's own allowlist
+locally and never pass through an agent-supplied address.** The approval card must
+render the asset it is actually about to sign, taken from the transaction XDR.
+
+### 3. One asset per rule, for now
+
+`set_rule` rejects `allowed_assets.len() > 1` with `InvalidRule` (#102). The daily
+budget is a single cross-asset counter, and raw units are not comparable across
+decimals: a 2-decimal token beside 7-decimal USDC would make `daily_limit`
+meaningless, since 200 raw units of the former would consume the same budget as
+0.00002 USDC. The limit lifts when a per-asset `Spent(owner, asset)` counter lands.
+
+## Keeper notes — scanning for due schedules
+
+There is **no global index of schedules**, deliberately: the earlier revision had one
+and it was a cross-tenant DoS (see *Superseded deployments*). Discovery is a
+paginated scan over the id space instead.
+
+```
+cursor = 0
+loop {
+    (ids, cursor) = list_due(cursor, 100)     // scans <= 100 ids per call
+    for id in ids { execute_schedule(id) }
+    if cursor == 0 { break }                  // one full sweep done
+}
+```
+
+* `list_due(cursor, limit)` bounds the **scan**, not the result: it examines at most
+  `limit` ids (clamped to 100, comfortably under the ~200 ledger-entry read ceiling)
+  starting at `cursor`, and returns `(due_ids, next_cursor)`. `next_cursor == 0`
+  means the sweep reached the end of the id space.
+* `next_schedule_id()` reports the upper bound of that space.
+* Ids are never reused. Cancelled and exhausted schedules leave **holes** that the
+  scan skips, so a full sweep costs `ceil(next_schedule_id / limit)` read-only
+  simulations — proportional to schedules *ever created*, not currently active.
+  Someone creating throwaway schedules raises the keeper's polling cost; they cannot
+  block anyone from scheduling, which is the tradeoff this layout chooses. A keeper
+  that cares can remember the lowest still-active id and start its cursor there.
+* `execute_schedule` needs no authorization and no registration — any funded account
+  can call it. Treat `#110 ScheduleNotDue` and `#111 ScheduleInactive` as benign
+  races (another keeper won), and `#104 OverDailyLimit` as "retry after UTC
+  midnight".
+
 ## Contract error codes
 
 The guard numbers its errors from **100** on purpose. A Soroban contract error
@@ -170,7 +261,7 @@ the host, not from policy.
 |---|---|---|
 | 100 | `NotConfigured` | No rule published for this owner yet |
 | 101 | `InvalidAmount` | Zero or negative amount |
-| 102 | `InvalidRule` | Limits out of order, non-positive, or too many assets |
+| 102 | `InvalidRule` | Limits out of order or non-positive, or more than one allowed asset |
 | 103 | `OverPerTxLimit` | Hard stop — the rule itself must change |
 | 104 | `OverDailyLimit` | Hard stop until the UTC day rolls over |
 | 105 | `NeedsOwnerApproval` | **Ask for Touch ID and retry via `pay_owner`** |
@@ -182,7 +273,7 @@ the host, not from policy.
 | 111 | `ScheduleInactive` | Cancelled or exhausted |
 | 112 | `InvalidSchedule` | `runs == 0`, or a one-shot asking for many runs |
 | 113 | `NotScheduleOwner` | |
-| 114 | `TooManySchedules` | 25 active per owner, 200 globally |
+| 114 | `TooManySchedules` | 25 active schedules per owner. Per-owner only — no global cap |
 | 115 | `Overflow` | Checked arithmetic refused |
 | 116 | `InsufficientAllowance` | The owner revoked or under-funded the SAC allowance |
 
@@ -201,5 +292,9 @@ NeedsOwnerApproval**, re-sends it as the owner, then creates a one-shot schedule
 shows the early call rejected with `#110 ScheduleNotDue`, and has an unrelated
 keeper account execute it once it comes due.
 
-Verified run (2026-09-19): payee ended at `38.0000000 PGUSD`, owner
-`spent_today` at `380000000` raw units.
+Verified run against `CDIWQTYA…` (2026-09-19): the 3 PGUSD agent payment settled,
+the 25 PGUSD one was refused with `#105`, the owner re-sent it, the early keeper call
+was refused with `#110`, `list_due --cursor 0 --limit 100` returned `[[1],0]`, and the
+keeper settled the schedule. Payee ended at `73.0000000 PGUSD` (the asset carries
+balances from the superseded contract's demo run too); `spent_today` for the owner
+read `350000000` raw units — 3 + 25 + 7 PGUSD through this contract.

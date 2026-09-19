@@ -150,8 +150,11 @@ expect_error 110 ScheduleNotDue "$EARLY_LOG"
 step "8. Waiting for the schedule to come due, then a keeper triggers it"
 while [[ "$(date +%s)" -lt "$DUE" ]]; do sleep 2; done
 sleep 6 # let the ledger clock catch up with wall time
-note "due schedules according to the contract:"
-invoke --source-account "$KEEPER_KEY" -- list_due --limit 10
+note "due schedules according to the contract (paginated scan from cursor 0):"
+# list_due bounds the SCAN, not the result: it examines at most `limit` ids from
+# `cursor` and hands back the next cursor (0 = end of the id space). A real keeper
+# loops until the cursor comes back 0.
+invoke --source-account "$KEEPER_KEY" -- list_due --cursor 0 --limit 100
 # The keeper holds no authority: it signs the transaction envelope (someone has
 # to pay the fee) but the contract requires no authorization from it at all.
 invoke --source-account "$KEEPER_KEY" -- execute_schedule --id "$SCHED_ID"
