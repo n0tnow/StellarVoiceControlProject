@@ -223,9 +223,11 @@ pub struct DaySpend {
 /// The layout now follows the append-only enumeration pattern from Stellar's
 /// storage-strategies guide: a monotonic counter, one entry per item, and
 /// pagination pushed to the caller (see [`PolarisGuard::list_due`]). `NextSchedId`
-/// is the only shared entry left, and only `create_schedule` writes it — the
-/// keeper never touches it, and two owners contend only if they create schedules
-/// in the very same ledger.
+/// is the only shared entry left. Only `create_schedule` changes its **value**;
+/// `execute_schedule` extends its TTL (and the owner's schedule index TTL) so a
+/// running deployment does not hand the untrusted keeper a restore bill, which
+/// means two runs landing in the same ledger now contend on that one entry — a
+/// bounded rent bump traded for TTL hygiene, deliberately.
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
@@ -242,7 +244,8 @@ pub enum DataKey {
     /// Active schedule ids of one owner (bounded by `MAX_ACTIVE_PER_OWNER`).
     /// Per-owner, so one tenant filling it affects nobody else.
     OwnerScheds(Address),
-    /// Monotonic id source. Written only by `create_schedule`.
+    /// Monotonic id source. Written by `create_schedule`; TTL-extended by
+    /// `execute_schedule` without ever changing the value.
     NextSchedId,
     /// (owner, recipient) -> u32 — how many of the owner's aliases currently
     /// resolve to that recipient. Aliases are arbitrary strings with no reverse
@@ -673,8 +676,20 @@ impl PolarisGuard {
         env.storage().persistent().set(&skey, &schedule);
         bump(&env, &skey);
         if !schedule.active {
+            // `deindex` rewrites the owner's index and bumps it when the id was
+            // found there, which is the only case that can happen here.
             deindex(&env, &owner, id);
+        } else {
+            // The run did not consume the schedule, so the owner's index entry
+            // must stay alive for as long as any of their schedules can run.
+            bump(&env, &DataKey::OwnerScheds(owner.clone()));
         }
+        // Keep the shared id counter (`list_due`'s upper bound) alive on the
+        // keeper's write path too. Protocol 23 auto-restores archived persistent
+        // entries, so this is restore-cost hygiene, not a data-loss fix: without
+        // it the untrusted keeper eventually pays to restore an entry no owner
+        // touched for months.
+        bump(&env, &DataKey::NextSchedId);
 
         // --- interaction ---
         settle(&env, &owner, &schedule.to, &schedule.asset, schedule.amount)?;

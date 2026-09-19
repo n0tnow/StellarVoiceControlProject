@@ -7,14 +7,17 @@
 extern crate std;
 
 use soroban_sdk::{
-    testutils::{Address as _, Events as _, Ledger as _, MockAuth, MockAuthInvoke},
+    testutils::{
+        storage::Persistent as _, Address as _, Events as _, Ledger as _, MockAuth,
+        MockAuthInvoke,
+    },
     token::{StellarAssetClient, TokenClient},
     Address, Env, Event as _, IntoVal, String, Symbol, Vec,
 };
 
 use crate::{
-    Error, Paid, PolarisGuard, PolarisGuardClient, Rule, ScheduleCancelled, ScheduleCreated,
-    ScheduleRun,
+    DataKey, Error, Paid, PolarisGuard, PolarisGuardClient, Rule, ScheduleCancelled,
+    ScheduleCreated, ScheduleRun, BUMP_THRESHOLD, BUMP_TO,
 };
 
 /// 1 USDC in raw units (7 decimals), so the numbers below read like the UI does.
@@ -697,6 +700,56 @@ fn schedule_ignores_the_auto_approve_limit() {
         .create_schedule(&fx.owner, &fx.alice, &fx.asset, &(45 * USDC), &T0, &0, &1);
     fx.guard.execute_schedule(&id);
     assert_eq!(fx.token.balance(&fx.alice), 45 * USDC);
+}
+
+#[test]
+fn execute_schedule_extends_the_index_and_id_counter_ttl() {
+    // The keeper's write path must keep the two entries it depends on alive:
+    // the owner's active-schedule index and the shared id counter. Both used to
+    // be extended only by `create_schedule`/`deindex`, so a schedule that ran for
+    // months without new creates could let them fall below the bump threshold
+    // (Protocol 23 auto-restores them, but the keeper then pays restore rent).
+    let env = Env::default();
+    env.mock_all_auths();
+    let fx = setup(&env);
+    configure(&fx, &env, false);
+
+    let id = fx.guard.create_schedule(
+        &fx.owner,
+        &fx.alice,
+        &fx.asset,
+        &(2 * USDC),
+        &T0,
+        &3_600,
+        &3,
+    );
+
+    let okey = DataKey::OwnerScheds(fx.owner.clone());
+    let nkey = DataKey::NextSchedId;
+
+    // `setup` pins the ledger at 1_000, so a freshly bumped entry lives until
+    // 1_000 + BUMP_TO. Walk the ledger forward to just inside the bump window
+    // (still live, so `get_ttl` is readable).
+    let long_later = 1_000 + BUMP_TO - BUMP_THRESHOLD + 10;
+    env.ledger().set_sequence_number(long_later);
+    // The SAC allowance is *temporary* storage and has genuinely expired here
+    // (the ledger outran its `live_until`); renew it like a keep-alive cron
+    // would, so the run itself is what this test exercises.
+    fx.token
+        .approve(&fx.owner, &fx.guard_id, &(10_000 * USDC), &(long_later + 100_000));
+    env.as_contract(&fx.guard_id, || {
+        assert!(env.storage().persistent().get_ttl(&okey) <= BUMP_THRESHOLD);
+        assert!(env.storage().persistent().get_ttl(&nkey) <= BUMP_THRESHOLD);
+    });
+
+    // One run — the schedule stays active, so the owner's index must survive it.
+    fx.guard.execute_schedule(&id);
+    assert!(fx.guard.get_schedule(&id).unwrap().active);
+
+    env.as_contract(&fx.guard_id, || {
+        assert!(env.storage().persistent().get_ttl(&okey) > BUMP_THRESHOLD);
+        assert!(env.storage().persistent().get_ttl(&nkey) > BUMP_THRESHOLD);
+    });
 }
 
 #[test]
