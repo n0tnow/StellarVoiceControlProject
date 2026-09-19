@@ -2,13 +2,16 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   Account,
+  Address,
   Keypair,
   Networks,
   SorobanDataBuilder,
   StrKey,
   Transaction,
   nativeToScVal,
+  scValToNative,
   xdr,
+  type Operation,
 } from "@stellar/stellar-sdk";
 import { SorobanChain, type RpcLike } from "./chain.ts";
 
@@ -83,18 +86,95 @@ const u32 = (n: number): xdr.ScVal => nativeToScVal(n, { type: "u32" });
 const vecOf = (ids: number[]): xdr.ScVal => xdr.ScVal.scvVec(ids.map(u32));
 const ok = (ledger = 55): Any => ({ status: "SUCCESS", ledger });
 
-test("listDue decodes the u32 vec returned by simulating list_due", async () => {
+/** Simulation response for the paginated `list_due(cursor, limit) -> (Vec<u32>, u32)`. */
+const pageSim = (ids: number[], nextCursor: number): Any =>
+  okSim(xdr.ScVal.scvVec([vecOf(ids), u32(nextCursor)]));
+
+/** Decode the contract invocation carried by a (single-op) built transaction. */
+function invokedCall(tx: Transaction): { name: string; args: xdr.ScVal[] } {
+  const op = tx.operations[0] as Operation.InvokeHostFunction;
+  assert.equal(op.func.type, "hostFunctionTypeInvokeContract");
+  if (op.func.type !== "hostFunctionTypeInvokeContract") throw new Error("not an invoke");
+  return {
+    name: op.func.invokeContract.functionName.toString(),
+    args: op.func.invokeContract.args,
+  };
+}
+
+test("listDue calls list_due(cursor, limit) and decodes the (Vec<u32>, u32) tuple", async () => {
   const { rpc, chain } = setup();
-  rpc.sims = [okSim(vecOf([4, 9]))];
+  rpc.sims = [pageSim([4, 9], 0)];
   assert.deepEqual(await chain.listDue(0, 10), { ids: [4, 9], nextCursor: null });
+  const call = invokedCall(rpc.simulated[0]!);
+  assert.equal(call.name, "list_due");
+  assert.deepEqual(call.args.map((a) => scValToNative(a)), [0, 10], "cursor is passed, not just the limit");
   // The read-only call is only simulated, never sent.
   assert.equal(rpc.sent.length, 0);
+});
+
+test("listDue follows a mid-list cursor; only the contract's 0 ends the scan", async () => {
+  const { rpc, chain } = setup();
+  rpc.sims = [pageSim([3], 8)];
+  assert.deepEqual(await chain.listDue(4, 5), { ids: [3], nextCursor: 8 });
+  assert.deepEqual(invokedCall(rpc.simulated[0]!).args.map((a) => scValToNative(a)), [4, 5]);
+});
+
+test("a full sweep walks pages until the contract returns cursor 0", async () => {
+  const { rpc, chain } = setup();
+  rpc.sims = [pageSim([1, 2], 4), pageSim([5], 0)];
+  assert.deepEqual(await chain.listDue(0, 2), { ids: [1, 2], nextCursor: 4 });
+  assert.deepEqual(await chain.listDue(4, 2), { ids: [5], nextCursor: null });
 });
 
 test("listDue surfaces a failing simulation as an error (so the loop backs off)", async () => {
   const { rpc, chain } = setup();
   rpc.sims = [errSim("HostError: Error(Contract, #1)")];
   await assert.rejects(chain.listDue(0, 10), /list_due simulation failed/);
+});
+
+test("getSchedule: None (void) decodes to null", async () => {
+  const { rpc, chain } = setup();
+  rpc.sims = [okSim(xdr.ScVal.scvVoid())];
+  assert.equal(await chain.getSchedule(42), null);
+});
+
+test("getSchedule: Some(Schedule) decodes to a record with bigint amount/time fields", async () => {
+  const { rpc, chain } = setup();
+  const owner = Keypair.random().publicKey();
+  const to = Keypair.random().publicKey();
+  const asset = StrKey.encodeContract(Buffer.alloc(32, 9));
+  const entry = (k: string, v: xdr.ScVal): xdr.ScMapEntry =>
+    new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol(k), val: v });
+  const address = (pk: string): xdr.ScVal => xdr.ScVal.scvAddress(Address.fromString(pk).toScAddress());
+  rpc.sims = [
+    okSim(
+      xdr.ScVal.scvMap([
+        entry("id", u32(7)),
+        entry("owner", address(owner)),
+        entry("to", address(to)),
+        entry("asset", address(asset)),
+        entry("amount", nativeToScVal(50_000000n, { type: "i128" })),
+        entry("next_run_at", nativeToScVal(1_789_822_495n, { type: "u64" })),
+        entry("interval_secs", nativeToScVal(30n, { type: "u64" })),
+        entry("runs_left", u32(2)),
+        entry("active", xdr.ScVal.scvBool(true)),
+      ]),
+    ),
+  ];
+  const s = await chain.getSchedule(7);
+  assert.ok(s);
+  assert.equal(s.id, 7);
+  assert.equal(s.owner, owner);
+  assert.equal(s.to, to);
+  assert.equal(s.asset, asset);
+  assert.equal(s.amount, 50_000000n);
+  assert.equal(typeof s.amount, "bigint");
+  assert.equal(s.next_run_at, 1_789_822_495n);
+  assert.equal(typeof s.next_run_at, "bigint");
+  assert.equal(s.interval_secs, 30n);
+  assert.equal(typeof s.interval_secs, "bigint");
+  assert.equal(s.runs_left, 2);
+  assert.equal(s.active, true);
 });
 
 test("execute: simulate -> assemble -> sign -> send -> poll to SUCCESS", async () => {

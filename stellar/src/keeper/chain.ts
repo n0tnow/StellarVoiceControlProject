@@ -125,16 +125,30 @@ export class SorobanChain implements KeeperChain {
   /**
    * THE ONLY place that knows the `list_due` ABI.
    *
-   * Currently deployed guard: `list_due(limit: u32) -> Vec<u32>` (a single
-   * page, no cursor). When the contract moves to a paginated read, only this
-   * method changes: pass `cursor` as an argument and decode the returned
-   * `(Vec<u32>, next_cursor)` tuple into a `DuePage` (mapping the contract's
-   * end-of-list signal to `nextCursor: null`).
+   * Current guard: `list_due(cursor: u32, limit: u32) -> (Vec<u32>, u32)`.
+   * The scan examines at most `limit` ids starting at `cursor` (the contract
+   * clamps to its own MAX_DUE_SCAN) and returns `(due_ids, next_cursor)`.
+   * `next_cursor` is the id to pass next, or `0` once the scan reached the end
+   * of the id space — mapped here to `nextCursor: null`, the port's only
+   * end-of-pages signal (a cursor never equals a schedule id, so `0` is
+   * unambiguous on the contract side; the keeper loop just follows it).
    */
-  async listDue(_cursor: number, limit: number): Promise<DuePage> {
-    const value = await this.readCall("list_due", nativeToScVal(limit, { type: "u32" }));
-    if (!Array.isArray(value)) throw new Error("list_due returned a non-array value");
-    return { ids: value.map((v) => Number(v)), nextCursor: null };
+  async listDue(cursor: number, limit: number): Promise<DuePage> {
+    const value = await this.readCall(
+      "list_due",
+      nativeToScVal(cursor, { type: "u32" }),
+      nativeToScVal(limit, { type: "u32" }),
+    );
+    if (!Array.isArray(value) || value.length !== 2) {
+      throw new Error("list_due returned a malformed page (expected (Vec<u32>, u32))");
+    }
+    const [ids, next] = value as [unknown, unknown];
+    if (!Array.isArray(ids)) throw new Error("list_due returned a non-array id vector");
+    const nextCursor = Number(next);
+    if (!Number.isInteger(nextCursor) || nextCursor < 0) {
+      throw new Error(`list_due returned a malformed next cursor: ${String(next)}`);
+    }
+    return { ids: ids.map((v) => Number(v)), nextCursor: nextCursor === 0 ? null : nextCursor };
   }
 
   /** `get_schedule` returns `Option<Schedule>`: void (None) decodes to null. */
