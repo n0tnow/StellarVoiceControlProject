@@ -3,7 +3,7 @@ import { test } from "node:test";
 
 import type { Intent } from "@polaris/interfaces";
 
-import { confirmationSentence, isSpeakable, SpeechQueue, spokenText } from "./speech.ts";
+import { capSpokenText, confirmationSentence, isSpeakable, MAX_SPOKEN_CHARS, SpeechQueue, spokenText } from "./speech.ts";
 
 function intent(overrides: Partial<Intent> = {}): Intent {
   return { kind: "send", asset: "USDC", amount: "5", ...overrides };
@@ -240,4 +240,63 @@ test("whenIdle resolves immediately when nothing is speaking", async () => {
   const queue = new SpeechQueue(async () => {});
   await queue.whenIdle();
   assert.equal(queue.speaking, false);
+});
+
+test("the spoken text is capped so a rambling answer cannot reach TTS (step A12)", () => {
+  // The owner's real log: 261 chars → 30 s of Fish synthesis. The answer below
+  // is far past the cap and must be cut down before it is spoken.
+  const rambling =
+    "Sure! Let me explain. Sending money on Stellar is fast and cheap because " +
+    "the network settles in a few seconds and fees are fractions of a cent, so " +
+    "you can move USDC to bilal right away if you want, just confirm the amount.";
+  const spoken = spokenText({ answer: rambling });
+  assert.ok(spoken.length <= MAX_SPOKEN_CHARS, `spoken length ${spoken.length}`);
+  // It must still read like a sentence, not a fragment of a word.
+  assert.ok(spoken.endsWith(".") || spoken.endsWith("…"), spoken);
+  assert.ok(!/\s\S{20}$/.test(spoken), "must not cut mid-sentence-word");
+  // The cap is the whole point: the raw answer is much longer than the cap.
+  assert.ok(rambling.length > MAX_SPOKEN_CHARS);
+});
+
+test("capSpokenText keeps short text exactly and only shortens long text", () => {
+  assert.equal(capSpokenText("  Sending 5 USDC to Ahmet. Do you confirm?  "), "Sending 5 USDC to Ahmet. Do you confirm?");
+  // A 120-char boundary is inclusive.
+  const exact = "a".repeat(MAX_SPOKEN_CHARS);
+  assert.equal(capSpokenText(exact), exact);
+  assert.equal(capSpokenText("a".repeat(MAX_SPOKEN_CHARS + 1)).length, MAX_SPOKEN_CHARS + 1);
+});
+
+test("capSpokenText prefers a sentence boundary, then a word boundary", () => {
+  // A sentence boundary inside the window wins and needs no ellipsis.
+  const twoSentences = `${"x".repeat(80)}. ${"y".repeat(80)}.`;
+  const bySentence = capSpokenText(twoSentences, 90);
+  assert.ok(bySentence.endsWith("."), bySentence);
+  assert.ok(!bySentence.endsWith("…"), bySentence);
+  assert.ok(bySentence.length <= 90);
+
+  // No terminator: cut at a word boundary and mark the cut.
+  const words = Array.from({ length: 60 }, (_, index) => `word${index}`).join(" ");
+  const byWord = capSpokenText(words, 40);
+  assert.ok(byWord.endsWith("…"), byWord);
+  assert.ok(byWord.length <= 41, `length ${byWord.length}`);
+  // Every kept token is a complete original word (never cut mid-word).
+  const kept = byWord.slice(0, -1).split(" ");
+  for (const token of kept) {
+    assert.match(token, /^word\d+$/, `partial token: ${token}`);
+  }
+
+  // A single token longer than the cap is cut hard, still with the marker.
+  const single = "z".repeat(200);
+  const hard = capSpokenText(single, 40);
+  assert.equal(hard, `${"z".repeat(40)}…`);
+});
+
+test("a confirmation is never affected by the cap", () => {
+  const spoken = spokenText({
+    answer: "ignored",
+    intent: intent({ recipient: "bilal" }),
+    language: "en",
+  });
+  assert.equal(spoken, "Sending 5 USDC to bilal. Do you confirm?");
+  assert.ok(spoken.length < MAX_SPOKEN_CHARS);
 });

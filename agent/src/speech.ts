@@ -97,18 +97,74 @@ export function confirmationSentence(intent: Intent, language?: string): string 
 }
 
 /**
+ * The hard ceiling on how many characters may ever reach TTS (step A12).
+ *
+ * The owner's real log showed the model rambling and Fish TTS cost scaling
+ * linearly with length: 49 chars → 7.4 s, 103 → 15.8 s, 261 → 30.2 s. A
+ * confirmation should be ~40 characters, so 120 is a generous "one or two short
+ * sentences" bound — long enough for a real clarification, short enough that no
+ * utterance can run away. The prompt asks the model to stay short; this cap is
+ * the code guarantee that it cannot ramble past the bound.
+ */
+export const MAX_SPOKEN_CHARS = 120;
+
+/** The last index in `chars` whose value satisfies `predicate`, or -1. */
+function lastIndexWhere(chars: string[], predicate: (char: string) => boolean): number {
+  for (let index = chars.length - 1; index >= 0; index -= 1) {
+    const char = chars[index];
+    if (char !== undefined && predicate(char)) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+/**
+ * Truncates `text` to at most `max` characters without ever cutting a word in
+ * half (step A12). Whitespace-only input is returned as an empty string.
+ *
+ * Preference order, so the result still reads like a sentence:
+ * 1. the last sentence terminator inside the window (`. ! ? …`) — a complete
+ *    thought, no ellipsis needed;
+ * 2. otherwise the last word boundary, with a trailing `…` to mark the cut;
+ * 3. otherwise (a single token longer than the cap) a hard cut plus `…`.
+ */
+export function capSpokenText(text: string, max: number = MAX_SPOKEN_CHARS): string {
+  const trimmed = text.trim();
+  if (max <= 0) {
+    return "";
+  }
+  const chars = Array.from(trimmed);
+  if (chars.length <= max) {
+    return trimmed;
+  }
+  const window = chars.slice(0, max);
+
+  const sentence = lastIndexWhere(window, (char) => ".!?…".includes(char));
+  if (sentence !== -1) {
+    return window.slice(0, sentence + 1).join("").trim();
+  }
+  const word = lastIndexWhere(window, (char) => /\s/.test(char));
+  if (word !== -1) {
+    return `${window.slice(0, word).join("").trim()}…`;
+  }
+  return `${window.join("").trim()}…`;
+}
+
+/**
  * The sentence to speak for one agent turn.
  *
  * An intent becomes its confirmation sentence (in the turn's language); anything
  * else becomes the turn's answer text, which the model already produced in the
- * user's language. Callers pass a successful turn only — a failure is never
- * spoken.
+ * user's language. The result is always passed through [`capSpokenText`], so
+ * nothing longer than [`MAX_SPOKEN_CHARS`] can reach TTS. Callers pass a
+ * successful turn only — a failure is never spoken.
  */
 export function spokenText(result: SpokenResult): string {
   if (result.intent) {
-    return confirmationSentence(result.intent, result.language);
+    return capSpokenText(confirmationSentence(result.intent, result.language));
   }
-  return result.answer.trim();
+  return capSpokenText(result.answer.trim());
 }
 
 /**

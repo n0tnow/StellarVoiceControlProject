@@ -33,10 +33,12 @@ export {
   type LlmToolCall,
   type LlmTurn,
 } from "./loop.ts";
-export { POLARIS_SYSTEM_PROMPT } from "./prompt.ts";
+export { POLARIS_SYSTEM_PROMPT, withDetectedLanguage } from "./prompt.ts";
 export {
+  capSpokenText,
   confirmationSentence,
   isSpeakable,
+  MAX_SPOKEN_CHARS,
   SpeechQueue,
   spokenText,
   type SpeakFn,
@@ -74,7 +76,9 @@ export {
   languageBase,
   languageFromToolCalls,
   normalizeLanguage,
+  resolveTurnLanguage,
   stripLanguageTag,
+  type LanguageDecision,
 } from "./language.ts";
 export {
   newSessionId,
