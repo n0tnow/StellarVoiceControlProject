@@ -15,6 +15,9 @@
 | 2026-09-19 | Raven / Stellar-side feasibility & ecosystem prior art | research worker (opencode) | [docs/reports/2026-09-19-raven-stellar-feasibility.md](2026-09-19-raven-stellar-feasibility.md) | raven-mcp, oauth, pkce, tauri, anchor, sep-6, sep-38, soroban, soroswap, defindex, prior-art |
 | 2026-09-19 | Genesis hackathon reality check & prior-art research | research worker (opencode) | [docs/reports/2026-09-19-hackathon-prior-art.md](2026-09-19-hackathon-prior-art.md) | genesis, rise-in, scope, mvp, cut-list, prior-art, voice-first, mpp, x402, touch-id |
 | 2026-09-19 | Privacy on Stellar — Confidential Tokens & Stellar Private Payments | W-docs (coordinating agent) | [docs/reports/2026-09-19-privacy-on-stellar-research.md](2026-09-19-privacy-on-stellar-research.md) | privacy, confidential-tokens, ct, stellar-private-payments, spp, zk, pedersen, ultrahonk, noir, circom, groth16, view-key, asp, testnet |
+| 2026-09-19 | Notch overlay rendering — native window vs. web overlay | research worker (codex) | [docs/reports/2026-09-19-notch-overlay-research.md](2026-09-19-notch-overlay-research.md) | notch, overlay, nswindow, tauri, macos, hud |
+| 2026-09-19 | Speech-to-text options — whisper.cpp / whisper-rs and model choice | research worker (opencode) | [docs/reports/2026-09-19-stt-whisper.md](2026-09-19-stt-whisper.md) | stt, whisper, whisper-rs, metal, on-device, latency |
+| 2026-09-19 | Modifier-only hotkey (Control+Option hold) feasibility | research worker (opencode) | [docs/reports/2026-09-19-modifier-only-hotkey.md](2026-09-19-modifier-only-hotkey.md) | hotkey, modifier, flagschanged, accessibility, tcc, push-to-talk |
 
 ---
 
