@@ -29,7 +29,8 @@
     "e2e:tool": "node src/live/tool.ts",
     "keeper": "node --env-file-if-exists=../.env src/keeper/cli.ts",
     "keeper:once": "node --env-file-if-exists=../.env src/keeper/cli.ts --once",
-    "anchor:e2e": "node src/anchor/e2e.ts"
+    "anchor:e2e": "node src/anchor/e2e.ts",
+    "anchor:check": "node src/anchor/check.ts"
   },
   "dependencies": {
     "@polaris/interfaces": "*",

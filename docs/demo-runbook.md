@@ -5,7 +5,7 @@
 > step names its `requires Tn` dependency instead of an undecided placeholder.
 > Testnet only. Design background: `docs/approval-and-scheduling.md`,
 > `contracts/DEPLOYED.md`, `stellar/src/keeper/README.md`.
-> *Last updated: 2026-09-19*
+> *Last updated: 2026-09-20*
 
 ---
 
@@ -134,7 +134,67 @@ path and asks for Touch ID. *(requires T1 + T5.)*
 
 ---
 
-## 5. Demo talking points (known limitations)
+## 5. Anchor demo: primary and fallback
+
+The anchor demo has a **primary** path (the Turkish mock anchor, SEP-6 only) and a
+**labelled fallback** (SDF's public test anchor, NON-TR) for when the primary's
+payout pipeline is stalled. Read the full rationale in
+`stellar/src/anchor/README.md` ("Primary vs fallback demo").
+
+**5.1 Check before you demo (read-only, zero funds move).**
+
+```bash
+# Plan only, no network:
+npm run anchor:check -w @polaris/stellar
+
+# Live, read-only: SEP-1 + SEP-6 /info + SEP-10 for both domains, plus payout health.
+npm run anchor:check -w @polaris/stellar -- --live --payout-check
+```
+
+Every line carries the scenario label. The TR line is "TR path — SEP-6 only
+(SEP-24 prohibited in Turkey)". The fallback line is "NON-TR test scenario (SDF
+test anchor) …; deposit stops at SEP-12 KYC". The JWT is never printed.
+
+**5.2 What to say.**
+
+- Primary: "This is the Turkish anchor on testnet; we discover it from its domain,
+  log in with a signed challenge, and — when it is healthy — move TRY to USDC with
+  SEP-6. SEP-24's hosted page is prohibited in Turkey and is not used."
+- If `--payout-check` says `payouts-stalled`: "The anchor is accepting orders but
+  has not paid out for over 30 minutes. That is anchor-side; I will show discovery,
+  login and info, or the labelled non-TR fallback for comparison."
+- Fallback: "This is **not** the Turkish path. It is SDF's test anchor, shown only
+  to prove our client works against a second, independent anchor. A deposit here
+  would stop at SEP-12 KYC (`first_name`, `last_name`, `email_address`)."
+
+**5.3 What to avoid.**
+
+- Never present `testanchor.stellar.org` as the Turkish path or as a TRY ramp.
+- Never say "fully private" or claim a bank leg: the mock's bank is simulated.
+- Do not re-deposit to "retry" a stalled order — the funds already left the user's
+  side; the order is stuck on the anchor.
+- Do not paste the SEP-10 JWT, any secret, or a `POLARIS_TEST_SECRET` anywhere.
+- Do not touch SEP-24 on the TR domain (MASAK prohibition).
+
+**5.4 Evidence to send the anchor operators when payouts are stalled.** Collect
+exactly this and send it (no secrets, no keys):
+
+| Item | Where to get it |
+|---|---|
+| Order id | `sep6.deposit` narration / the order's `more_info_url` |
+| Order timestamps | `started_at` and `updated_at` from `GET /sep6/tx/<id>` (frozen `updated_at` = stuck) |
+| Order status + message | `status` (`pending_anchor`) and the anchor's own `message` |
+| Treasury account | `/health` → `treasury.address` (documented: `GCLCZEQZ2THTEDAOFI66LACNPLY4OBKN7VKLEZFMBIHYKYQOW2W7T3Z6`) |
+| Last outgoing payment | `--payout-check` output: newest outgoing time + incoming-since count, or Horizon `GET /accounts/<treasury>/payments?order=desc` |
+
+A worked example (2026-09-20): order `sep_uwg7nu53jr5inqpc1926`, `pending_anchor`
+from `2026-09-19T22:12:45Z`, treasury `GCLC…T3Z6`, newest outgoing
+`2026-09-19T20:59:32Z` with 26 incoming since — see `backlog/anchor-live-check.md`
+and `backlog/anchor-fallback.md`.
+
+---
+
+## 6. Demo talking points (known limitations)
 
 From `contracts/DEPLOYED.md` "Demo talking points":
 

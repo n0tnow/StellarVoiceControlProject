@@ -300,8 +300,6 @@ describe("SEP-6 polling state machine", () => {
   });
 
   it("narrates and reports the anchor's last message + more_info_url when a deposit is stuck (live 2026-09-20 regression)", async () => {
-    // Reproduces the TR mock anchor's stalled pending_anchor deposit: the order never moves,
-    // so the client must surface the anchor's own message and link, not just a bare timeout.
     const stuckMessage = "TRY received; paying USDC on Stellar.";
     const { fetch } = fakeFetch({
       [`GET ${HOME}/sep6/transaction`]: {
@@ -324,5 +322,23 @@ describe("SEP-6 polling state machine", () => {
     expect(rec.step).toBe("sep6.timeout");
     expect(rec.anchorSaid).toBe(stuckMessage);
     expect(rec.what).not.toContain(stuckMessage); // anchor text never enters the narration
+    expect(rec.what).not.toContain("testanchor.stellar.org"); // the TR hint is TR-only
+  });
+
+  it("adds the TR-mock payout hint to the timeout narration and error (TR domain only)", async () => {
+    const { fetch } = fakeFetch({
+      [`GET ${HOME}/sep6/transaction`]: { transaction: { id: "sep_tr", kind: "deposit", status: "pending_anchor" } },
+    });
+    const ctx = makeCtx(fetch);
+    const trToml = { ...TOML, homeDomain: "tr-mock-anchor.fly.dev" };
+    const err = (await pollTransaction(ctx, trToml, TOKEN, "sep_tr", { intervalMs: 1000, timeoutMs: 5000 }).catch((e: unknown) => e)) as PollTimeoutError;
+    expect(err).toBeInstanceOf(PollTimeoutError);
+    expect(err.message).toContain("anchor:check");
+    expect(err.message).toContain("testanchor.stellar.org");
+    const rec = ctx.explain.all().at(-1)!;
+    expect(rec.step).toBe("sep6.timeout");
+    expect(rec.what).toContain("TR mock anchor accepted the order but has not paid out");
+    expect(rec.what).toContain("anchor:check");
+    expect(rec.why).not.toContain("testanchor.stellar.org");
   });
 });

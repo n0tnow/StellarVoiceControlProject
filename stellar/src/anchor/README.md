@@ -187,6 +187,42 @@ regression test. Until the anchor's payout worker recovers, the TR deposit path 
 reach `completed`; see `backlog/anchor-live-check.md` for the full evidence and demo
 guidance.
 
+## Primary vs fallback demo
+
+The demo has one **primary** path (the Turkish anchor, SEP-6 only) and one
+**labelled fallback** for when the primary's payout pipeline is stalled. The
+scenario registry (`scenarios.ts`) is the single place that decides which home
+domains are allowed and what each one may prove; unknown domains are refused
+unless deliberately passed as `custom` (never in the CLI).
+
+```bash
+# Plan only: prints both scenarios, makes ZERO network requests.
+npm run anchor:check -w @polaris/stellar
+
+# Read-only live check: SEP-1 discovery + SEP-6 /info + SEP-10 login (validated
+# before signing) for both domains, plus the TR payout-health heuristic.
+npm run anchor:check -w @polaris/stellar -- --live --payout-check
+
+# One domain only:
+npm run anchor:check -w @polaris/stellar -- --live --home-domain testanchor.stellar.org
+```
+
+| | Primary — TR path | Fallback — NON-TR test scenario |
+|---|---|---|
+| Home domain | `tr-mock-anchor.fly.dev` | `testanchor.stellar.org` |
+| Label (travels with every result) | "TR path — SEP-6 only (SEP-24 prohibited in Turkey)" | "NON-TR test scenario (SDF test anchor) — discovery + SEP-10 login + SEP-6 info only; deposit stops at SEP-12 KYC" |
+| What it proves | The Turkish path's SEP-1 discovery, SEP-6 `/info` and SEP-10 login work; a full demo also does SEP-6 deposit/withdraw | A second, independent anchor's SEP-1 discovery, SEP-6 `/info` and SEP-10 login work |
+| What it does NOT prove | Nothing about a real Turkish anchor (this is a mock); no mainnet route | Nothing about the Turkish path. It is a comparison only. **No deposit/withdraw is attempted**: going further needs SEP-12 KYC (`first_name`, `last_name`, `email_address`) |
+| SEP-24 | Prohibited (MASAK) and never used | Never used |
+
+Honest limits: the fallback is **not** a Turkish solution and must never be
+presented as one. It shares only the standard programmatic SEPs; it does not
+prove a TRY on/off-ramp, a bank leg, or MASAK compliance. The live check signs
+nothing that can move funds: SEP-10 challenges have sequence number 0, the
+keypair is throwaway and in-memory, and the JWT is never printed (only its
+length and expiry). `--payout-check` is a **heuristic** over the TR treasury's
+public Horizon history (thresholds in `payoutHealth.ts`, advisory only).
+
 ## Mock vs mainnet
 
 | | TR mock anchor (testnet) | Real Turkish anchor (mainnet) |

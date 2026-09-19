@@ -12,6 +12,7 @@
  * a transaction.
  */
 import { Account, Asset, BASE_FEE, Memo, Operation, StrKey, TransactionBuilder } from "@stellar/stellar-sdk";
+import { DEFAULT_HOME_DOMAIN } from "./config.ts";
 import { AnchorHttpError, requestJson } from "./http.ts";
 import { shortKey } from "./explain.ts";
 import { getCustomer, KycRequiredError } from "./sep12.ts";
@@ -512,6 +513,16 @@ export class PollTimeoutError extends Error {
   }
 }
 
+/**
+ * Extra, sanitised hint appended to a poll timeout when the domain is the TR mock
+ * anchor (whose deposit payout worker stalled on 2026-09-20). Static text only:
+ * the timeout path never fetches anything automatically.
+ */
+export const TR_MOCK_PAYOUT_HINT =
+  "The TR mock anchor accepted the order but has not paid out; run " +
+  "`npm run anchor:check -w @polaris/stellar -- --live --payout-check` and, for a demo, the labelled non-TR scenario " +
+  "`--home-domain testanchor.stellar.org`.";
+
 /** Repeated network/5xx failures while polling; carries the last state we knew. */
 export class PollInterruptedError extends Error {
   readonly last: AnchorTransaction;
@@ -660,14 +671,16 @@ export async function pollTransaction(
       const seconds = Math.round(timeout / 1000);
       const said = tx.message ? `; the anchor last said: "${tx.message}"` : "";
       const where = tx.moreInfoUrl ? ` (order details: ${tx.moreInfoUrl})` : "";
+      const hint = toml.homeDomain === DEFAULT_HOME_DOMAIN ? ` ${TR_MOCK_PAYOUT_HINT}` : "";
       ctx.explain.record(
         "sep6.timeout",
         `SEP-6 order ${id} is still "${tx.status}" after ${seconds}s, so we stopped waiting.` +
-          (tx.message ? " The anchor's own status message is attached." : ""),
+          (tx.message ? " The anchor's own status message is attached." : "") +
+          hint,
         "The order never reached a final state. A status like \"pending_anchor\" that does not move usually means a problem on the anchor's side, not with your account; the safe next step is to check the order later instead of paying again.",
         { anchorSaid: tx.message },
       );
-      throw new PollTimeoutError(`order ${id} is still "${tx.status}" after ${seconds}s${said}${where}`, tx);
+      throw new PollTimeoutError(`order ${id} is still "${tx.status}" after ${seconds}s${said}${where}${hint}`, tx);
     }
     await ctx.sleep(interval);
   }
