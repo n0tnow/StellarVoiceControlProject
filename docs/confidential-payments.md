@@ -304,7 +304,8 @@ leg** — the contract never sees the number.
 **Design consequences**
 - **Move the guarantee to the public boundary.** Cap what may be moved *into* the privacy system:
   the **deposit** into the CT wrapper / the SPP pool has a **public** amount, so that is where the
-  guard can bind. Deposit caps become the enforceable envelope for private spending.
+  envelope binds (client-side for now; an on-chain gate would be the new `polaris_privacy_gate` crate,
+  not a change to `polaris_guard`). Deposit caps become the enforceable envelope for private spending.
 - **Client-side per-transfer limit.** The app knows the amount *before* encrypting, so it enforces the
   per-transfer limit in the client. The **approval card is the gate** (Touch ID / approval click).
 - **Keeper exclusion.** See §1, scheduled/unattended confidential payments are out of scope (D6);
@@ -314,10 +315,11 @@ leg** — the contract never sees the number.
   building an intent result. The alias book does not imply registration; removing/re-pointing an alias
   is a guard concern only (see `backlog/guard-v0.2-hardening.md`, F-03).
 
-**Open question (for the spike):** whether `polaris_guard` can gate `deposit`/`withdraw` **on-chain**
-(the executor calls the wrapper) — i.e. whether the guard can be the contract that invokes the deposit,
-rather than merely enforcing a client-side cap at the boundary. This is unresolved and is one of the
-CT-spike outputs (§9, §10).
+**Open question (for the spike):** whether an on-chain gate can cap `deposit`/`withdraw` (the executor
+calls the wrapper) — i.e. whether a contract can invoke the deposit, rather than merely enforcing a
+client-side cap at the boundary. Any such on-chain gate would be a **NEW crate** under `contracts/`
+(provisional name `polaris_privacy_gate`), independent of `polaris_guard` and **not a change to it**
+(D9, 2026-09-19). This is unresolved and is one of the CT-spike outputs (§9, §10).
 
 ---
 
@@ -401,8 +403,13 @@ force a partial integration.
 |---|---|---|
 | `stellar/src/confidential/` | CT client: register/deposit/merge/withdraw/confidential_transfer, decrypt/viewing | PLANNED |
 | `stellar/src/spp/` | SPP client: pool deposit, private transfer, withdraw, note scan, ASP handling, view-key export | PLANNED |
+| `contracts/polaris_privacy_gate/` | Optional on-chain gate for deposits/withdrawals into the CT wrapper / SPP pool — a NEW crate (provisional), NOT a change to `polaris_guard` (D9) | PLANNED |
 
 Both live under Owner B's `stellar/` scope. No file in this repo backs these paths yet.
+
+Any on-chain gate for privacy-mode deposits/withdrawals is written as a **new crate**
+(`contracts/polaris_privacy_gate/`, provisional), independent of the frozen `polaris_guard`; it is
+conditional on the spike showing that a contract can gate the deposit/withdraw on-chain (D9, 2026-09-19).
 
 ### 9.4 Owners
 
@@ -428,7 +435,7 @@ All of the following are from the notes' "Unknowns" list and are to be resolved 
 | Q6 | **Fee / resource budget** per private operation | May make a private transfer absurdly expensive for a demo | spike (measure) | CT + SPP |
 | Q7 | **How a recipient learns of an incoming transfer** | UX: does Polaris notify, or does the recipient scan? | spike | CT + SPP |
 | Q8 | **ASP allow-list onboarding for SPP** | SPP is unusable until the recipient is in an association set | spike | SPP |
-| Q9 | **Can `polaris_guard` gate `deposit`/`withdraw` on-chain?** | Determines whether the private-spend envelope is contract-enforced or only client-side (§7) | spike decision + possible v0.2 contract | CT (primary), SPP |
+| Q9 | **Can a contract gate `deposit`/`withdraw` on-chain?** | Determines whether the private-spend envelope is contract-enforced or only client-side (§7) | spike decision + possible new crate `polaris_privacy_gate` (D9) | CT (primary), SPP |
 
 Cross-references to the proposed defaults in §12: Q3 → C7; Q5 → C3; Q8 → C5; Q9 → C9.
 
@@ -473,5 +480,5 @@ grounded in D1–D8 of the source notes.
 | C6 | Payroll list | Planned local file `payroll.json`: `{ "<listName>": [ { "alias": "...", "amount": "...", "asset": "USDC" } ] }`; "send the salaries" resolves to a list named `salaries` (or the only list); zero or several candidate lists → the agent asks; every line must reference a known contact; the batch card shows the total per asset. | §8 step 1 referred to "a saved payroll list" with no storage, schema or resolution rule. | Owner A (file + card) + Owner B (resolution/validation) |
 | C7 | Local encrypted history format | Append-only **JSON Lines** file on the device, each record encrypted (**AEAD**) with a key held in the **macOS Keychain**; fields as in §6 plus `status` (`submitted\|confirmed\|failed\|partial`). **(spike: key custody/derivation is Open Question 3)** | §6 listed stored fields but no format, encryption scheme or key provisioning, so it had no testable acceptance. | Owner A (storage) + spike Q3 (key custody) |
 | C8 | Acceptance criteria for integration tasks | I2/I4 pass when, on testnet, a headless script produces a transfer + decoded summary that matches the approval-card checklist in §5 **AND** a refusal case returns the machine-readable refusal above. Added as measurable criteria on I2/I4 in `backlog/confidential-payments.md`. | I2/I4 were "build CT/SPP transfer + summary" with no measurable pass condition. | Owner B (I2/I4 tests); reviewer signs off |
-| C9 | Guard boundary cap (Open Question 9) | **Client-side cap** on the public deposit/withdraw amount, enforced by the app before building the intent result; on-chain gating only if the spike shows the guard can call the wrapper. **(spike)** | Whether the deposit cap is contract-enforced or client-only was open; the client cap is implementable now and fail-closed at the approval card. | CT spike (on-chain gating); Owner B + Owner A (client cap) |
+| C9 | Guard boundary cap (Open Question 9) | **Client-side cap** on the public deposit/withdraw amount, enforced by the app before building the intent result; on-chain gating only if the spike shows a contract can call the wrapper — then as a **new crate** (`polaris_privacy_gate`, provisional), never a change to `polaris_guard` (D9). **(spike)** | Whether the deposit cap is contract-enforced or client-only was open; the client cap is implementable now and fail-closed at the approval card. | CT spike (on-chain gating); Owner B + Owner A (client cap) |
 | C10 | Batch failure semantics for payroll | Continue-on-error is **OFF** by default; on the first failed line, **stop**, show which lines succeeded, and record each line in history. | An instant batch had no defined behaviour when one line fails mid-batch. | Owner A (card/UX) + Owner B (per-line results) |

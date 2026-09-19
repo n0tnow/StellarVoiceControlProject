@@ -88,6 +88,7 @@
 - [ ] **C4.** Registration/adapter so a shell can turn an `Intent` into a `ChainToolResult`; expose `@polaris/stellar` to the webview (no voice dependency)
 - [ ] **C5. (PROPOSED)** Signing option: Rust approval gate + TypeScript signing/submission (option 1) for the demo; full Rust-native signer post-hackathon
 - [ ] **C6. (PROPOSED)** Standardise signing on XDR: `SigningService.sign(payloadHash)` → `signTransaction(xdr)` — needs Owner A agreement
+- [ ] **C7.** Guard client + keeper take the contract id as a parameter (e.g. `GUARD_CONTRACT_ID`), never hard-coded, so v0.1 and v0.2 (`polaris_guard_v2`) run side by side (D9)
 
 ### Voice lane (Owner A — not blocking)
 - [ ] **V1. (PROPOSED)** Merge order of the `interfaces/src/index.ts` branches: `a0` → `a1-stt` → `a1-ondevice` → `a2` → `a3` → `docs/rule-types-and-decisions` (freeze the seam after `a0`)
@@ -115,6 +116,8 @@
 - [ ] CT integration (`stellar/src/confidential/`, PLANNED) — conditional on GO
 - [ ] SPP spike (2h cap) → GO / NO-GO (`backlog/confidential-spike-spp.md`)
 - [ ] SPP integration (`stellar/src/spp/`, PLANNED) — conditional on GO
+- [ ] `polaris_guard_v2` crate (new contract, own deployment; NOT an edit of `polaris_guard`) — D9
+- [ ] `polaris_privacy_gate` crate (conditional on the spike showing on-chain deposit/withdraw gating is possible) — D9
 - [ ] Approval-card privacy variant + batch payroll card
 - [ ] Local encrypted transaction history (key custody open question)
 - [ ] Demo talking points (privacy limits, public deposit/withdraw leg)

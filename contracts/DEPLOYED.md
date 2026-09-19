@@ -298,7 +298,14 @@ Findings from `backlog/contracts-audit.md` (audit) and `backlog/contracts-audit-
 review). No Critical or High findings; these are product/liveness and documentation-level caveats. The
 batched v0.2 fix plan is in [`backlog/guard-v0.2-hardening.md`](../backlog/guard-v0.2-hardening.md).
 
-| ID | Severity | Limitation | Consequence for the demo | v0.2? |
+**Contract evolution (D9, 2026-09-19):** `polaris_guard` v0.1 is **frozen** and stays the reference
+deployment. Any future change or addition ships as a **new contract crate under `contracts/`** (own Cargo
+package, own tests, own testnet deployment and its **own section in this file**, e.g.
+`polaris_guard_v2`), so old and new contracts run side by side. Nothing below re-deploys v0.1 in place:
+the "fixed in v0.2" column means "fixed in the new `polaris_guard_v2` contract", not an edit of the
+frozen v0.1 source.
+
+| ID | Severity | Limitation | Consequence for the demo | fixed in v0.2 (new contract `polaris_guard_v2`)? |
 |---|---|---|---|---|
 | F-01 | Medium | No pause / emergency stop; `revoke_executor` does not stop schedules. | Only kill switches for a schedule are `cancel_schedule` or revoking the SAC allowance (which also disables `pay_owner`). State it, don't hide it. | Y |
 | F-02 | Medium | Schedule id space is never reused; keeper `list_due` sweep cost grows with ids ever created. | Accepted tradeoff; a busy day does not break the demo, it only makes the keeper scan a few more pages. | N |

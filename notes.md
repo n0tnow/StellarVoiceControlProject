@@ -154,4 +154,16 @@
 - **Pointer:** `docs/confidential-payments.md` §11 risk R7.
 - **Status:** open (PROPOSED — needs owner confirmation)
 
+## 2026-09-19 — Decision: Contract Evolution = New Crates, v0.1 Frozen
+- **Decision (D9):** `polaris_guard` v0.1 (deployed, id in `contracts/DEPLOYED.md`) is **frozen** and
+  stays the reference deployment; its source under `contracts/polaris_guard/` is never edited again
+  except for a critical owner-decided fix.
+- **Decision:** every future contract change/addition is a **new crate** under `contracts/` (own Cargo
+  package, own tests, own testnet deployment, own `DEPLOYED.md` section, registered as a workspace
+  member), so old and new contracts are tested and run side by side. This supersedes the D8 wording of a
+  single in-place v0.2 redeploy: v0.2 = new crate `polaris_guard_v2`; any on-chain privacy gate = new
+  crate `polaris_privacy_gate`; client/keeper take the contract id as a parameter.
+- **Pointer:** [`backlog/guard-v0.2-hardening.md`](backlog/guard-v0.2-hardening.md).
+- **Status:** decided
+
 <!-- New notes are appended chronologically at the bottom. -->
