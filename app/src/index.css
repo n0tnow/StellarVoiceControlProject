@@ -96,9 +96,15 @@
   background: #000;
   border-radius: var(--top-radius) var(--top-radius) var(--bottom-radius)
     var(--bottom-radius);
+  /* Horizontal-only expansion. The width (and the radii/ears that ride with it)
+     uses the spring curve; the height is deliberately NOT transitioned.
+     Animating the 32 -> 66 pt height over the same 300 ms is what made the shell
+     read as "inflating"; snapping it on the first frame — while `.notch-stage`
+     keeps the shell top-anchored — leaves the perceived motion purely
+     left/right. A <= 80 ms height tween was the alternative, rejected because a
+     visible vertical pop still reads as growth at these sizes. */
   transition:
     width 300ms cubic-bezier(0.22, 1, 0.36, 1),
-    height 300ms cubic-bezier(0.22, 1, 0.36, 1),
     border-radius 300ms cubic-bezier(0.22, 1, 0.36, 1),
     --ear 300ms cubic-bezier(0.22, 1, 0.36, 1);
 }

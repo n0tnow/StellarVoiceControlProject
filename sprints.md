@@ -48,16 +48,25 @@
 > overlay, `control+option+space` holds/releases a `cpal` capture, and `dev_self_test` is
 > gone. Build/test/typecheck/clippy are green; end-to-end microphone capture still needs a
 > human hold-and-speak check. See the A0 report.
+>
+> 2026-09-19 — **Modifier-only gesture + horizontal expand** (`feat/a0-push-to-talk-notch`): the
+> default trigger is now holding **Control+Option** (native `flagsChanged`, 300 ms arming,
+> Command/Shift excluded, 1 s watchdog), gated on Accessibility with `Control+Option+Space` kept
+> as the permission-free fallback; the notch height no longer animates so the expansion reads as
+> left/right only. Build/test/clippy/typecheck all green; the gesture, the Accessibility grant,
+> and the animation still need a human on the real machine. See
+> `backlog/2026-09-19-modifier-only-and-horizontal-expand.md`.
 
 #### A0 — Push-to-talk + notch overlay harness ✅
 > Design pivot (2026-09-19): the dashboard/log-pane harness was replaced by the notch
 > overlay from the design reference (`notch-design.md`: "Replace the A0 dashboard"). The
 > overlay's state *is* the harness — the typed event stream drives it directly.
 - [x] Notch overlay window (transparent, click-through, always-on-top, native AppKit geometry, all Spaces) driven purely by the `polaris-event` stream (2026-09-19, branch `feat/a0-push-to-talk-notch`).
-- [x] Global push-to-talk hotkey `control+option+space`: hold = record, release = stop (no send/submit).
+- [x] Global push-to-talk: **hold Control+Option** (release either) is the default gesture, with `control+option+space` kept as the permission-free fallback (2026-09-19, branch `feat/a0-push-to-talk-notch`).
+- [x] Notch expansion reads as horizontal only: the width keeps the spring curve, the height transition was removed (2026-09-19).
 - [x] Microphone capture with `cpal` → 16-bit PCM WAV (`hound`); microphone/permission failures surface as the overlay `error` state.
 - [x] Temporary `dev_self_test` deleted; `capture_start` / `capture_stop` / `capture_status` / `notch_geometry` commands added.
-- **Accept:** app runs and the overlay is positioned from real AppKit geometry (verified: idle 199×36 pt, expanded 680×66 pt on the built-in display); holding the hotkey to produce a WAV is **not yet verified by a human** — see `backlog/2026-09-19-a0-push-to-talk-notch.md`.
+- **Accept:** app runs and the overlay is positioned from real AppKit geometry (verified: idle pill matches the measured cutout 179×32 pt, expanded 680×66 pt on the built-in display); holding the hotkey to produce a WAV is **not yet verified by a human** — see `backlog/2026-09-19-a0-push-to-talk-notch.md`.
 
 #### A1 — STT (speech → text) 🔲
 - [ ] Model choice (decide, record in notes.md): local `whisper.cpp` (Metal) first; cloud API fallback only if quality fails.
