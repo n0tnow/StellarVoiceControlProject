@@ -71,7 +71,44 @@ export interface SigningService {
 }
 
 /* ------------------------------------------------------------------ *
- * 4. Status / event stream for the UI
+ * 4. Push-to-talk capture (step A0)
+ * ------------------------------------------------------------------ */
+
+/**
+ * The microphone capture lifecycle. `ready` is deliberately **not** a send
+ * action: it only means a WAV is on disk waiting for step A1 (STT). Nothing in
+ * the shell is allowed to submit or dispatch on release.
+ */
+export type CaptureState = "idle" | "recording" | "ready" | "error";
+
+/** A finished capture on disk. Duration is measured from written sample frames. */
+export interface CaptureRecording {
+  path: string;
+  durationMs: number;
+}
+
+/** Snapshot of the capture engine; also pushed on every transition. */
+export interface CaptureStatus {
+  state: CaptureState;
+  recording: CaptureRecording | null;
+  /** Human-readable failure detail; non-null iff `state === "error"`. */
+  error: string | null;
+}
+
+/**
+ * The notch shell's dimensions in AppKit **points** (not CSS-relative units), so
+ * the webview never has to guess the physical notch. On a display without a
+ * notch the Rust side returns a centred-pill fallback.
+ */
+export interface NotchGeometry {
+  idleWidth: number;
+  idleHeight: number;
+  expandedWidth: number;
+  expandedHeight: number;
+}
+
+/* ------------------------------------------------------------------ *
+ * 5. Status / event stream for the UI
  * ------------------------------------------------------------------ */
 
 /** Tauri event channel name; the Rust side emits on the same channel. */
@@ -82,6 +119,8 @@ export type AgentStage = "thinking" | "tool_call" | "awaiting_approval" | "done"
 
 export type PolarisEvent =
   | { type: "hotkey"; state: HotkeyState }
+  | { type: "capture_status"; status: CaptureStatus }
+  | { type: "audio_captured"; path: string; durationMs: number }
   | { type: "transcript"; text: string; final: boolean }
   | { type: "agent_status"; stage: AgentStage }
   | {
@@ -97,6 +136,8 @@ export type PolarisEvent =
 /**
  * Runtime guard for events arriving from Rust as `unknown`.
  * Cheap structural check: the wire contract is `{ type: string, ... }`.
+ * Keeping it tag-agnostic means a new union variant (`capture_status`,
+ * `audio_captured`, …) is admitted without touching the guard.
  */
 export function isPolarisEvent(value: unknown): value is PolarisEvent {
   return (
@@ -107,7 +148,7 @@ export function isPolarisEvent(value: unknown): value is PolarisEvent {
 }
 
 /* ------------------------------------------------------------------ *
- * 5. App metadata (Tauri `app_info` command)
+ * 6. App metadata (Tauri `app_info` command)
  * ------------------------------------------------------------------ */
 
 export interface AppInfo {
