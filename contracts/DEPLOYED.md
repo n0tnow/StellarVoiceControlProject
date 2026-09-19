@@ -8,16 +8,19 @@ Testnet only. No mainnet deployment exists and none is planned for this mileston
 |---|---|
 | Contract | `polaris_guard` |
 | Network | Stellar **testnet** (`Test SDF Network ; September 2015`) |
-| Contract ID | `CDIWQTYA7OBF2FKLLHQWYZ2Q2L4PAEBLLMFRXVY4R7MAM45LX7Q2R2XB` |
+| Contract ID | `CDRLSFJ5WIC5UMF2LWPF3NRVDOKE7CN3DAYGKDWQ5TJJMVB7FRHRCK4D` |
+| Deploy tx | `f6017b43cef06047b6c3bc04e2f88a2e9fb0b3ee3b3aa5a0261a0c43dfacaf59` (create-contract tx; wasm upload tx `002d438ea8a684b8cdbfa86e840ba0cd4dd2e52fc5948018d13cc99cf2836e60`) |
 | Deployer / demo owner | `GCLBGU2PR36SFHKPSI5WPHD3ZNPZRIXJYQGUVIR6PR4R6R6U3XNNG46E` (CLI identity `w1`) |
-| Wasm | `contracts/target/wasm32v1-none/release/polaris_guard.wasm`, 23,261 bytes |
-| Explorer | https://stellar.expert/explorer/testnet/contract/CDIWQTYA7OBF2FKLLHQWYZ2Q2L4PAEBLLMFRXVY4R7MAM45LX7Q2R2XB |
+| Wasm | `contracts/target/wasm32v1-none/release/polaris_guard.wasm`, 23,787 bytes |
+| Wasm sha256 | `c4f65e6542bb5d7e512d4417c1b71b20d7210ca7e665992b4e3cc27f04be98e6` — re-derived from `stellar contract fetch` of the deployed code, so artifact and chain agree |
+| Explorer | https://stellar.expert/explorer/testnet/contract/CDRLSFJ5WIC5UMF2LWPF3NRVDOKE7CN3DAYGKDWQ5TJJMVB7FRHRCK4D |
 
 ### Superseded deployments
 
-| Contract ID | Status | Why |
-|---|---|---|
-| `CB5CQHV6OK6AF5ANTE7YHJ6UPG5QAIPHB6UVLRLDKNQ22VEQOHU22RYY` | **DEPRECATED — do not use** | Carried a global cap of 200 active schedules backed by one shared `ActiveScheds` list. A handful of funded accounts could fill it with far-future schedules only they could cancel, permanently blocking `create_schedule` for everyone else; with no admin and no upgrade path the only remedy was a redeploy. Its `list_due(limit)` ABI is also gone. |
+| Contract ID | Status | Deploy tx | Wasm sha256 | Why |
+|---|---|---|---|---|
+| `CDIWQTYA7OBF2FKLLHQWYZ2Q2L4PAEBLLMFRXVY4R7MAM45LX7Q2R2XB` | **DEPRECATED — do not use** | `6602c070cd369dfc694b724e794ce38943266a4f158888fd136ce98e33ceea8f` | `7198230218d1c5af574f1f5cdd7f7bd12d8329dabf4d9c155e0d0993d8b7cce4` | `set_alias` re-pointing left the **previous** destination marked as a known recipient, so with `known_recipients_only` on, moving an alias to a new wallet left the old wallet agent-payable without owner approval. A running schedule also never extended the TTLs of `OwnerScheds` and `NextSchedId`. Same ABI as the current deployment. |
+| `CB5CQHV6OK6AF5ANTE7YHJ6UPG5QAIPHB6UVLRLDKNQ22VEQOHU22RYY` | **DEPRECATED — do not use** | `72746951ee191dae8ee8822ef3e2bd11d10132b857c6c9acde3e74466dd9386a` | `fae6d7619cec9a7bf363b3cde4de656dc0d21b4b8e24ac309f393425c2f51e29` | Carried a global cap of 200 active schedules backed by one shared `ActiveScheds` list. A handful of funded accounts could fill it with far-future schedules only they could cancel, permanently blocking `create_schedule` for everyone else; with no admin and no upgrade path the only remedy was a redeploy. Its `list_due(limit)` ABI is also gone. |
 
 Because the guard has no upgrade entrypoint, a fix means a new contract ID and every
 owner re-publishing their rule and allowance against it. That is the cost this
@@ -71,8 +74,9 @@ what the guard's `allowed_assets` and `--asset` arguments take.)
 
 ```bash
 cd contracts
-caffeinate -i stellar contract build          # -> target/wasm32v1-none/release/polaris_guard.wasm
-caffeinate -i cargo test                      # 27 unit tests
+caffeinate -i stellar contract build              # -> target/wasm32v1-none/release/polaris_guard.wasm
+caffeinate -i cargo test -p polaris_guard         # 38 unit tests
+caffeinate -i cargo clippy --all-targets          # must stay warning-free
 ```
 
 stellar-cli **>= 25.2.0** is required: since soroban-sdk v28 a plain
@@ -247,6 +251,14 @@ loop {
   can call it. Treat `#110 ScheduleNotDue` and `#111 ScheduleInactive` as benign
   races (another keeper won), and `#104 OverDailyLimit` as "retry after UTC
   midnight".
+* **TTL hygiene.** Protocol 23 auto-restores archived persistent entries, so an
+  expiring entry is a restore bill rather than lost data. A schedule run extends
+  the TTLs of the `Schedule` entry, its owner's `OwnerScheds` index and the shared
+  `NextSchedId` counter, so the untrusted keeper never has to pay to restore the
+  entries its own `list_due`/`get_schedule` path depends on. The cost of extending
+  the shared counter on the run path is that two runs landing in the same ledger
+  contend on that one entry — accepted deliberately (a bounded rent bump, not a
+  lock held across the transfer).
 
 ## Contract error codes
 
@@ -292,9 +304,9 @@ NeedsOwnerApproval**, re-sends it as the owner, then creates a one-shot schedule
 shows the early call rejected with `#110 ScheduleNotDue`, and has an unrelated
 keeper account execute it once it comes due.
 
-Verified run against `CDIWQTYA…` (2026-09-19): the 3 PGUSD agent payment settled,
+Verified run against `CDRLSFJ5W…` (2026-09-19): the 3 PGUSD agent payment settled,
 the 25 PGUSD one was refused with `#105`, the owner re-sent it, the early keeper call
 was refused with `#110`, `list_due --cursor 0 --limit 100` returned `[[1],0]`, and the
-keeper settled the schedule. Payee ended at `73.0000000 PGUSD` (the asset carries
-balances from the superseded contract's demo run too); `spent_today` for the owner
+keeper settled the schedule. Payee ended at `108.0000000 PGUSD` (the asset carries
+balances from the superseded deployments' demo runs too); `spent_today` for the owner
 read `350000000` raw units — 3 + 25 + 7 PGUSD through this contract.
