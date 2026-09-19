@@ -647,3 +647,36 @@
   the agent-side ceiling, not an on-chain promise.
 - **Status:** implemented on `feat/a12-language-detection`; pushed, no PR.
   `backlog/2026-09-20-a12-language-detection.md` (A13 section appended).
+
+## 2026-09-20 — A14: the language rule was backwards, and the notch must clear fullscreen
+- **Idea:** Two owner-observed defects. (1) Whisper's language label was made
+  authoritative in A12, but the owner's real run logged `[lang tr]: Can you send
+  400$ to Bilal?` — correct English text tagged Turkish. (2) The notch overlay
+  only appeared on the normal desktop; it vanished as soon as an app went
+  fullscreen (`"sadece ana ekranda geliyor bu arayüz tam ekran uygulamalarda da
+  gözükmeli"`).
+- **Discussion:** The STT label is an audio-level guess and is weakest exactly on
+  short, code-switched utterances full of names and currency symbols — the
+  owner's speech. The transcript text is the better evidence of which language to
+  answer in, so the model's assessment of the text must win and the STT label
+  must become a hint/fallback. For the overlay, `alwaysOnTop` /
+  `visibleOnAllWorkspaces` in `tauri.conf.json` do not express Space or
+  fullscreen behavior; the `NSWindow` needs a level above the fullscreen window
+  plus `FullScreenAuxiliary | CanJoinAllSpaces`.
+- **Decision:** Invert `resolveTurnLanguage`: the model's report wins, the STT
+  label is the fallback and is still passed as an explicit prompt hint the model
+  may override. Keep the STT label (fallback + diagnostic hint) rather than
+  delete it. Raise the overlay window level to `NSPopUpMenuWindowLevel` (101)
+  over `NSStatusWindowLevel` (25) and name the collection behaviour in one place
+  so `configure` and the diagnostics command cannot disagree. No new
+  language-detection library; Whisper is not "fixed".
+- **Verification:** app 19, agent 108→109, cargo 120/5→121/5,
+  typecheck/build/clippy clean. Real e2e with `POLARIS_E2E_STT_LANG=tr` on the
+  owner's transcript answers in English (`language: en (source model)`, Fish
+  `lang en`); the Turkish direction still resolves to `tr`. Overlay flags read
+  off the live `NSWindow` at startup: `level: 101`,
+  `full_screen_auxiliary: true`, `can_join_all_spaces: true`, `focusable: false`.
+- **Still open:** the owner's visual check of the overlay over a real fullscreen
+  app (only the flags are verified, not the pixels), and the in-app mic run.
+- **Status:** implemented on `feat/a12-language-detection`; pushed, no PR.
+  `backlog/2026-09-20-a14-language-precedence-and-fullscreen.md`.
