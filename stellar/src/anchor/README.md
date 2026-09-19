@@ -69,8 +69,9 @@ trustline, or `session.finishLogin(signedXdr)` for the challenge; then continue 
 `session.startDeposit(...)`. For cash-out, `withdrawTry(intent)` creates the SEP-6
 order and returns the **unsigned on-chain payment** plus an approval card that names
 the destination, the memo and the asset **code and issuer**; after signing,
-`submitSignedTx(signedXdr)` submits it, then poll. Configure once with
-`configureAnchor({ signer })`.
+`submitSignedTx(signedXdr, unsignedXdr)` submits it (the expected XDR enables a
+hash check; a sequence-0 login challenge is refused with a pointer to
+`finishLogin`), then poll. Configure once with `configureAnchor({ signer })`.
 
 > `withdrawTry` is typed with a local `AnchorIntent` that adds the `"withdraw"`
 > kind (PR #8 adds it to `@polaris/interfaces`; the TODO there will disappear on
@@ -89,10 +90,16 @@ Everything an anchor sends is untrusted. The client enforces this at the boundar
   `redirect: "error"` and a timeout that also covers reading the body; the toml is
   capped at 100 KB and JSON bodies at 1 MB, streamed or declared.
 * **Untrusted text:** every anchor-authored string (`how`, `instructions`,
-  status `message`, error bodies...) is sanitised (controls, newlines, zero-width
-  and bidi characters removed, length-capped) and carried in explain records as
-  `anchorSaid` — **never** in `what`/`why`, and `narrate()` excludes it, so prompt
-  injection cannot ride the TTS/LLM narration.
+  status `message`, quote amounts, text-memo echoes, TOML parser messages, error
+  bodies...) is sanitised (controls, newlines, zero-width and bidi characters
+  removed, hard-capped at `MAX_ANCHOR_TEXT = 200` unless a tighter format applies)
+  and carried in explain records as `anchorSaid` — **never** in `what`/`why`, and
+  `narrate()` excludes it, so prompt injection cannot ride the TTS/LLM narration.
+  SEP-38 quote amounts/fee assets are additionally format-validated (bounded
+  decimal / asset-id patterns) before they can appear anywhere.
+* **Test-only signer:** `EnvSigner` is deliberately not in the main barrel;
+  tests and the e2e script import it from `@polaris/stellar/anchor/testing` (or
+  the relative `testing.ts`), so it cannot ship in the app bundle.
 * **Login credential:** the SEP-10 JWT stays inside the session. `login()` and
   `finishLogin()` return `{ account, expiresAt }` (`SessionInfo`), never the token.
 * **Withdrawal payment:** the destination must be a plain `G...` account (muxed

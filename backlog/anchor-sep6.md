@@ -4,7 +4,7 @@
 - **Worker/Agent:** W4 (Claude Sonnet 5); round-2 hardening by W4b (L2 implementer)
 - **Branch/Worktree:** `feat/anchor-sep6` @ `.worktrees/anchor-sep6`
 - **PR:** https://github.com/n0tnow/StellarVoiceControlProject/pull/11 (draft, `feat/anchor-sep6` -> `main`)
-- **Status (round 2):** all six round-1 review findings addressed and covered by tests; typecheck green; 100/100 anchor tests green; plain `node` loads the package.
+- **Status (round 3):** round-1 findings 1-6 closed; round-2 review residuals N1-N3, N5-N7, N9 fixed and covered by tests; 111/111 anchor tests green; typecheck green; plain `node` loads the package. N4 (backlog index) and N8 (test-runner agreement with PR #9) are coordinator-owned follow-ups.
 
 ## Completed
 
@@ -22,7 +22,7 @@ SEP-6 anchor client in `stellar/src/anchor/` (README there maps every SEP to cod
 | Explain-log | `explain.ts` | `{ step, what, why, at }`, subscribe (TTS narrator), per-step slices; about 25 distinct plain-English record types (per SEP step and per SEP-6 status) |
 | Signer | `types.ts`, `testSigner.ts` | `Signer { publicKey(), signTransaction(xdr, {networkPassphrase?}) }`; `EnvSigner` reads `POLARIS_TEST_SECRET`; no key handling elsewhere |
 | ChainTool wiring | `chainTools.ts`, `stellar/src/index.ts` | `depositTry` and `submitSignedTx` implemented, `ChainTool`/`Intent` contract untouched; `interfaces/` NOT edited |
-| Tests | `__tests__/` (5 files, 100 tests) | mocked HTTP only: toml parsing, SEP-10 (valid, wrong server key, wrong home/web_auth domain, other account, other network, tampered, garbage, non-zero sequence, missing web_auth_domain, memo, time window, signer swap, wrong JWT sub/prefix), SEP-38, SEP-12, SEP-6 requests + statuses, polling machine, preflight, full session flows, `depositTry`/`withdrawTry`, explain-log content. `hardening.test.ts` covers the round-1 review: host/URL policy, redirect + size caps, memo/destination validation, session-bound payment, sanitisation/JWT redaction, `pending_*_info_update`, transient poll failures, exact stroops |
+| Tests | `__tests__/` (5 files, 111 tests) | mocked HTTP only: toml parsing, SEP-10 (valid, wrong server key, wrong home/web_auth domain, other account, other network, tampered, garbage, non-zero sequence, missing web_auth_domain, memo, time window, signer swap, wrong JWT sub/prefix), SEP-38, SEP-12, SEP-6 requests + statuses, polling machine, preflight, full session flows, `depositTry`/`withdrawTry`, explain-log content. `hardening.test.ts` (43 tests) covers the review: host/URL policy, redirect + size caps, issuer pinning, quote-field/memo/toml-error sanitisation, memo/destination validation, session-bound payment, signer-output verification, test-signer packaging, sanitisation/JWT redaction, `pending_*_info_update`, transient poll failures, exact stroops |
 | Docs | `stellar/src/anchor/README.md` | SEP-to-code map, pending_trust gotcha, verified mock behaviour, mock-vs-mainnet, SEP-24 note |
 
 ### Wallet SDK decision (`@stellar/typescript-wallet-sdk`)
@@ -71,6 +71,26 @@ loses only the `tsx` devDependency line (`tsx` itself stays: Vite needs it).
 Narration event shape matches PR #8 exactly (`{ type: "anchor_step", step, what,
 why }`, local structural copy + TODO until #8 merges), and `withdrawTry` uses the
 local `AnchorIntent` with the `"withdraw"` kind.
+
+## Round-3 fixes (round-2 review residuals)
+
+The round-2 review closed findings 1, 2, 3, 5, 6 and requested the sanitisation
+residuals (finding 4) plus a few small items:
+
+| Item | Fix | Tests |
+|---|---|---|
+| N1 (Major) quote fields in speech | `sep38.ts`: `sell_amount`/`buy_amount`/`total_price`/`price`/`fee.total` must match a bounded decimal pattern (`^\d{1,20}(\.\d{1,10})?$`) and `fee.asset` a strict SEP-38 asset id, else `QuoteError`; every echoed value is also sanitised (`what` only). `chainTools.ts:69` now only ever sees validated values | SEP-38 hardening block (3 tests) |
+| N2 text memo echo | `sanitizeAnchorText(value, 28)` before echoing in `sep6.ts` and `session.ts`; the exact memo still goes on chain | text-memo echo tests in both paths |
+| N3 toml parser message | `sep1.ts` parse errors carry a sanitised, 200-char-capped detail (`MAX_ANCHOR_TEXT`); the raw line is never surfaced | TOML parser-error test |
+| N5 doc drift | report/PR counts corrected to the measured suite (was 100) | — |
+| N6 signer output | `preflight.ts` compares the signed envelope with the one it built (`assertSameTransaction`); `submitSignedTx(signedXdr, expectedXdr?)` compares when the expected XDR is passed and refuses a sequence-0 login challenge with a clear message | preflight signer-swap test; `submitSignedTx` test |
+| N7 EnvSigner barrel | removed from `anchor/index.ts`; test-only entry point `stellar/src/anchor/testing.ts` exported as `@polaris/stellar/anchor/testing` | barrel test |
+| N9 withdrawTry path | documented: pass the returned `unsignedXdr` back to `submitSignedTx` so the hash check applies | doc-only |
+| N4 backlog index | coordinator-owned docs pass (instructed NOT to touch `backlog.md` here) | — |
+| N8 test-runner agreement | deferred: PR #9 is still open/draft. This branch keeps `test` = anchor-only (`test:anchor`); when #9 lands, keep its `test` and wire `test:anchor` into `scripts/check.sh` — needs the coordinator's call | — |
+
+Same-class adjacent fix: the SEP-1 discovery narration no longer echoes raw
+endpoint paths (`sep1.ts`, sanitised and capped at 120 chars).
 
 ## Unfinished (handed off)
 * Real signer (Rust/Touch ID) not connected; `Signer` is the plug point (the other team). `docs/interfaces.md` `SigningService.sign(payloadHash)` does not match `Signer.signTransaction(xdr)`; an adapter or an interface decision is needed.
