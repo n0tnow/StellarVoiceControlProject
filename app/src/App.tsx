@@ -9,15 +9,20 @@ import {
   listenPolarisEvents,
 } from "@/lib/polaris";
 
+/**
+ * Mirrors `notch::FALLBACK` in Rust — keep the two in step. The expanded height
+ * equals the idle height on purpose: the shell only ever widens, never grows
+ * down out of the hardware cutout.
+ */
 const FALLBACK_GEOMETRY: NotchGeometry = {
   idleWidth: 216,
   idleHeight: 34,
-  expandedWidth: 680,
-  expandedHeight: 66,
-  pillTopRadius: 4,
-  pillBottomRadius: 9,
-  shellEarRadius: 6,
-  shellBottomRadius: 14,
+  expandedWidth: 216 * 1.7,
+  expandedHeight: 34,
+  pillTopRadius: 4.25,
+  pillBottomRadius: 8.5,
+  shellEarRadius: 6.12,
+  shellBottomRadius: 8.5,
 };
 
 const IDLE_STATUS: CaptureStatus = { state: "idle", recording: null, error: null };

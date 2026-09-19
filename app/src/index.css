@@ -158,7 +158,10 @@
   position: relative;
   overflow: hidden;
   border-radius: inherit;
-  padding: 0 38px;
+  /* A 32 pt shell has no room for 38 px gutters; keep the copy clear of the
+     concave ears without pushing the shell taller. */
+  padding: 0 16px 0 18px;
+  gap: 10px;
   opacity: 0;
   transition: opacity 150ms ease;
   white-space: nowrap;
@@ -172,23 +175,33 @@
 .notch-copy {
   z-index: 1;
   min-width: 0;
-  padding-top: 3px;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  overflow: hidden;
 }
 
 .notch-label {
   margin: 0;
-  font-size: 21px;
-  line-height: 1.2;
+  /* Measured from the design reference: the label is ~24 px tall in a 2x
+     screenshot, i.e. ~12 pt, inside a 33 pt shell. */
+  font-size: 13px;
+  line-height: 1.15;
   font-weight: 650;
-  letter-spacing: -0.4px;
+  letter-spacing: -0.2px;
+  flex-shrink: 0;
 }
 
 .notch-detail {
-  margin: 5px 0 0;
+  /* Inline with the label, never a second row: the shell height is fixed. */
+  margin: 0;
   color: var(--color-notch-muted);
-  font-size: 10px;
+  font-size: 9px;
   line-height: 1.2;
   letter-spacing: 0.05px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .notch-indicator {
@@ -196,27 +209,29 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 7px;
-  width: 45px;
-  height: 38px;
+  gap: 4px;
+  width: 26px;
+  height: 20px;
   flex-shrink: 0;
 }
 
 .notch-indicator::before {
   content: "";
   position: absolute;
-  width: 120px;
-  height: 95px;
+  /* Sized to the 32 pt shell so the wash fades out inside it instead of being
+     cut off square by `.notch-content`'s overflow clip. */
+  width: 96px;
+  height: 38px;
   border-radius: 50%;
-  background: radial-gradient(ellipse, #b91bae66, #9417a42c 40%, transparent 70%);
-  transform: translate(22px, 23px);
+  background: radial-gradient(ellipse, #b91bae5c, #9417a426 45%, transparent 72%);
+  transform: translate(16px, 3px);
 }
 
 .notch-indicator span {
   z-index: 1;
-  width: 7px;
-  height: 7px;
-  border-radius: 8px;
+  width: 4px;
+  height: 4px;
+  border-radius: 4px;
   background: var(--color-notch-accent);
   box-shadow: 0 0 12px #f05adc70;
 }

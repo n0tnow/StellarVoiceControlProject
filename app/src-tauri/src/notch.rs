@@ -81,9 +81,23 @@ const fn radii_for(idle_height: f64, expanded_height: f64) -> Radii {
     Radii {
         pill_top: clamp(idle_height * 0.125, 3.0, 5.0),
         pill_bottom: clamp(idle_height * 0.25, 7.0, 10.0),
-        shell_ear: clamp(expanded_height * 0.09, 5.0, 8.0),
-        shell_bottom: clamp(expanded_height * 0.21, 12.0, 18.0),
+        // The expanded shell is the same height as the pill, so its corners are
+        // derived from the same scale rather than from a taller shell.
+        shell_ear: clamp(expanded_height * 0.18, 4.0, 8.0),
+        shell_bottom: clamp(expanded_height * 0.25, 7.0, 12.0),
     }
+}
+
+/// Expanded shell size, derived from the resting pill.
+///
+/// The shell **never grows vertically**: the returned height is the cutout
+/// height, unchanged. An expanded shell taller than the hardware cutout hangs
+/// below the notch and reads as a separate black slab — the defect reported
+/// twice against earlier revisions. Only the width changes, by
+/// [`EXPANDED_WIDTH_RATIO`], capped so the shell always fits the overlay window.
+fn expanded_size(idle_width: f64, idle_height: f64, outer_width: f64) -> (f64, f64) {
+    let width = (idle_width * EXPANDED_WIDTH_RATIO).min(outer_width - 40.0);
+    (width.max(idle_width), idle_height)
 }
 
 /// Idle pill size for a notched display: **exactly** the measured cutout.
@@ -95,14 +109,20 @@ fn idle_cutout_size(housing: f64, safe_top: f64) -> (f64, f64) {
     (housing.max(0.0), safe_top)
 }
 
+/// How much wider the expanded shell is than the resting pill.
+///
+/// From the design reference (2x screenshots): the resting shell is 360 px wide
+/// and the expanded one 610 px, both 66 px tall. 610 / 360 = 1.69.
+const EXPANDED_WIDTH_RATIO: f64 = 1.7;
+
 /// Centred-pill fallback for displays without a camera housing.
 pub const FALLBACK: NotchGeometry = {
-    let radii = radii_for(34.0, 66.0);
+    let radii = radii_for(34.0, 34.0);
     NotchGeometry {
         idle_width: 216.0,
         idle_height: 34.0,
-        expanded_width: 680.0,
-        expanded_height: 66.0,
+        expanded_width: 216.0 * EXPANDED_WIDTH_RATIO,
+        expanded_height: 34.0,
         pill_top_radius: radii.pill_top,
         pill_bottom_radius: radii.pill_bottom,
         shell_ear_radius: radii.shell_ear,
@@ -178,8 +198,7 @@ fn configure(app: &AppHandle) -> Result<NotchGeometry, Box<dyn std::error::Error
     };
 
     let outer_width = WINDOW_WIDTH.min(frame.size.width);
-    let expanded_width = 680.0_f64.max(idle_width + 380.0).min(outer_width - 40.0);
-    let expanded_height = 66.0_f64.max(idle_height + 20.0);
+    let (expanded_width, expanded_height) = expanded_size(idle_width, idle_height, outer_width);
     let radii = radii_for(idle_height, expanded_height);
 
     let window = app
@@ -241,7 +260,10 @@ fn configure(app: &AppHandle) -> Result<NotchGeometry, Box<dyn std::error::Error
 // radii must describe a valid (non-inverted) silhouette.
 const _: () = {
     assert!(FALLBACK.idle_width < FALLBACK.expanded_width);
-    assert!(FALLBACK.idle_height < FALLBACK.expanded_height);
+    // The shell only ever widens. Equal heights are the invariant, not an
+    // oversight: any expanded height greater than the pill would make the
+    // overlay grow downwards out of the hardware cutout.
+    assert!(FALLBACK.idle_height == FALLBACK.expanded_height);
     assert!(FALLBACK.expanded_width <= WINDOW_WIDTH);
     assert!(FALLBACK.expanded_height <= WINDOW_HEIGHT);
     assert!(FALLBACK.pill_top_radius > 0.0);
@@ -269,11 +291,41 @@ mod tests {
 
     #[test]
     fn radii_track_the_measured_heights() {
-        let radii = radii_for(32.0, 66.0);
+        // The expanded shell is the same height as the pill (the overlay only
+        // ever widens), so both sets of radii derive from the 32 pt cutout.
+        let radii = radii_for(32.0, 32.0);
         assert!((radii.pill_top - 4.0).abs() < f64::EPSILON);
         assert!((radii.pill_bottom - 8.0).abs() < f64::EPSILON);
-        assert!((radii.shell_ear - 5.94).abs() < 0.01);
-        assert!((radii.shell_bottom - 13.86).abs() < 0.01);
+        assert!((radii.shell_ear - 5.76).abs() < 0.01);
+        assert!((radii.shell_bottom - 8.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn the_shell_never_grows_taller_than_the_cutout() {
+        // Regression guard for the defect reported twice against earlier
+        // revisions: an expanded shell taller than the hardware cutout hangs
+        // below the notch and reads as a separate black slab.
+        for idle_height in [28.0_f64, 32.0, 38.0, 44.0] {
+            let (_, expanded_height) = expanded_size(179.0, idle_height, 780.0);
+            assert_eq!(
+                expanded_height, idle_height,
+                "expanded height must equal the cutout height"
+            );
+        }
+        assert_eq!(FALLBACK.expanded_height, FALLBACK.idle_height);
+    }
+
+    #[test]
+    fn the_shell_widens_by_the_measured_ratio_and_stays_inside_the_window() {
+        // 179 pt cutout on this machine -> 1.7x = 304.3 pt.
+        let (width, _) = expanded_size(179.0, 32.0, 780.0);
+        assert!((width - 304.3).abs() < 0.01, "got {width}");
+        assert!(width > 179.0);
+
+        // A narrow overlay window clamps the shell instead of overflowing it,
+        // and the shell never ends up narrower than the resting pill.
+        let (clamped, _) = expanded_size(179.0, 32.0, 200.0);
+        assert_eq!(clamped, 179.0);
     }
 
     #[test]
