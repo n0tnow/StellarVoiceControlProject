@@ -340,3 +340,37 @@
 - **Status:** implemented on `feat/a4-speak-intent` (agent 39 tests, TS typecheck +
   build green, Rust 100 passed / 2 ignored, clippy clean) —
   `backlog/2026-09-19-a5-latency-and-speaking.md`.
+
+## 2026-09-19 — A6: the webview could not reach the provider (WebKit receiver bug)
+- **Owner-observed bug (real run):** after a correct transcript, the notch showed
+  `NET ERROR could not reach the model provider at /agen…` and the trace stayed on
+  `glm-5.3-flash · thinking`.
+- **Actual cause (quoted from the live app):**
+  `could not reach the model provider at /agent-api: Can only call Window.fetch on
+  instances of Window`, at `latencyMs: 1`. It is not a network failure: the client
+  stored `globalThis.fetch` in a field and called it as `this.#fetch(...)`, making
+  the client instance the receiver; WebKit enforces the WebIDL receiver for
+  `Window.fetch` and rejects the call before any request. Node (undici) and a
+  direct `fetch(...)` call are both fine, which is why the CLI and the
+  coordinator's browser check passed. Reproduced in a bare WKWebView: an unbound
+  call returns 200, `{ f: fetch }.f('/')` returns the exact TypeError.
+- **Decision — move the transport into Rust, not just patch the receiver.** A
+  one-line receiver fix would only have repaired the dev proxy path; the Vite
+  `/agent-api` proxy was dev-only (flagged in A2), so a packaged Polaris would still
+  have had no provider route. `agent_chat` in `app/src-tauri/src/agent.rs` now owns
+  the URL and the key, and the webview only sends the JSON body + session id. The
+  TypeScript client keeps request building, the error taxonomy and parsing — only
+  the transport moved. The `/agent-api` proxy and the key loading were deleted from
+  `app/vite.config.ts`; the receiver bug was also fixed in `openai.ts` so the shared
+  client is safe in any browser. This closes the A2 packaging handoff.
+- **Stuck notch:** `loop.ts` emitted `agent_status: done` only on success, so a
+  failure left the stage on `thinking`; it now emits `done` in a `finally`, and
+  `App.tsx` shows the agent failure's short label in the notch for the A1 dwell then
+  collapses. Both have regression tests.
+- **Verification:** live in-app turn through the Rust command —
+  `polaris: agent → provider HTTP 200 in 2029 ms`, intent `{send 5 USDC Ahmet}` in
+  `2039 ms`; a forced transport failure produced notch `label "Net error"`,
+  `class "notch is-expanded state-error"`, trace `· done`. Agent tests 39 → 40,
+  Rust 100 → 104; typecheck, build and clippy clean.
+- **Status:** implemented on `feat/a4-speak-intent` — packaged launch and the human
+  mic run are still unverified. `backlog/2026-09-19-a6-webview-agent-transport.md`.
