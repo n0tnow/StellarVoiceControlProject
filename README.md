@@ -4,9 +4,9 @@
 > assistant for Stellar (hackathon track: Genesis, 19–20 Sep 2026).
 >
 > This README is refreshed by a dedicated agent at the end of every milestone
-> (see `AGENTS.md` §6). It describes the codebase as of **v0.1.0**: the chain layer
-> (guard contract, keeper, anchor client) is real and tested on testnet; the voice
-> pipeline in `app/` is not wired yet.
+> (see `AGENTS.md` §6). It describes the codebase as of **v0.1.0** plus **step A0**: the
+> chain layer (guard contract, keeper, anchor client) is real and tested on testnet, and the
+> voice pipeline captures audio — hold-to-talk and the notch overlay are wired, STT is not.
 
 Polaris is a voice-controlled Stellar assistant: hold a global hotkey, speak, and it
 answers and can act on Stellar — pay, schedule payments, move between TRY and USDC
@@ -28,12 +28,12 @@ no custom anchor; scope and non-goals are defined in `docs/architecture.md` §1.
 
 ```
 interfaces/   @polaris/interfaces — the ONLY typed seam between owners (source-only pkg)
-agent/        @polaris/agent      — agent loop, tool registry, event bus (skeleton)
-app/          @polaris/app        — Tauri v2 desktop shell: Rust core + React UI (skeleton)
-  src/            React 19 + Vite 8 + Tailwind 4 panel, event log pane
-  src-tauri/      Rust: window, typed event stream, (later) hotkey/audio/Touch ID
-stellar/      @polaris/stellar    — anchor client (SEP-1/10/12/38/6) + keeper
-contracts/    Soroban Cargo workspace: polaris_guard (spending rules + scheduler)
+agent/        @polaris/agent      — agent loop, tool registry, event bus        (Owner A)
+app/          @polaris/app        — Tauri v2 desktop shell: Rust core + React UI (Owner A)
+  src/            React 19 + Vite 8 + Tailwind 4 — notch overlay (A0)
+  src-tauri/      Rust: notch overlay (AppKit), Control+Option hold, mic→WAV, typed event stream
+stellar/      @polaris/stellar    — anchor client (SEP-1/10/12/38/6) + keeper      (Owner B)
+contracts/    Soroban Cargo workspace: polaris_guard (spending rules + scheduler)  (Owner B)
 scripts/      setup / check / dev / icon generation
 docs/         architecture, interfaces, research reports
 ```
@@ -167,6 +167,26 @@ long operations run under `caffeinate -i` per `AGENTS.md` §4. The desktop shell
 - `docs/reports/` — research archive (`INDEX.md`).
 - `VERSION` + `CHANGELOG.md` — SemVer with the pre-1.0 policy from `AGENTS.md` §9
   (coordinator cuts tags after merge; agents never tag).
+
+### What is wired today (and what is not)
+
+**Wired**
+- The **typed event stream**: Rust (`app/src-tauri/src/events.rs`) emits `PolarisEvent`s on the
+  `polaris-event` channel; the UI subscribes through `app/src/lib/polaris.ts`. The wire shape
+  (snake_case type tags, camelCase fields) is pinned by Rust unit tests, and the same
+  TypeScript union lives in `interfaces/`.
+- **A0 — push-to-talk + notch overlay**: a transparent, click-through, always-on-top overlay at
+  the physical notch (AppKit geometry), driven by `idle → recording → ready` events. Hold
+  **Control+Option** to record (`control+option+space` also works), release to stop; `cpal` writes a 16-bit PCM WAV and
+  microphone/permission failures surface as the overlay `error` state. Release never sends.
+- `app_info` (version/network) and the agent skeleton (tool registry + `noop` + `MockLlm`).
+- `polaris_guard` on testnet (rules, alias book, schedules), the off-chain keeper, and the
+  SEP-6 anchor client — see `contracts/DEPLOYED.md`.
+
+**Not wired yet** (step order in `sprints.md`)
+- speech-to-text (`A1`), the real Anthropic tool-use model (`A2`), speech output (`A3`),
+  screen reading (`A4`), Touch ID approval + signing (`A5`),
+- the voice pipeline is not yet joined to the chain layer (`A5`).
 
 ## Security & secrets
 

@@ -92,4 +92,50 @@
   6. `.gitignore`-d files stay clone-local; `.gitignore` itself must be identical across all clones.
 - **Status:** decided
 
+## 2026-09-19 — A0: Push-to-Talk + Notch Overlay (decisions)
+- **Idea:** Implement step A0 as the notch-companion shell (not the skeleton dashboard): a
+  transparent always-on-top overlay at the physical notch, a global hold-to-talk hotkey, and
+  microphone capture to a WAV, all driven by the typed `PolarisEvent` stream.
+- **Discussion:** The design reference's `notch-design.md` says "Replace the A0 dashboard",
+  so the skeleton's log pane is no longer rendered; the overlay's state is the harness. The
+  task's claim that `audio_captured` "already exists on main" was wrong — `main` only had the
+  `hotkey` variant — so `capture_status` and `audio_captured` were both added.
+- **Decision:**
+  1. **Hotkey:** `control+option+space` via `tauri-plugin-global-shortcut` (Carbon supports the
+     Released event on macOS). The modifier-only Ctrl+Option gesture is a separate follow-up
+     needing a native `flagsChanged` observer + Accessibility permission.
+  2. **Capture:** `cpal` on a dedicated thread (avoids `Stream: Send` per-platform questions),
+     normalized to 16-bit PCM and written with `hound`; `stop` waits briefly for finalization
+     so release yields a final `ready`.
+  3. **`ready` is not a send.** Release only stops/lands the WAV; no submit path exists in A0.
+     The wire `ready` state persists for A1, while the overlay collapses after a 6 s dwell.
+  4. **Overlay geometry from AppKit** (`safeAreaInsets` / auxiliary top areas), main-thread
+     only, with a centered-pill fallback; display changes are caught by a 2 s UI poll.
+  5. **Version pairing:** objc2 crates pinned to the generation tauri 2.11.5 already links
+     (objc2 0.6.4 / app-kit 0.3.2 / foundation 0.3.2) — verified with `cargo tree -i objc2`.
+- **Status:** decided
+
+## 2026-09-19 — Notch shape fix (idle must coincide with the cutout)
+- **Idea:** The A0 overlay was visible but did not match the physical camera housing; it read as a
+  separate black blob. Make the idle pill coincide with the cutout and make the expanded shell grow
+  out of it with correct asymmetric corners (step after A0 on the same branch).
+- **Discussion:** Two causes. (1) `notch.rs` inflated the measured housing: 179x32 became 199x36
+  (`housing + 20`, `safe_top + 4`). (2) `index.css` hardcoded `border-radius: 0 0 25px 25px` and an
+  18 px shoulder that was present even at rest. Research: hardware cutout corners are ~4 pt (top) /
+  ~8 pt (bottom) and the bottom flares wider (notchbay.com); boring.notch's `NotchShape` defaults
+  to a 6 pt concave top ear and 14 pt convex bottom.
+- **Decision:**
+  1. Idle geometry is the measured cutout, no inflation. **Do not overdraw the ~5 pt menu-bar
+     margin**: macOS already draws that strip behind our transparent window; painting black into a
+     light menu bar is the blob failure we are removing.
+  2. Four radii (`pillTop`, `pillBottom`, `shellEar`, `shellBottom`) are derived in Rust from the
+     measured heights and flow through `NotchGeometry` → React → CSS custom properties; no CSS px
+     constants decide the shape.
+  3. Keep the CSS radial-gradient ears (parameterised by a registered `@property --ear`, zero while
+     idle) rather than a single SVG path: CSS transitions width/height/radius together without
+     per-frame JS, and reproduces the top-concave / bottom-convex silhouette.
+  4. Do not regress A0: capture, hotkey, event stream, state machine, and the native window
+     placement/level/collection/click-through are untouched.
+- **Status:** decided (user visual check on the real display still pending)
+
 <!-- New notes are appended chronologically at the bottom. -->

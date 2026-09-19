@@ -11,16 +11,24 @@
   },
   "app": {
     "withGlobalTauri": false,
+    "macOSPrivateApi": true,
     "windows": [
       {
         "label": "main",
         "title": "Polaris",
-        "width": 960,
-        "height": 680,
-        "minWidth": 720,
-        "minHeight": 520,
-        "resizable": true,
-        "fullscreen": false
+        "width": 780,
+        "height": 120,
+        "resizable": false,
+        "fullscreen": false,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "alwaysOnTop": true,
+        "visibleOnAllWorkspaces": true,
+        "skipTaskbar": true,
+        "focus": false,
+        "focusable": false,
+        "visible": false
       }
     ],
     "security": {

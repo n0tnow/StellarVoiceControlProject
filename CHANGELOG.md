@@ -7,10 +7,40 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ## [Unreleased]
 
+### Added
+- Step A0 — push-to-talk + notch overlay: a transparent, click-through, always-on-top AppKit
+  overlay at the physical notch (safe-area geometry, centered-pill fallback) driven by the
+  typed event stream.
+- Hold-to-talk gesture: modifier-only **Control+Option** via a native `NSEvent` `flagsChanged`
+  monitor (300 ms arming delay, Command/Shift exclusion, Accessibility gate with graceful
+  shortcut-only degradation, 1 s watchdog), with `control+option+space` kept as a permanent
+  secondary trigger. Hold records, release stops; release never sends or submits.
+- Microphone capture (`cpal`) written to a 16-bit PCM WAV (`hound`); microphone/permission
+  failures surface as the overlay `error` state.
+- New seam types (`CaptureState`, `CaptureRecording`, `CaptureStatus`, `NotchGeometry`) and
+  `PolarisEvent` variants `capture_status` / `audio_captured`; commands `capture_start`,
+  `capture_stop`, `capture_status`, `notch_geometry`.
+
+### Removed
+- Temporary `dev_self_test` command (replaced by the real hotkey + capture path).
+
+### Fixed
+- Notch overlay now matches the physical camera housing: the idle pill is the measured cutout
+  (179x32 pt on this machine, previously 199x36), and four corner radii (`pillTop`, `pillBottom`,
+  `shellEar`, `shellBottom`) are derived from the display and flow through `NotchGeometry` to CSS
+  custom properties instead of hardcoded `border-radius`/shoulder constants.
+- The overlay only ever widens. The expanded shell keeps the cutout's height and grows sideways
+  to `idle_width + 2 * 110 pt`; content is laid out in the two ears with an empty centre column
+  the width of the cutout, because the display has no pixels behind the camera housing.
+- Capture no longer dies with a CoreAudio `Xrun`: the realtime callback hands samples to a
+  dedicated writer thread over a bounded channel instead of doing disk I/O under a mutex, and a
+  stream failure tears the stream down so the next hold works instead of wedging in `recording`.
+
 ## [0.1.0] - 2026-09-19
 
 First code milestone: the monorepo skeleton plus a testnet-deployed on-chain guard,
 the off-chain keeper that triggers its schedules, and a SEP-6 anchor client.
+
 
 ### Added
 

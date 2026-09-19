@@ -1,177 +1,239 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import type { UnlistenFn } from "@tauri-apps/api/event";
-import { Mic, Plug, RadioTower, Trash2 } from "lucide-react";
-import type { AppInfo } from "@polaris/interfaces";
+import type { CaptureStatus, NotchGeometry } from "@polaris/interfaces";
 
-import { EventLog } from "@/components/EventLog";
-import { Button } from "@/components/ui/button";
 import {
-  describeEvent,
-  devSelfTest,
-  getAppInfo,
+  getCaptureStatus,
+  getHotkeyPermission,
+  getNotchGeometry,
   listenPolarisEvents,
-  makeLine,
-  type LogLine,
 } from "@/lib/polaris";
 
-type StreamState = "connecting" | "live" | "failed";
+/**
+ * Mirrors `notch::FALLBACK` in Rust — keep the two in step. The expanded height
+ * equals the idle height on purpose: the shell only ever widens, never grows
+ * down out of the hardware cutout.
+ */
+const FALLBACK_GEOMETRY: NotchGeometry = {
+  idleWidth: 216,
+  idleHeight: 34,
+  expandedWidth: 216 + 2 * 110,
+  expandedHeight: 34,
+  pillTopRadius: 4.25,
+  pillBottomRadius: 8.5,
+  shellEarRadius: 6.12,
+  shellBottomRadius: 15.3,
+};
+
+const IDLE_STATUS: CaptureStatus = { state: "idle", recording: null, error: null };
 
 /**
- * Polaris shell — skeleton stage.
+ * How long the expanded "Ready to send" shell stays up before collapsing back
+ * to the idle pill. The recording is untouched — it stays on disk for step A1.
+ */
+const READY_DWELL_MS = 6000;
+
+/** Display topology has no Tauri event; re-read geometry on a cheap interval. */
+const GEOMETRY_POLL_MS = 2000;
+
+/** Backoff before retrying a failed connection to the Rust core. */
+const RECONNECT_MS = 3000;
+
+/**
+ * How long the one-time "Accessibility needed" hint stays expanded after the
+ * overlay connects. The macOS consent dialog is the primary, non-modal signal;
+ * this is the in-shell echo of it.
+ */
+const PERMISSION_HINT_MS = 8000;
+
+/**
+ * Polaris notch overlay (step A0).
  *
- * Wired today: the typed `polaris-event` channel from Rust, app metadata, and the
- * log pane that every later step is demoed through.
- * Not wired yet: hotkey and microphone (step A0), STT (A1), the agent round trip
- * (A2), speech output (A3), Touch ID approval (A5).
+ * The shell is a pure function of the `capture_status` event stream: idle ->
+ * recording (hotkey down) -> ready (release, WAV on disk). Release never sends
+ * or submits anything. Microphone and permission failures arrive as the `error`
+ * state instead of crashing the shell.
  */
 export default function App() {
-  const [lines, setLines] = useState<LogLine[]>([]);
-  const [info, setInfo] = useState<AppInfo | null>(null);
-  const [stream, setStream] = useState<StreamState>("connecting");
-  const [busy, setBusy] = useState(false);
-  const [wireEventCount, setWireEventCount] = useState(0);
+  const [status, setStatus] = useState<CaptureStatus>(IDLE_STATUS);
+  const [geometry, setGeometry] = useState<NotchGeometry>(FALLBACK_GEOMETRY);
+  const [connectionError, setConnectionError] = useState<string | null>(null);
+  const [connected, setConnected] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
+  const [hotkeyTrusted, setHotkeyTrusted] = useState<boolean | null>(null);
+  const [permissionHint, setPermissionHint] = useState(false);
 
-  const append = useCallback((line: Omit<LogLine, "id" | "at">) => {
-    setLines((previous) => [...previous, makeLine(line)]);
-  }, []);
-
-  // Subscribe to the Rust event stream, then fetch app metadata.
   useEffect(() => {
+    let disposed = false;
     let unlisten: UnlistenFn | undefined;
-    let cancelled = false;
+    let receivedStatus = false;
+    let retry: ReturnType<typeof setTimeout> | undefined;
 
-    listenPolarisEvents((event) => {
-      setWireEventCount((count) => count + 1);
-      append(describeEvent(event));
-    })
-      .then((stop) => {
-        if (cancelled) {
-          stop();
+    // Subscribe first, then read the snapshot, so no transition is missed
+    // between the two. A live event always wins over the startup snapshot.
+    const connect = async () => {
+      try {
+        unlisten = await listenPolarisEvents((event) => {
+          if (disposed) return;
+          if (event.type === "capture_status") {
+            receivedStatus = true;
+            setStatus(event.status);
+          } else if (event.type === "hotkey_permission") {
+            setHotkeyTrusted(event.trusted);
+          }
+        });
+        if (disposed) {
+          unlisten();
           return;
         }
-        unlisten = stop;
-        setStream("live");
-        append({
-          origin: "ui",
-          title: "Subscribed to polaris-event",
-          tone: "ok",
-        });
-      })
-      .catch((error: unknown) => {
-        setStream("failed");
-        append({
-          origin: "ui",
-          title: "Could not subscribe to the event stream",
-          detail: String(error),
-          tone: "danger",
-        });
-      });
+        const [snapshot, trusted] = await Promise.all([
+          getCaptureStatus(),
+          getHotkeyPermission(),
+        ]);
+        if (!disposed) {
+          if (!receivedStatus) setStatus(snapshot);
+          setHotkeyTrusted(trusted);
+          setConnected(true);
+          setConnectionError(null);
+        }
+      } catch (error) {
+        unlisten?.();
+        unlisten = undefined;
+        if (!disposed) {
+          setConnectionError(String(error));
+          retry = setTimeout(() => void connect(), RECONNECT_MS);
+        }
+      }
+    };
 
-    getAppInfo()
-      .then((metadata) => {
-        setInfo(metadata);
-        append({
-          origin: "ui",
-          title: `Polaris ${metadata.version} ready`,
-          detail: `network: ${metadata.network} · tauri: ${metadata.tauriVersion}`,
-          tone: "accent",
+    const refreshGeometry = () => {
+      getNotchGeometry()
+        .then((next) => {
+          if (!disposed) setGeometry(next);
+        })
+        .catch((error: unknown) => {
+          if (!disposed) setConnectionError(`Display unavailable: ${String(error)}`);
         });
-      })
-      .catch((error: unknown) => {
-        append({
-          origin: "ui",
-          title: "app_info command failed",
-          detail: String(error),
-          tone: "danger",
-        });
-      });
+    };
+
+    void connect();
+    refreshGeometry();
+    const geometryTimer = setInterval(refreshGeometry, GEOMETRY_POLL_MS);
 
     return () => {
-      cancelled = true;
+      disposed = true;
       unlisten?.();
+      clearTimeout(retry);
+      clearInterval(geometryTimer);
     };
-  }, [append]);
+  }, []);
 
-  const runSelfTest = useCallback(async () => {
-    setBusy(true);
-    try {
-      const expected = await devSelfTest();
-      append({
-        origin: "ui",
-        title: `dev_self_test emitted ${expected.length} events`,
-        detail: expected.map((event) => event.type).join(" -> "),
-        tone: "ok",
-      });
-    } catch (error: unknown) {
-      append({
-        origin: "ui",
-        title: "dev_self_test failed",
-        detail: String(error),
-        tone: "danger",
-      });
-    } finally {
-      setBusy(false);
+  // Presentation-only dwell: the wire `ready` state persists (the WAV is still
+  // waiting for A1), but the companion collapses so it does not sit expanded.
+  useEffect(() => {
+    if (status.state !== "ready") {
+      setCollapsed(false);
+      return;
     }
-  }, [append]);
+    const timer = setTimeout(() => setCollapsed(true), READY_DWELL_MS);
+    return () => clearTimeout(timer);
+  }, [status]);
 
-  const statusTone = useMemo(
-    () => (stream === "live" ? "text-polaris-ok" : stream === "failed" ? "text-polaris-danger" : "text-polaris-warn"),
-    [stream],
-  );
+  // One-time, non-modal echo of the macOS Accessibility consent dialog. The
+  // system dialog is the primary signal; this expands the shell briefly so the
+  // user sees that Control+Option is unavailable and the shortcut still works.
+  useEffect(() => {
+    if (!connected || hotkeyTrusted !== false) {
+      setPermissionHint(false);
+      return;
+    }
+    setPermissionHint(true);
+    const timer = setTimeout(() => setPermissionHint(false), PERMISSION_HINT_MS);
+    return () => clearTimeout(timer);
+  }, [connected, hotkeyTrusted]);
+
+  const state = connectionError ? "error" : status.state;
+  const visual = state === "ready" && collapsed ? "idle" : state;
+  // One-time hint echo of the macOS Accessibility dialog; only replaces the
+  // idle pill, never a real recording/ready/error state.
+  const showPermissionHint =
+    permissionHint && connected && hotkeyTrusted === false && state === "idle";
+  const expanded = visual !== "idle" || !connected || showPermissionHint;
+  const error = connectionError ?? status.error;
+  const durationMs = status.recording?.durationMs ?? 0;
+
+  // The label is the ONLY thing drawn in the left ear, so it has to stay short:
+  // the ear is deliberately narrow and anything longer would be clipped (it can
+  // never spill right, because that is the camera housing). The full wording
+  // still reaches assistive tech through the live region below.
+  const label = showPermissionHint
+    ? "Grant access"
+    : state === "recording"
+      ? "Listening"
+      : state === "ready"
+        ? "Ready"
+        : state === "error"
+          ? "Mic error"
+          : "Connecting";
+  const detail = showPermissionHint
+    ? "System Settings › Privacy & Security › Accessibility"
+    : connectionError
+      ? "Reconnecting…"
+      : state === "error"
+        ? "⌃⌥ to retry"
+        : state === "ready"
+          ? `${(durationMs / 1000).toFixed(1)}s · hold ⌃⌥ again`
+          : state === "recording"
+            ? "Release to finish"
+            : "Starting up…";
+
+  const style = {
+    "--idle-width": `${geometry.idleWidth}px`,
+    "--idle-height": `${geometry.idleHeight}px`,
+    "--expanded-width": `${geometry.expandedWidth}px`,
+    "--expanded-height": `${geometry.expandedHeight}px`,
+    "--pill-top-radius": `${geometry.pillTopRadius}px`,
+    "--pill-bottom-radius": `${geometry.pillBottomRadius}px`,
+    "--shell-ear-radius": `${geometry.shellEarRadius}px`,
+    "--shell-bottom-radius": `${geometry.shellBottomRadius}px`,
+  } as CSSProperties;
 
   return (
-    <div className="flex h-full flex-col bg-polaris-bg text-polaris-text">
-      <header className="flex items-center gap-4 border-b border-polaris-line px-5 py-4">
-        <div className="flex size-9 items-center justify-center rounded-xl bg-polaris-accent/15">
-          <RadioTower className="size-4 text-polaris-accent" />
+    <main className="notch-stage" style={style} aria-label="Polaris voice capture">
+      <section
+        className={`notch ${expanded ? "is-expanded" : ""} state-${visual}`}
+        aria-label={
+          expanded
+            ? `${label}. ${detail}`
+            : "Polaris ready. Hold Control and Option to record, or hold Control, Option and Space."
+        }
+      >
+        <div className="notch-content" aria-hidden={!expanded}>
+          <div className="notch-copy">
+            {/* Label only. `detail` and `error` are not drawn — the ear is too
+                narrow for them and the housing to its right cannot be used —
+                but they still reach assistive tech via the live region below. */}
+            <p className="notch-label">{label}</p>
+          </div>
+          {/* The camera housing: no pixels exist here, so it stays empty. */}
+          <span className="notch-gap" aria-hidden="true" />
+          <div className="notch-indicator" aria-hidden="true">
+            <span />
+            <span />
+            <span />
+          </div>
         </div>
-        <div className="min-w-0 flex-1">
-          <h1 className="text-sm font-semibold tracking-wide">Polaris</h1>
-          <p className="text-xs text-polaris-muted">
-            push-to-talk Stellar assistant · skeleton
-          </p>
-        </div>
-        <div className="flex items-center gap-2 text-[11px] text-polaris-muted">
-          {info ? (
-            <>
-              <span className="rounded-md border border-polaris-line px-2 py-0.5">
-                v{info.version}
-              </span>
-              <span className="rounded-md border border-polaris-line px-2 py-0.5">
-                {info.network}
-              </span>
-            </>
-          ) : null}
-          <span className={`flex items-center gap-1.5 ${statusTone}`}>
-            <Plug className="size-3" />
-            {stream}
-          </span>
-        </div>
-      </header>
-
-      <EventLog lines={lines} />
-
-      <footer className="flex items-center gap-3 border-t border-polaris-line px-5 py-4">
-        <Button
-          variant="default"
-          className="gap-2"
-          disabled
-          title="Step A0: global hotkey + microphone capture are not wired yet"
-        >
-          <Mic className="size-4" />
-          Hold to talk
-        </Button>
-        <Button variant="secondary" onClick={runSelfTest} disabled={busy || stream !== "live"}>
-          {busy ? "Running…" : "Run self-test"}
-        </Button>
-        <Button variant="ghost" onClick={() => setLines([])}>
-          <Trash2 className="size-4" />
-          Clear
-        </Button>
-        <span className="ml-auto text-[11px] text-polaris-muted">
-          {wireEventCount} events received · next: A0 audio capture
-        </span>
-      </footer>
-    </div>
+      </section>
+      <span
+        className="sr-only"
+        role={state === "error" ? "alert" : "status"}
+        aria-live="polite"
+        aria-atomic="true"
+      >
+        {expanded
+          ? `${label}. ${detail}. ${error ?? ""}`
+          : "Ready. Hold Control and Option to record, or Control, Option and Space. Release to prepare your recording."}
+      </span>
+    </main>
   );
 }

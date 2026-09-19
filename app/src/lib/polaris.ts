@@ -12,21 +12,46 @@ import {
   isPolarisEvent,
   type AgentStage,
   type AppInfo,
+  type CaptureStatus,
+  type NotchGeometry,
   type PolarisEvent,
 } from "@polaris/interfaces";
 
-/** `app_info` Tauri command — version/network shown in the panel header. */
+/** `app_info` Tauri command — version/network for diagnostics. */
 export async function getAppInfo(): Promise<AppInfo> {
   return invoke<AppInfo>("app_info");
 }
 
+/** Current capture snapshot; the overlay calls this once before events arrive. */
+export async function getCaptureStatus(): Promise<CaptureStatus> {
+  return invoke<CaptureStatus>("capture_status");
+}
+
 /**
- * Stand-in for the step-A0 hotkey path: asks Rust to push a full
- * `hotkey -> transcript -> agent_status` sequence over the event channel so the
- * log pane can be verified by hand. Deleted once real audio capture lands.
+ * Accessibility trust for the modifier-only gesture. Read on startup because
+ * the matching `hotkey_permission` event is emitted during Rust setup, before
+ * the webview listener attaches.
  */
-export async function devSelfTest(): Promise<PolarisEvent[]> {
-  return invoke<PolarisEvent[]>("dev_self_test");
+export async function getHotkeyPermission(): Promise<boolean> {
+  return invoke<boolean>("hotkey_permission");
+}
+
+/** Programmatic capture start — the global hotkey drives the same engine. */
+export async function captureStart(): Promise<CaptureStatus> {
+  return invoke<CaptureStatus>("capture_start");
+}
+
+/** Programmatic capture stop. Returns the final snapshot (`ready` on success). */
+export async function captureStop(): Promise<CaptureStatus> {
+  return invoke<CaptureStatus>("capture_stop");
+}
+
+/**
+ * Notch size in AppKit points. Polled so a display connect/disconnect or a
+ * resolution change repositions the overlay; there is no Tauri event for it.
+ */
+export async function getNotchGeometry(): Promise<NotchGeometry> {
+  return invoke<NotchGeometry>("notch_geometry");
 }
 
 /** Subscribes to the typed event stream. Events with an unknown shape are ignored. */
@@ -75,6 +100,40 @@ export function describeEvent(event: PolarisEvent): Omit<LogLine, "id" | "at"> {
         origin: "rust",
         title: event.state === "down" ? "Hotkey pressed" : "Hotkey released",
         tone: "accent",
+      };
+    case "hotkey_permission":
+      return {
+        origin: "rust",
+        title: event.trusted
+          ? "Hold-to-talk enabled (Control+Option)"
+          : "Hold-to-talk needs Accessibility access",
+        detail: event.trusted
+          ? undefined
+          : "Control+Option is disabled; Control+Option+Space still works",
+        tone: event.trusted ? "ok" : "warn",
+      };
+    case "capture_status":
+      return {
+        origin: "rust",
+        title: `Capture: ${event.status.state}`,
+        detail:
+          event.status.error ??
+          (event.status.recording
+            ? `${event.status.recording.path} · ${event.status.recording.durationMs} ms`
+            : undefined),
+        tone:
+          event.status.state === "error"
+            ? "danger"
+            : event.status.state === "ready"
+              ? "ok"
+              : "neutral",
+      };
+    case "audio_captured":
+      return {
+        origin: "rust",
+        title: "Audio captured",
+        detail: `${event.path} · ${event.durationMs} ms`,
+        tone: "ok",
       };
     case "transcript":
       return {

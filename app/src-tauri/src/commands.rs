@@ -1,9 +1,10 @@
 //! Tauri commands — the webview's entry points into the Rust core.
 
 use serde::Serialize;
-use tauri::AppHandle;
+use tauri::{AppHandle, State};
 
-use crate::events::{self, AgentStage, HotkeyState, PolarisEvent};
+use crate::capture::Capture;
+use crate::types::CaptureStatus;
 
 /// Testnet only — mainnet is an explicit non-goal (`docs/architecture.md` §1).
 pub const NETWORK: &str = "testnet";
@@ -29,40 +30,25 @@ pub fn app_info(app: AppHandle) -> AppInfo {
     }
 }
 
-/// TEMPORARY (step A0 replacement target): stands in for the push-to-talk path so
-/// the event stream can be exercised by hand before audio capture exists. Emits a
-/// realistic `hotkey -> transcript -> agent_status` sequence and returns it, so a
-/// caller can assert on the same data the UI received.
-///
-/// Delete this command when the global hotkey and microphone are wired.
+/// Starts a capture on demand (step A0). The global hotkey uses the same engine;
+/// this command is the programmatic entry point for the UI and for tests.
 #[tauri::command]
-pub fn dev_self_test(app: AppHandle) -> Vec<PolarisEvent> {
-    let events = vec![
-        PolarisEvent::Hotkey {
-            state: HotkeyState::Down,
-        },
-        PolarisEvent::Transcript {
-            text: "polaris, self test: one two three".to_string(),
-            r#final: true,
-        },
-        PolarisEvent::AgentStatus {
-            stage: AgentStage::Thinking,
-        },
-        PolarisEvent::AgentStatus {
-            stage: AgentStage::ToolCall,
-        },
-        PolarisEvent::AgentStatus {
-            stage: AgentStage::Done,
-        },
-        PolarisEvent::Hotkey {
-            state: HotkeyState::Up,
-        },
-    ];
+pub fn capture_start(app: AppHandle, capture: State<'_, Capture>) -> CaptureStatus {
+    capture.start(&app)
+}
 
-    for event in &events {
-        events::emit(&app, event.clone());
-    }
-    events
+/// Stops the current capture and returns its final snapshot. Never sends or
+/// submits anything — `ready` only means the WAV is on disk.
+#[tauri::command]
+pub fn capture_stop(capture: State<'_, Capture>) -> CaptureStatus {
+    capture.stop()
+}
+
+/// Snapshot of the capture engine, used by the overlay on startup before the
+/// first `capture_status` event arrives.
+#[tauri::command]
+pub fn capture_status(capture: State<'_, Capture>) -> CaptureStatus {
+    capture.status()
 }
 
 #[cfg(test)]

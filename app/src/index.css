@@ -1,8 +1,8 @@
 @import "tailwindcss";
 
 /* Polaris design tokens (Tailwind v4 `@theme`).
-   Dark, calm, "cockpit" palette — the panel is meant to be glanced at while
-   talking, so contrast comes from typography and one accent colour. */
+   Two palettes coexist: the dark "cockpit" tokens for log/diagnostic surfaces,
+   and the notch overlay's near-black shell with a single magenta accent. */
 @theme {
   --color-polaris-bg: #070b18;
   --color-polaris-panel: #0d1428;
@@ -16,26 +16,34 @@
   --color-polaris-warn: #fbbf24;
   --color-polaris-danger: #f87171;
 
+  /* Notch overlay palette (from the design reference). */
+  --color-notch-text: #f5f5f7;
+  --color-notch-muted: #b8b2bc;
+  --color-notch-accent: #f27de1;
+
   --font-sans: "SF Pro Text", -apple-system, BlinkMacSystemFont, "Inter", system-ui, sans-serif;
   --font-mono: "SF Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 @layer base {
+  /* The overlay window is transparent: any opaque html/body background shows as
+     a white (or dark) rectangle behind the notch. */
   html,
   body,
   #root {
+    width: 100%;
     height: 100%;
+    margin: 0;
+    background: transparent;
+    overflow: hidden;
   }
 
   body {
-    margin: 0;
-    background-color: var(--color-polaris-bg);
-    color: var(--color-polaris-text);
+    color: var(--color-notch-text);
     font-family: var(--font-sans);
     -webkit-font-smoothing: antialiased;
     /* Desktop chrome, not a document: no text selection unless asked for. */
     user-select: none;
-    overflow: hidden;
   }
 
   .selectable {
@@ -48,5 +56,289 @@
   .polaris-scroll {
     scrollbar-width: thin;
     scrollbar-color: var(--color-polaris-line) transparent;
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * Notch overlay shell
+ * ------------------------------------------------------------------ */
+
+.notch-stage {
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  height: 100%;
+  /* The whole window is click-through at the native level; this is belt and
+     braces so no child can ever capture a pointer event. */
+  pointer-events: none;
+}
+
+/* Registered so the concave "ear" radius can be transitioned: the pseudo
+   elements below inherit it, so their box and their gradient radius animate in
+   lockstep instead of popping in at the end of the expansion. */
+@property --ear {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 0px;
+}
+
+.notch {
+  /* Resting pill: the measured hardware cutout. Its top corners are tighter
+     than its bottom corners (notchbay.com measures ~4 pt vs ~8 pt), and every
+     radius arrives from Rust through the custom properties below. */
+  --ear: var(--shell-ear-radius);
+  --shell-motion: 470ms;
+  --shell-ease: cubic-bezier(0.32, 0.72, 0, 1);
+  --top-radius: var(--pill-top-radius);
+  --bottom-radius: var(--pill-bottom-radius);
+  position: relative;
+  flex-shrink: 0;
+  width: var(--idle-width);
+  height: var(--idle-height);
+  background: #000;
+  border-radius: var(--top-radius) var(--top-radius) var(--bottom-radius)
+    var(--bottom-radius);
+  /* Horizontal-only expansion. The width (and the radii/ears that ride with it)
+     uses the spring curve; the height is deliberately NOT transitioned.
+     Animating the 32 -> 66 pt height over the same 300 ms is what made the shell
+     read as "inflating"; snapping it on the first frame — while `.notch-stage`
+     keeps the shell top-anchored — leaves the perceived motion purely
+     left/right. A <= 80 ms height tween was the alternative, rejected because a
+     visible vertical pop still reads as growth at these sizes. */
+  /* One curve, one duration, both directions — opening and closing must feel
+     the same. `--ear` is deliberately NOT animated: it drives the radial
+     gradients on the pseudo-elements, and interpolating a gradient stop forces
+     a full repaint of both of them on every frame, which is what made the
+     expansion stutter. The ears keep a fixed size and fade instead, which the
+     compositor can do on the GPU. */
+  will-change: width;
+  transition:
+    width var(--shell-motion) var(--shell-ease),
+    border-radius var(--shell-motion) var(--shell-ease);
+}
+
+/* The transparent quarter circles preserve the screen behind the concave
+   shoulders. Both pseudo-elements sit in the screen above the shell's top edge,
+   so they must stay visually outside the black body. `--ear` is 0 while idle,
+   which is exactly what lets the resting shape coincide with the cutout. */
+.notch::before,
+.notch::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  width: var(--ear);
+  height: var(--ear);
+  opacity: 0;
+  transition: opacity var(--shell-motion) var(--shell-ease);
+}
+
+.notch.is-expanded::before,
+.notch.is-expanded::after {
+  opacity: 1;
+}
+
+.notch::before {
+  right: 100%;
+  background: radial-gradient(
+    circle at 0 100%,
+    transparent calc(var(--ear) - 0.5px),
+    #000 var(--ear)
+  );
+}
+
+.notch::after {
+  left: 100%;
+  background: radial-gradient(
+    circle at 100% 100%,
+    transparent calc(var(--ear) - 0.5px),
+    #000 var(--ear)
+  );
+}
+
+.notch.is-expanded {
+  /* The shell grows out of the cutout: the top edge stays flush with the screen
+     edge through the concave ears, while the convex bottom corners loosen. */
+  --top-radius: 0px;
+  --bottom-radius: var(--shell-bottom-radius);
+  width: var(--expanded-width);
+  height: var(--expanded-height);
+}
+
+.notch-content {
+  height: var(--expanded-height);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  position: relative;
+  overflow: hidden;
+  border-radius: inherit;
+  /* Three zones: left ear | the physical cutout | right ear.
+     There are no pixels behind the camera housing, so the centre column is an
+     empty spacer exactly as wide as the resting pill. Nothing may ever be
+     placed there — it would simply not be displayed. */
+  display: grid;
+  grid-template-columns: 1fr var(--idle-width) 1fr;
+  align-items: center;
+  padding: 0 18px;
+  opacity: 0;
+  transition: opacity var(--shell-motion) var(--shell-ease);
+  white-space: nowrap;
+}
+
+/* The copy rides the same curve as the shell in both directions, so the close
+   does not snap while the open eases. */
+.is-expanded .notch-content {
+  opacity: 1;
+}
+
+/* Centre column: the camera housing. Intentionally empty. */
+.notch-gap {
+  grid-column: 2;
+}
+
+.notch-copy {
+  grid-column: 1;
+  z-index: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  overflow: hidden;
+}
+
+.notch-label {
+  margin: 0;
+  /* Measured from the design reference: the label is ~24 px tall in a 2x
+     screenshot, i.e. ~12 pt, inside a 33 pt shell. */
+  font-size: 13px;
+  line-height: 1.15;
+  font-weight: 650;
+  letter-spacing: -0.2px;
+  /* Structural guarantee, not just short copy: an over-long label ellipsises
+     inside the ear instead of running under the camera housing, where it would
+     be invisible. Labels are written short so this never actually triggers. */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.notch-detail {
+  /* Inline with the label, never a second row: the shell height is fixed. */
+  margin: 0;
+  color: var(--color-notch-muted);
+  font-size: 9px;
+  line-height: 1.2;
+  letter-spacing: 0.05px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.notch-indicator {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  grid-column: 3;
+  justify-self: end;
+  gap: 4px;
+  width: 26px;
+  height: 20px;
+  flex-shrink: 0;
+}
+
+.notch-indicator::before {
+  content: "";
+  position: absolute;
+  /* Sized to the 32 pt shell so the wash fades out inside it instead of being
+     cut off square by `.notch-content`'s overflow clip. */
+  width: 96px;
+  height: 38px;
+  border-radius: 50%;
+  background: radial-gradient(ellipse, #b91bae5c, #9417a426 45%, transparent 72%);
+  transform: translate(16px, 3px);
+}
+
+.notch-indicator span {
+  z-index: 1;
+  width: 4px;
+  height: 4px;
+  border-radius: 4px;
+  background: var(--color-notch-accent);
+  box-shadow: 0 0 12px #f05adc70;
+}
+
+.state-recording .notch-indicator span {
+  animation: listen 850ms ease-in-out infinite alternate;
+}
+
+.state-recording .notch-indicator span:nth-child(2) {
+  animation-delay: -300ms;
+}
+
+.state-recording .notch-indicator span:nth-child(3) {
+  animation-delay: -550ms;
+}
+
+/* The error state must never add height: the shell is `--expanded-height` in
+   every expanded state, error included. The message shares the existing
+   `notch-detail` line — truncating with an ellipsis — and the retry hint stays
+   pinned as a non-shrinking suffix instead of stacking a second row. */
+.notch-detail-error {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  max-width: 100%;
+  color: #ffc4d1;
+}
+
+.notch-error-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.notch-error-hint {
+  flex-shrink: 0;
+  color: var(--color-notch-muted);
+}
+
+.state-error .notch-indicator span {
+  background: #ffb0c5;
+}
+
+@keyframes listen {
+  from {
+    transform: scaleY(1);
+  }
+  to {
+    transform: scaleY(3.1);
+  }
+}
+
+/* Accessibility: keep the state change, drop the motion. */
+@media (prefers-reduced-motion: reduce) {
+  .notch,
+  .notch-content {
+    transition: none;
+  }
+
+  .state-recording .notch-indicator span {
+    animation: none;
+  }
+}
+
+@media (max-width: 480px) {
+  .notch-content {
+    padding: 0 22px;
+  }
+
+  .notch-label {
+    font-size: 17px;
+  }
+
+  .notch-detail {
+    font-size: 9px;
   }
 }
