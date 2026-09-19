@@ -9,9 +9,13 @@
   },
   "types": "./src/index.ts",
   "scripts": {
-    "check": "tsc -p tsconfig.json"
+    "check": "tsc -p tsconfig.json",
+    "test": "node --test \"src/**/*.test.ts\"",
+    "keeper": "node --env-file-if-exists=../.env src/keeper/cli.ts",
+    "keeper:once": "node --env-file-if-exists=../.env src/keeper/cli.ts --once"
   },
   "dependencies": {
-    "@polaris/interfaces": "*"
+    "@polaris/interfaces": "*",
+    "@stellar/stellar-sdk": "^17.1.0"
   }
 }
