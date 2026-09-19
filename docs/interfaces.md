@@ -54,8 +54,20 @@ export interface SigningService {
 ## 4. Status / event stream for the UI
 
 ```ts
+export type CaptureState = "idle" | "recording" | "ready" | "transcribing" | "error";
+
+export interface CaptureStatus {
+  state: CaptureState;
+  recording: { path: string; durationMs: number } | null;
+  error: string | null;   // full detail, terminal + assistive tech (never painted)
+  label: string | null;   // short overlay label for step-A1 failures
+}
+
 export type PolarisEvent =
   | { type: "hotkey"; state: "down" | "up" }
+  | { type: "hotkey_permission"; trusted: boolean }
+  | { type: "capture_status"; status: CaptureStatus }
+  | { type: "audio_captured"; path: string; durationMs: number }
   | { type: "transcript"; text: string; final: boolean }
   | { type: "agent_status"; stage: "thinking" | "tool_call" | "awaiting_approval" | "done" }
   | { type: "approval_request"; intent: Intent; summary: ChainToolResult["summary"]; payloadHash: string }
@@ -63,6 +75,12 @@ export type PolarisEvent =
   | { type: "tx_submitted"; hash: string; explorerUrl: string }
   | { type: "error"; message: string };
 ```
+
+Step A1 reuses `transcript` for the STT result (`final: true`); it adds no new
+event variant. The overlay is driven by `capture_status` alone, which is why the
+`transcribing` state lives there. The transcript is **never** painted in the
+notch (the ear is ~92 pt and the camera housing has no pixels); it travels on the
+event stream and is printed to the Rust terminal.
 
 ## 5. Ownership & rules
 

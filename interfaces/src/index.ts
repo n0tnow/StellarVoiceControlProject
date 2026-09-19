@@ -78,8 +78,12 @@ export interface SigningService {
  * The microphone capture lifecycle. `ready` is deliberately **not** a send
  * action: it only means a WAV is on disk waiting for step A1 (STT). Nothing in
  * the shell is allowed to submit or dispatch on release.
+ *
+ * Step A1 adds `transcribing` (the overlay shows "Thinking") and returns to
+ * `idle` once the transcript is emitted. The transcript itself travels on the
+ * `transcript` event and is never painted in the notch.
  */
-export type CaptureState = "idle" | "recording" | "ready" | "error";
+export type CaptureState = "idle" | "recording" | "ready" | "transcribing" | "error";
 
 /** A finished capture on disk. Duration is measured from written sample frames. */
 export interface CaptureRecording {
@@ -91,8 +95,14 @@ export interface CaptureRecording {
 export interface CaptureStatus {
   state: CaptureState;
   recording: CaptureRecording | null;
-  /** Human-readable failure detail; non-null iff `state === "error"`. */
+  /** Full failure detail; non-null iff `state === "error"`. */
   error: string | null;
+  /**
+   * Short, overlay-safe label for failures the state name cannot describe
+   * (step A1, e.g. "No STT key"). `null` means the UI derives its label from
+   * `state` — A0 microphone errors stay "Mic error".
+   */
+  label: string | null;
 }
 
 /**

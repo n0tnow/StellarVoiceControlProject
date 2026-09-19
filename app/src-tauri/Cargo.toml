@@ -28,6 +28,12 @@ cpal = "0.18"
 hound = "3.5"
 tauri-plugin-global-shortcut = "2.3"
 
+# Step A1: cloud speech-to-text. `blocking` keeps the call off the async runtime
+# and on the STT worker thread; `native-tls` uses the macOS system trust store
+# (no bundled crypto), and multipart bodies are built by hand (see stt/groq.rs)
+# so the exact request shape is unit-testable.
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "native-tls"] }
+
 # The overlay's window level / collection behaviour come from AppKit directly,
 # because Tauri's window API does not expose them. Versions are pinned to the
 # objc2 generation tauri 2.11 already links (see `cargo tree -i objc2`); a

@@ -56,13 +56,15 @@ pub struct TxSummary {
 }
 
 /// `CaptureState` — the push-to-talk lifecycle. `Ready` means a WAV is on disk
-/// for step A1; it is never a send action.
+/// for step A1; it is never a send action. `Transcribing` is step A1's state
+/// while the clip is being turned into text (the overlay shows "Thinking").
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CaptureState {
     Idle,
     Recording,
     Ready,
+    Transcribing,
     Error,
 }
 
@@ -83,9 +85,17 @@ pub struct CaptureStatus {
     pub state: CaptureState,
     #[serde(default)]
     pub recording: Option<CaptureRecording>,
-    /// Non-null iff `state == Error`.
+    /// Full, human-readable failure detail. Non-null iff `state == Error`; shown
+    /// in the Rust terminal and exposed to assistive tech, never painted (the
+    /// ear is far too narrow for a sentence).
     #[serde(default)]
     pub error: Option<String>,
+    /// Short, overlay-safe label for a failure whose copy is not implied by the
+    /// state itself (step A1, e.g. "No STT key"). `None` means the UI derives its
+    /// label from `state` — including A0 microphone errors, which stay "Mic
+    /// error". Optional so capture-only snapshots keep round-tripping.
+    #[serde(default)]
+    pub label: Option<String>,
 }
 
 #[cfg(test)]
@@ -129,10 +139,11 @@ mod tests {
             state: CaptureState::Idle,
             recording: None,
             error: None,
+            label: None,
         };
         assert_eq!(
             serde_json::to_string(&idle).unwrap(),
-            r#"{"state":"idle","recording":null,"error":null}"#
+            r#"{"state":"idle","recording":null,"error":null,"label":null}"#
         );
 
         let ready = CaptureStatus {
@@ -142,20 +153,59 @@ mod tests {
                 duration_ms: 1420,
             }),
             error: None,
+            label: None,
         };
         assert_eq!(
             serde_json::to_string(&ready).unwrap(),
-            r#"{"state":"ready","recording":{"path":"/tmp/polaris-1.wav","durationMs":1420},"error":null}"#
+            r#"{"state":"ready","recording":{"path":"/tmp/polaris-1.wav","durationMs":1420},"error":null,"label":null}"#
         );
 
-        let failed = CaptureStatus {
+        // Step A1: the overlay shows "Thinking" from `transcribing` alone.
+        let transcribing = CaptureStatus {
+            state: CaptureState::Transcribing,
+            recording: Some(CaptureRecording {
+                path: "/tmp/polaris-1.wav".into(),
+                duration_ms: 1420,
+            }),
+            error: None,
+            label: None,
+        };
+        assert_eq!(
+            serde_json::to_string(&transcribing).unwrap(),
+            r#"{"state":"transcribing","recording":{"path":"/tmp/polaris-1.wav","durationMs":1420},"error":null,"label":null}"#
+        );
+
+        // A0 microphone failure: no short label, so the UI keeps "Mic error".
+        let capture_failed = CaptureStatus {
             state: CaptureState::Error,
             recording: None,
             error: Some("no default input device".into()),
+            label: None,
         };
         assert_eq!(
-            serde_json::to_string(&failed).unwrap(),
-            r#"{"state":"error","recording":null,"error":"no default input device"}"#
+            serde_json::to_string(&capture_failed).unwrap(),
+            r#"{"state":"error","recording":null,"error":"no default input device","label":null}"#
         );
+
+        // A1 failure: the short label travels alongside the full detail.
+        let stt_failed = CaptureStatus {
+            state: CaptureState::Error,
+            recording: None,
+            error: Some("GROQ_API_KEY is not set".into()),
+            label: Some("No STT key".into()),
+        };
+        assert_eq!(
+            serde_json::to_string(&stt_failed).unwrap(),
+            r#"{"state":"error","recording":null,"error":"GROQ_API_KEY is not set","label":"No STT key"}"#
+        );
+    }
+
+    #[test]
+    fn capture_status_round_trips_without_the_optional_label() {
+        // Older/looser producers that omit `label` must still deserialize.
+        let status: CaptureStatus =
+            serde_json::from_str(r#"{"state":"idle","recording":null,"error":null}"#).unwrap();
+        assert_eq!(status.label, None);
+        assert_eq!(status.state, CaptureState::Idle);
     }
 }

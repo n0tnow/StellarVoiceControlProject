@@ -1,4 +1,4 @@
-//! Push-to-talk microphone capture (step A0).
+//! Push-to-talk microphone capture (step A0) and the STT hand-off (step A1).
 //!
 //! Design constraints that shape this module:
 //!
@@ -8,12 +8,18 @@
 //! * The state machine is the single source of truth for the overlay: every
 //!   transition is pushed as a `PolarisEvent::CaptureStatus`, and `stop` waits
 //!   (briefly) for the worker so the released hotkey yields a final `ready`.
-//! * Release never sends anything: `ready` only means a WAV is on disk.
+//! * Release never sends anything: `ready` only means a WAV is on disk. Step A1
+//!   then moves `ready -> transcribing -> idle`, or `-> error` on failure. The
+//!   STT worker owns those later transitions ([`crate::stt`]); this module only
+//!   exposes them so the shared state stays authoritative for `capture_status`.
+//! * A finished capture is handed to the STT queue from the capture worker, so
+//!   every path (hotkey or command) triggers transcription the same way.
 //! * Failures are values (`Inner::Error`), never panics: a denied microphone
 //!   permission must show up in the overlay, not crash the shell.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc::Sender;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
@@ -38,6 +44,10 @@ const STOP_POLL: Duration = Duration::from_millis(50);
 
 /// The `recordings/` directory is created at startup and lives under the app's
 /// data dir, so captures never land in the repository.
+/// `Capture` is a cheap handle: cloning it shares the same state. The STT worker
+/// holds a clone so it can drive the `transcribing`/`idle`/`error` transitions
+/// while the hotkey driver keeps using the managed instance.
+#[derive(Clone)]
 pub struct Capture {
     shared: Arc<Shared>,
 }
@@ -48,13 +58,27 @@ struct Shared {
     finished: Condvar,
     recordings_dir: PathBuf,
     sequence: AtomicU64,
+    /// Where finished captures are handed to step A1. A missing receiver (tests)
+    /// or a dead STT worker must never fail a capture, so sending is ignored on
+    /// error.
+    ready: Mutex<Option<Sender<CaptureRecording>>>,
 }
 
 enum Inner {
     Idle,
     Recording(Active),
     Ready(CaptureRecording),
-    Error(String),
+    /// Step A1 is running (or queued): the overlay shows "Thinking".
+    Transcribing(CaptureRecording),
+    Error(Failure),
+}
+
+/// A failure rendered two ways: a short overlay label (when there is one) and a
+/// full terminal message. Capture failures (A0) have no label — the UI shows its
+/// generic microphone error for those.
+struct Failure {
+    label: Option<String>,
+    detail: String,
 }
 
 struct Active {
@@ -63,13 +87,14 @@ struct Active {
 }
 
 impl Capture {
-    pub fn new(recordings_dir: PathBuf) -> Self {
+    pub fn new(recordings_dir: PathBuf, ready: Sender<CaptureRecording>) -> Self {
         Self {
             shared: Arc::new(Shared {
                 inner: Mutex::new(Inner::Idle),
                 finished: Condvar::new(),
                 recordings_dir,
                 sequence: AtomicU64::new(0),
+                ready: Mutex::new(Some(ready)),
             }),
         }
     }
@@ -150,21 +175,31 @@ fn snapshot(inner: &Inner) -> CaptureStatus {
             state: CaptureState::Idle,
             recording: None,
             error: None,
+            label: None,
         },
         Inner::Recording(_) => CaptureStatus {
             state: CaptureState::Recording,
             recording: None,
             error: None,
+            label: None,
         },
         Inner::Ready(recording) => CaptureStatus {
             state: CaptureState::Ready,
             recording: Some(recording.clone()),
             error: None,
+            label: None,
         },
-        Inner::Error(error) => CaptureStatus {
+        Inner::Transcribing(recording) => CaptureStatus {
+            state: CaptureState::Transcribing,
+            recording: Some(recording.clone()),
+            error: None,
+            label: None,
+        },
+        Inner::Error(failure) => CaptureStatus {
             state: CaptureState::Error,
             recording: None,
-            error: Some(error.clone()),
+            error: Some(failure.detail.clone()),
+            label: failure.label.clone(),
         },
     }
 }
@@ -190,7 +225,10 @@ fn finish_capture(
                 eprintln!("polaris: capture failed: {error}");
                 // Do not leave a truncated WAV behind for step A1 to trip over.
                 let _ = std::fs::remove_file(&path);
-                Inner::Error(error)
+                Inner::Error(Failure {
+                    label: None,
+                    detail: error,
+                })
             }
         };
         snapshot(&guard)
@@ -206,7 +244,74 @@ fn finish_capture(
             },
         );
     }
+    // Hand the artifact to step A1. Done after the `ready` snapshot so the UI can
+    // never see `transcribing` before the capture that caused it. A missing or
+    // closed receiver is ignored: capture must not depend on STT being alive.
+    let ready = status.recording.clone();
     events::emit(&app, PolarisEvent::CaptureStatus { status });
+    if let Some(recording) = ready {
+        let guard = shared.ready.lock().unwrap_or_else(|error| error.into_inner());
+        if let Some(sink) = guard.as_ref() {
+            let _ = sink.send(recording);
+        }
+    }
+}
+
+impl Capture {
+    /// `ready -> transcribing`. Emits the transition and leaves the WAV on disk
+    /// for the caller.
+    ///
+    /// A no-op unless the engine still sits on the *matching* finished capture:
+    /// if a new recording started while this one was queued, that recording must
+    /// not be overwritten by a stale transcript cycle.
+    pub fn mark_transcribing(&self, app: &AppHandle, recording: &CaptureRecording) -> CaptureStatus {
+        let status = {
+            let mut guard = self.shared.inner.lock().unwrap_or_else(|error| error.into_inner());
+            let matches = matches!(&*guard, Inner::Ready(current) if current.path == recording.path);
+            if matches {
+                *guard = Inner::Transcribing(recording.clone());
+            }
+            snapshot(&guard)
+        };
+        events::emit(app, PolarisEvent::CaptureStatus { status: status.clone() });
+        status
+    }
+
+    /// `transcribing -> idle` after a successful transcript. The overlay returns
+    /// to the resting pill; the text itself travels on the `transcript` event.
+    pub fn mark_transcribed(&self, app: &AppHandle) -> CaptureStatus {
+        let status = {
+            let mut guard = self.shared.inner.lock().unwrap_or_else(|error| error.into_inner());
+            if matches!(*guard, Inner::Transcribing(_)) {
+                *guard = Inner::Idle;
+            }
+            snapshot(&guard)
+        };
+        events::emit(app, PolarisEvent::CaptureStatus { status: status.clone() });
+        status
+    }
+
+    /// `transcribing -> error` after a failed transcription, carrying the short
+    /// overlay label and the full terminal detail.
+    pub fn mark_transcription_failed(
+        &self,
+        app: &AppHandle,
+        label: &str,
+        detail: &str,
+    ) -> CaptureStatus {
+        let status = {
+            let mut guard = self.shared.inner.lock().unwrap_or_else(|error| error.into_inner());
+            if matches!(*guard, Inner::Transcribing(_)) {
+                *guard = Inner::Error(Failure {
+                    label: Some(label.to_string()),
+                    detail: detail.to_string(),
+                });
+            }
+            snapshot(&guard)
+        };
+        events::emit(app, PolarisEvent::CaptureStatus { status: status.clone() });
+        status
+    }
 }
 
 /// Opens the default input device and blocks until `stop` receives a value or
@@ -421,15 +526,23 @@ where
 mod tests {
     use super::*;
 
+    /// A capture engine with no STT consumer; tests that only exercise the
+    /// capture side do not need the hand-off.
+    fn test_capture(dir: PathBuf) -> Capture {
+        let (ready, _receiver) = std::sync::mpsc::channel();
+        Capture::new(dir, ready)
+    }
+
     #[test]
     fn idle_capture_reports_idle_and_stop_is_a_noop() {
-        let capture = Capture::new(PathBuf::from("/tmp/polaris-tests"));
+        let capture = test_capture(PathBuf::from("/tmp/polaris-tests"));
         assert_eq!(
             capture.status(),
             CaptureStatus {
                 state: CaptureState::Idle,
                 recording: None,
                 error: None,
+                label: None,
             }
         );
         // Stopping while idle must not deadlock or change the state.
@@ -444,12 +557,34 @@ mod tests {
         };
         assert_eq!(
             snapshot(&Inner::Ready(ready.clone())).recording,
-            Some(ready)
+            Some(ready.clone())
+        );
+        // Step A1: `transcribing` still carries the recording, so the UI can
+        // keep showing the clip it is working on.
+        assert_eq!(
+            snapshot(&Inner::Transcribing(ready.clone())).state,
+            CaptureState::Transcribing
         );
         assert_eq!(
-            snapshot(&Inner::Error("denied".into())).error.as_deref(),
-            Some("denied")
+            snapshot(&Inner::Transcribing(ready.clone())).recording,
+            Some(ready)
         );
+        // Capture failures (A0) have no short label; STT failures do.
+        let capture_failure = snapshot(&Inner::Error(Failure {
+            label: None,
+            detail: "denied".into(),
+        }));
+        assert_eq!(capture_failure.error.as_deref(), Some("denied"));
+        assert_eq!(capture_failure.label, None);
+
+        let stt_failure = snapshot(&Inner::Error(Failure {
+            label: Some("No STT key".into()),
+            detail: "GROQ_API_KEY is not set".into(),
+        }));
+        assert_eq!(stt_failure.state, CaptureState::Error);
+        assert_eq!(stt_failure.label.as_deref(), Some("No STT key"));
+        assert_eq!(stt_failure.error.as_deref(), Some("GROQ_API_KEY is not set"));
+
         assert_eq!(
             snapshot(&Inner::Recording(Active {
                 stop: std::sync::mpsc::channel().0,
@@ -457,6 +592,31 @@ mod tests {
             .state,
             CaptureState::Recording
         );
+    }
+
+    #[test]
+    fn the_ready_sink_is_installed_at_construction() {
+        // The end-to-end hand-off needs a live `AppHandle` and is exercised by
+        // the running app; this pins the wiring the worker relies on.
+        let (ready, receiver) = std::sync::mpsc::channel();
+        let capture = Capture::new(PathBuf::from("/tmp/polaris-tests"), ready);
+        let recording = CaptureRecording {
+            path: "/tmp/polaris-1.wav".into(),
+            duration_ms: 900,
+        };
+
+        let sink = capture
+            .shared
+            .ready
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref()
+            .cloned()
+            .expect("the sink is installed at construction");
+        sink.send(recording.clone()).unwrap();
+
+        assert_eq!(receiver.recv().unwrap(), recording);
+        assert!(receiver.try_recv().is_err());
     }
 
     #[test]
@@ -488,7 +648,7 @@ mod tests {
 
     #[test]
     fn generated_paths_are_unique_and_under_the_recordings_dir() {
-        let capture = Capture::new(PathBuf::from("/tmp/polaris-tests"));
+        let capture = test_capture(PathBuf::from("/tmp/polaris-tests"));
         let first = capture.next_path();
         let second = capture.next_path();
         assert_ne!(first, second);

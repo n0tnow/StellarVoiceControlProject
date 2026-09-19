@@ -151,12 +151,28 @@ mod tests {
                 state: crate::types::CaptureState::Recording,
                 recording: None,
                 error: None,
+                label: None,
             },
         })
         .unwrap();
         assert_eq!(
             json,
-            r#"{"type":"capture_status","status":{"state":"recording","recording":null,"error":null}}"#
+            r#"{"type":"capture_status","status":{"state":"recording","recording":null,"error":null,"label":null}}"#
+        );
+
+        // Step A1 transitions ride the same event with no new variant.
+        let json = serde_json::to_string(&PolarisEvent::CaptureStatus {
+            status: crate::types::CaptureStatus {
+                state: crate::types::CaptureState::Transcribing,
+                recording: None,
+                error: None,
+                label: None,
+            },
+        })
+        .unwrap();
+        assert_eq!(
+            json,
+            r#"{"type":"capture_status","status":{"state":"transcribing","recording":null,"error":null,"label":null}}"#
         );
 
         let json = serde_json::to_string(&PolarisEvent::AudioCaptured {
