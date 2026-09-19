@@ -7,7 +7,7 @@ import { runAgentTurn, type AgentOutcome } from "@/lib/agent";
 import { executeApprovedIntent } from "@/lib/chain";
 import { speakTurnResult } from "@/lib/speech";
 import { TurnFlow } from "@/lib/turnFlow";
-import { reduceTurnSession, stageWatchdog, type TurnSession } from "@/lib/turnSession";
+import { isCurrentTurn, reduceTurnSession, stageWatchdog, type TurnSession } from "@/lib/turnSession";
 import {
   getCaptureStatus,
   getHotkeyPermission,
@@ -131,7 +131,7 @@ export default function App() {
       const turnId = sessionRef.current?.id;
       speakTurnResult(outcome, (error) => {
         console.warn("speech produced no audio; settling the turn", error);
-        if (sessionRef.current?.id === turnId) {
+        if (isCurrentTurn(sessionRef.current, turnId)) {
           dispatchTurn({ type: "failed", label: "Voice error" });
         }
       });
@@ -170,9 +170,15 @@ export default function App() {
           // spoken only once an unsigned transaction exists; while Owner B's
           // tools are `NotImplementedError` stubs, the notch says so plainly and
           // settles instead of hanging.
+          //
+          // M1: bind the outcome to the turn that dispatched it. If a newer turn
+          // is on screen by the time execution resolves, this result is stale and
+          // must not overwrite the newer turn's UI — the same rule the speech
+          // path applies.
+          const turnId = sessionRef.current?.id;
           void executeApprovedIntent(run.outcome.intent)
             .then((outcome) => {
-              if (disposed) return;
+              if (disposed || !isCurrentTurn(sessionRef.current, turnId)) return;
               if (outcome.status === "executed") {
                 console.info(
                   "chain tool produced an unsigned transaction",
@@ -185,7 +191,7 @@ export default function App() {
               }
             })
             .catch((error: unknown) => {
-              if (disposed) return;
+              if (disposed || !isCurrentTurn(sessionRef.current, turnId)) return;
               console.error("execution seam failed unexpectedly", error);
               dispatchTurn({ type: "failed", label: "Chain error" });
             });

@@ -188,3 +188,20 @@ export function stageWatchdog(stage: TurnStage): StageWatchdog | null {
       return null;
   }
 }
+
+/* ------------------------------------------------------------------ *
+ * Cross-turn result guard (M1)
+ * ------------------------------------------------------------------ */
+
+/**
+ * Whether an async result tagged with `turnId` may still touch the UI.
+ *
+ * A result whose turn id no longer matches the current session must be dropped:
+ * an older turn's speech/execution outcome must never overwrite a newer turn's
+ * state (M1). An undefined id — no live session, or a result that was never
+ * bound to one — is never current. The speech path used this check inline; it
+ * lives here so the execution path can share the exact same rule.
+ */
+export function isCurrentTurn(session: TurnSession | null, turnId: number | undefined): boolean {
+  return turnId !== undefined && session?.id === turnId;
+}

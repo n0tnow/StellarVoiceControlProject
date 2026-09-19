@@ -3,7 +3,13 @@ import { test } from "node:test";
 
 import type { CaptureState } from "@polaris/interfaces";
 
-import { reduceTurnSession, stageWatchdog, type TurnSession, type TurnSignal } from "./turnSession.ts";
+import {
+  isCurrentTurn,
+  reduceTurnSession,
+  stageWatchdog,
+  type TurnSession,
+  type TurnSignal,
+} from "./turnSession.ts";
 
 /** A capture transition, with the optional short failure label the wire carries. */
 function capture(state: CaptureState, label: string | null = null): TurnSignal {
@@ -228,4 +234,19 @@ test("speaking is watchdogged, so a wedged player cannot hold the shell open", (
   // `listening` ends on the hotkey release and `failed` on its dwell: no timer.
   assert.equal(stageWatchdog("listening"), null);
   assert.equal(stageWatchdog("failed"), null);
+});
+
+/* ------------------------------------------------------------------ *
+ * M1 — an async result is bound to the turn that dispatched it.
+ * ------------------------------------------------------------------ */
+
+test("an async result is dropped once its turn id is no longer current", () => {
+  const older: TurnSession = { id: 7, stage: "thinking", failureLabel: null };
+  const newer: TurnSession = { id: 8, stage: "thinking", failureLabel: null };
+
+  assert.equal(isCurrentTurn(older, 7), true);
+  // The regression: a late outcome from turn 7 must not be applied to turn 8.
+  assert.equal(isCurrentTurn(newer, 7), false);
+  assert.equal(isCurrentTurn(null, 7), false, "no live session means no match");
+  assert.equal(isCurrentTurn(older, undefined), false, "an unbound result is never current");
 });
