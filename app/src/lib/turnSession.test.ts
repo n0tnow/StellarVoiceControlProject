@@ -3,7 +3,7 @@ import { test } from "node:test";
 
 import type { CaptureState } from "@polaris/interfaces";
 
-import { reduceTurnSession, type TurnSession, type TurnSignal } from "./turnSession.ts";
+import { reduceTurnSession, stageWatchdog, type TurnSession, type TurnSignal } from "./turnSession.ts";
 
 /** A capture transition, with the optional short failure label the wire carries. */
 function capture(state: CaptureState, label: string | null = null): TurnSignal {
@@ -204,4 +204,28 @@ test("a late capture event cannot pull a speaking turn backwards", () => {
   assert.equal(reduceTurnSession(speaking, capture("ready"))?.stage, "speaking");
   assert.equal(reduceTurnSession(speaking, capture("transcribing"))?.stage, "speaking");
   assert.equal(reduceTurnSession(speaking, { type: "transcribed" })?.stage, "speaking");
+});
+
+/* ------------------------------------------------------------------ *
+ * M4 — both non-terminal stages are bounded, including speaking.
+ * ------------------------------------------------------------------ */
+
+test("speaking is watchdogged, so a wedged player cannot hold the shell open", () => {
+  // Regression guard for M4: playback used to be trusted to end itself, so a
+  // stuck utterance left the session in `speaking` forever with no recovery.
+  const speaking = stageWatchdog("speaking");
+  assert.notEqual(speaking, null, "speaking must have a watchdog");
+  assert.ok(
+    speaking !== null && speaking.timeoutMs > 0,
+    "the speaking watchdog must be a positive bound",
+  );
+
+  // The pre-speech wait keeps its own (shorter) bound and its own label.
+  const thinking = stageWatchdog("thinking");
+  assert.notEqual(thinking, null);
+  assert.ok(thinking !== null && thinking.timeoutMs > 0);
+
+  // `listening` ends on the hotkey release and `failed` on its dwell: no timer.
+  assert.equal(stageWatchdog("listening"), null);
+  assert.equal(stageWatchdog("failed"), null);
 });

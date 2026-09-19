@@ -142,3 +142,49 @@ export function reduceTurnSession(
 export function isTurnExpanded(session: TurnSession | null): boolean {
   return session !== null;
 }
+
+/* ------------------------------------------------------------------ *
+ * Stuck-stage watchdogs (M4)
+ * ------------------------------------------------------------------ */
+
+/**
+ * How long the model/TTS wait may sit in `thinking` before the shell abandons
+ * it. Far beyond every legitimate phase (the model request itself is capped at
+ * 30 s), so it only fires when an upstream event is genuinely lost.
+ */
+export const THINKING_WATCHDOG_MS = 60_000;
+
+/**
+ * How long `speaking` may last before the shell assumes the player is wedged.
+ * Playback normally ends itself via `speech_status: idle`, but a player that
+ * never returns would otherwise hold the notch open forever (the speech drain
+ * is unbounded). Generous on purpose: a long sentence is not a stuck one.
+ */
+export const SPEAKING_WATCHDOG_MS = 120_000;
+
+/** The recovery timer for one non-terminal stage. */
+export interface StageWatchdog {
+  readonly timeoutMs: number;
+  /** Short, ear-safe label shown if the timer fires. */
+  readonly label: string;
+}
+
+/**
+ * The watchdog for a live stage, or `null` when the stage recovers by itself.
+ *
+ * Returns a bound for both `thinking` (the pre-speech wait) and `speaking` (a
+ * wedged player). `listening` ends on the hotkey release and `failed` ends on
+ * its own dwell, so neither needs a timer here. The caller schedules and clears
+ * the timer; this function stays pure so the policy is unit-testable.
+ */
+export function stageWatchdog(stage: TurnStage): StageWatchdog | null {
+  switch (stage) {
+    case "thinking":
+      return { timeoutMs: THINKING_WATCHDOG_MS, label: "Timed out" };
+    case "speaking":
+      return { timeoutMs: SPEAKING_WATCHDOG_MS, label: "Voice error" };
+    case "listening":
+    case "failed":
+      return null;
+  }
+}

@@ -7,7 +7,7 @@ import { runAgentTurn, type AgentOutcome } from "@/lib/agent";
 import { executeApprovedIntent } from "@/lib/chain";
 import { speakTurnResult } from "@/lib/speech";
 import { TurnFlow } from "@/lib/turnFlow";
-import { reduceTurnSession, type TurnSession } from "@/lib/turnSession";
+import { reduceTurnSession, stageWatchdog, type TurnSession } from "@/lib/turnSession";
 import {
   getCaptureStatus,
   getHotkeyPermission,
@@ -44,15 +44,6 @@ const IDLE_STATUS: CaptureStatus = {
  * terminal) regardless, only the notch settles.
  */
 const FAILURE_DWELL_MS = 5000;
-
-/**
- * Safety net so the shell can never be left stuck expanded: a turn that sits in
- * a pre-speech stage without advancing for this long is abandoned with a short
- * label and settles like any other failure. It is far beyond every legitimate
- * phase (the model request itself is capped at 30 s), so it only fires when an
- * upstream event is genuinely lost.
- */
-const TURN_STAGE_TIMEOUT_MS = 60000;
 
 /** Display topology has no Tauri event; re-read geometry on a cheap interval. */
 const GEOMETRY_POLL_MS = 2000;
@@ -104,13 +95,16 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [session?.id, session?.stage]);
 
-  // Stuck-turn watchdog: only the bounded pre-speech stage is watched, and any
-  // stage change clears the timer. Playback is trusted to end itself.
+  // Stuck-stage watchdog (M4): both bounded stages are watched — the pre-speech
+  // wait AND `speaking`, so a wedged player cannot hold the shell open forever.
+  // Any stage change clears the timer and re-arms for the new stage.
   useEffect(() => {
-    if (session?.stage !== "thinking") return;
+    if (session === null) return;
+    const watchdog = stageWatchdog(session.stage);
+    if (watchdog === null) return;
     const timer = setTimeout(
-      () => dispatchTurn({ type: "failed", label: "Timed out" }),
-      TURN_STAGE_TIMEOUT_MS,
+      () => dispatchTurn({ type: "failed", label: watchdog.label }),
+      watchdog.timeoutMs,
     );
     return () => clearTimeout(timer);
   }, [session?.id, session?.stage]);
