@@ -1,6 +1,6 @@
 # Report: anchor-fallback — labelled non-TR test scenario + TR payout-health check
 
-- **Date:** 2026-09-20 (UTC 2026-09-19 22:12–22:30)
+- **Date:** 2026-09-20 (all times UTC; evidence window 2026-09-19 22:12–22:30Z)
 - **Worker/Agent:** W-anchor (DeepSeek v4.1 Flash, L2)
 - **Branch/Worktree:** `chain/anchor-check` @ `.worktrees/anchor-check`
 - **Scope touched:** `stellar/src/anchor/{scenarios.ts, payoutHealth.ts, check.ts, sep6.ts, index.ts, README.md}`, `stellar/src/anchor/__tests__/{scenarios,payout-health,anchor-check,sep6-sep38-sep12}.test.ts`, `stellar/package.json` (one script), `docs/demo-runbook.md`, this report. Nothing else (`stellar/src/live/**` untouched).

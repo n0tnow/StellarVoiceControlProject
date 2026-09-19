@@ -180,12 +180,17 @@ A fresh 50 TRY deposit (order `sep_uwg7nu53jr5inqpc1926`) walked
   The client treats missing limits as optional and still created the order.
 
 The client is correct here; the fix is graceful reporting: on a poll timeout it now
-records `sep6.timeout` and includes the anchor's sanitised last `message` and
-`more_info_url` in the `PollTimeoutError`, so a stuck order names the anchor's own
-status instead of a bare "still pending_anchor". Covered by an offline mocked-HTTP
-regression test. Until the anchor's payout worker recovers, the TR deposit path cannot
-reach `completed`; see `backlog/anchor-live-check.md` for the full evidence and demo
-guidance.
+records `sep6.timeout` and includes the anchor's sanitised last `message` (with
+embedded double quotes escaped) in the `PollTimeoutError`, so a stuck order names the
+anchor's own status instead of a bare "still pending_anchor". The `more_info_url` is
+included only when it is **https-only, credentials/length rejected, and host-restricted
+to the anchor's own host** (exact match against the home domain or a host declared in the
+anchor's `TRANSFER_SERVER`/`WEB_AUTH_ENDPOINT`); an off-host link is withheld
+(`(link withheld: not on the anchor's host)`) and is never fetched. The composed error is
+length-capped; a link that does not fit stays only in the `sep6.timeout` explain record.
+Covered by offline mocked-HTTP regression tests. Until the anchor's payout worker
+recovers, the TR deposit path cannot reach `completed`; see `backlog/anchor-live-check.md`
+for the full evidence and demo guidance.
 
 ## Primary vs fallback demo
 

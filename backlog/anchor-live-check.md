@@ -1,6 +1,6 @@
 # Report: anchor-live-check (TR mock anchor SEP-6, live)
 
-- **Date:** 2026-09-20 (UTC 2026-09-19 22:12–22:20)
+- **Date:** 2026-09-20 (all times UTC; evidence window 2026-09-19 22:12–22:20Z)
 - **Worker/Agent:** W-anchor (DeepSeek v4.1 Flash, L2)
 - **Branch/Worktree:** `chain/anchor-check` @ `.worktrees/anchor-check`
 - **Scope touched:** `stellar/src/anchor/sep6.ts`, `stellar/src/anchor/__tests__/sep6-sep38-sep12.test.ts`, `stellar/src/anchor/README.md`, this report.
@@ -53,7 +53,7 @@ Failing step: SEP-6 deposit polling (`pollTransaction`), after the sandbox bank 
 
 ## Comparison: 2026-09-19 (working) vs 2026-09-20 (this check)
 
-| Item | 2026-09-19 | 2026-09-20 | Change |
+| Item | 2026-09-19 (UTC) | 2026-09-20 (UTC) | Change |
 |---|---|---|---|
 | SEP-1 endpoints / signing key `GDXY…E73M` | same | same | none |
 | Asset issuer `GBBD47…LFA5`, treasury `GCLC…W7T3Z6` | same | same | none |
@@ -82,7 +82,8 @@ Nothing in the failures points at (b) our client or (c) our usage (trustline was
 `stellar/src/anchor/sep6.ts` — `pollTransaction` timeout branch now:
 
 - records an explain event `sep6.timeout` that says the order is stuck and that a non-moving `pending_anchor` is usually anchor-side (safe next step: check later, don't pay again);
-- includes the anchor's **sanitised** last `message` and the validated `more_info_url` in the `PollTimeoutError` message (e.g. `… still "pending_anchor" after 180s; the anchor last said: "TRY received; paying USDC on Stellar." (order details: https://…/sep6/tx/…)`).
+- includes the anchor's **sanitised** last `message` in the `PollTimeoutError` message (e.g. `… still "pending_anchor" after 180s; the anchor last said: "TRY received; paying USDC on Stellar."`), with embedded double quotes escaped so the quoting cannot be broken; and
+- includes the `more_info_url` only when it is **https-only, credentials rejected, length-capped (≤300), and host-restricted to the anchor's own host after this fix** — i.e. its host must exactly equal the anchor's home domain (or a host declared in that anchor's stellar.toml `TRANSFER_SERVER`/`WEB_AUTH_ENDPOINT`). An off-host link is omitted and reported as `(link withheld: not on the anchor's host)`; a link is never fetched automatically. The composed error is capped at a fixed maximum (`MAX_POLL_TIMEOUT_MESSAGE`); if the link does not fit, it is kept only in the `sep6.timeout` explain record's `link` field.
 
 Anchor text still never enters `what`/`why`: it is passed as `anchorSaid` only.
 
@@ -119,10 +120,10 @@ npm test -w @polaris/stellar             # EXIT 0
 
 ## Recommended demo guidance for the TR anchor (safe amounts/steps)
 
-- **Before a demo, check `/health`:** if `low_balance:false` but the treasury's last outgoing payment on Horizon is more than a few minutes old, assume deposits are stalled. Demonstrate **withdraw** (USDC -> TRY) or **discovery/quote/login** instead of a live deposit until payouts resume.
+- **Before a demo, check `/health`:** if `low_balance:false` but the treasury's last outgoing payment on Horizon is more than a few minutes old, assume deposits are stalled. Prefer **discovery/quote/login** (fully read-only) or a demonstrated **withdraw** (USDC -> TRY) over a live deposit until payouts resume — but note that "withdraw instead" is **NOT live-verified**: only the user->treasury leg works (inbound USDC payments are visible on Horizon), while the anchor's TRY payout leg is off-chain/simulated and withdrawal **completion was not re-tested**, so a withdraw is not guaranteed to reach `completed` either.
 - **Safe, always-available steps:** SEP-1 discovery, SEP-10 login, SEP-38 quote (`GET /price` works unauthenticated), SEP-12 auto-approval, `/sep6/info`, and building a withdrawal order (treasury account + id memo).
 - **Deposit amount:** keep it at the proven minimum, **50 TRY** (50 TRY -> ~1.0198045 USDC, fee 0.25 TRY). Never loop; one deposit per demo.
-- **Withdraw:** minimum is **1 USDC** (the anchor returns `400 "Minimum off-ramp is 1.0000000 USDC"` below it, regardless of `/info`); one withdrawal of ~1 USDC is enough.
+- **Withdraw:** minimum is **1 USDC** (the anchor returns `400 "Minimum off-ramp is 1.0000000 USDC"` below it, regardless of `/info`); one withdrawal of ~1 USDC is enough. This minimum is live-observed, but withdrawal **completion is NOT live-verified** (see the caveat above): the user->treasury leg works, the TRY payout leg is simulated.
 - **Fallback:** for a non-TR comparison only, `testanchor.stellar.org` (SRT/USDC) works for discovery/login/info, but it demands real SEP-12 fields and must **not** be presented as the Turkish path.
 - If a deposit must be shown while the anchor is stalled, run it, let the client time out, and use the new message to explain that the order is stuck on the anchor's side — do not ask the user to pay again.
 
