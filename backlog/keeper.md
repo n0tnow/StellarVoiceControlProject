@@ -25,7 +25,7 @@
 - Only dependency added: `@stellar/stellar-sdk` (resolved 17.1.0). Shared-file edits: `stellar/package.json`,
   `stellar/tsconfig.json` (`types: node`, `allowImportingTsExtensions`, `erasableSyntaxOnly` so the code also runs
   under Node's native TS stripping), `stellar/src/index.ts` (one namespaced export `keeper`), `.env.example`.
-- Tests: 41 unit tests (`npm test -w @polaris/stellar`), no network. Cover: due id executed once, duplicate ids,
+- Tests (round 1: 41; now 53, see Round 2): `npm test -w @polaris/stellar`, no network. Cover: due id executed once, duplicate ids,
   concurrent tick suppression (in-flight), pending-tx blocks resubmission, error classification, exponential
   backoff, no starvation, RPC failure recovery (`list_due` failure and thrown execute errors), `run()` backoff/abort,
   dry-run submits nothing (loop and chain level), restore-then-execute, foreign-auth refusal, fee cap, bad seq,
