@@ -233,19 +233,28 @@
   animation-delay: -550ms;
 }
 
-.state-error.is-expanded {
-  height: calc(var(--expanded-height) + 42px);
+/* The error state must never add height: the shell is `--expanded-height` in
+   every expanded state, error included. The message shares the existing
+   `notch-detail` line — truncating with an ellipsis — and the retry hint stays
+   pinned as a non-shrinking suffix instead of stacking a second row. */
+.notch-detail-error {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  max-width: 100%;
+  color: #ffc4d1;
 }
 
-.notch-error {
-  margin: -2px 38px 0;
-  color: #ffc4d1;
-  font-size: 11px;
-  line-height: 1.35;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
+.notch-error-text {
+  min-width: 0;
   overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.notch-error-hint {
+  flex-shrink: 0;
+  color: var(--color-notch-muted);
 }
 
 .state-error .notch-indicator span {

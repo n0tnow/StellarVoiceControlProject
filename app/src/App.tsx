@@ -202,7 +202,16 @@ export default function App() {
         <div className="notch-content" aria-hidden={!expanded}>
           <div className="notch-copy">
             <p className="notch-label">{label}</p>
-            <p className="notch-detail">{detail}</p>
+            {state === "error" && error ? (
+              // The error stays inside the fixed expanded height: the message
+              // truncates on one line and the retry hint keeps its own space.
+              <p className="notch-detail notch-detail-error">
+                <span className="notch-error-text">{error}</span>
+                <span className="notch-error-hint">{detail}</span>
+              </p>
+            ) : (
+              <p className="notch-detail">{detail}</p>
+            )}
           </div>
           <div className="notch-indicator" aria-hidden="true">
             <span />
@@ -210,7 +219,6 @@ export default function App() {
             <span />
           </div>
         </div>
-        {state === "error" && error ? <p className="notch-error">{error}</p> : null}
       </section>
       <span
         className="sr-only"
