@@ -55,3 +55,6 @@ export * as anchor from "./anchor/index.ts";
 
 /** Off-chain keeper that triggers due `polaris_guard` schedules (untrusted; see src/keeper/README.md). */
 export * as keeper from "./keeper/index.ts";
+
+/** Owner/executor-side `polaris_guard` client, SAC allowance helper and routing policy (contract id is a parameter). */
+export * as guard from "./guard/index.ts";
