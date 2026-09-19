@@ -90,12 +90,13 @@ optional `checkTrustline(address, asset)`, `route`, `now`, `timeboundSeconds`.
 | `not_configured` | Default `sendPayment` called before `configurePayments`. |
 | `invalid_intent` | `intent.kind !== "send"`. |
 | `invalid_amount` | Missing/non-string, bad shape, ≤0, or > int64 stroops. |
-| `unsupported_asset` | Asset code not in the registry (e.g. `EURC`). |
-| `unknown_recipient` | Missing/unknown alias, or any raw `G...` address. |
+| `unsupported_asset` | Asset code not in the registry (e.g. `EURC`) or a non-string `asset`. |
+| `unknown_recipient` | Missing/non-string/unknown alias, or any raw `G...` address. |
 | `mode_not_supported` | `mode` is `"confidential"` or `"private"` (fail-closed). |
 | `guarded_route_not_available` | `route: "guarded"`. |
 | `recipient_no_trustline` | `checkTrustline` returned false for a non-native asset. |
-| `account_not_found` | `loadAccount` (or the trustline precheck) rejected. |
+| `trustline_check_failed` | The trustline precheck READ itself failed (only when `checkTrustline` is supplied). |
+| `account_not_found` | `loadAccount` (owner account) rejected. |
 
 The shared `ChainToolResult` has no refusal field, so refusals are **thrown**. The
 shell should branch on `.code`, never on `.message`, and turn them into events.
@@ -109,7 +110,7 @@ Command and verbatim last summary lines:
 ```
 $ npm run test:payments -w @polaris/stellar
 Test Files  5 passed (5)
-     Tests  69 passed (69)
+     Tests  97 passed (97)
 ```
 
 Full suite (`npm test -w @polaris/stellar`, keeper `node:test` → anchor → payments):
@@ -118,8 +119,11 @@ Full suite (`npm test -w @polaris/stellar`, keeper `node:test` → anchor → pa
 $ npm test -w @polaris/stellar
 # keeper (node:test):  tests 67, pass 67, fail 0
 # anchor (vitest):     Test Files  5 passed (5), Tests 111 passed (111)
-# payments (vitest):   Test Files  5 passed (5), Tests  69 passed (69)
+# payments (vitest):   Test Files  5 passed (5), Tests  97 passed (97)
 ```
+
+> The pre-fix numbers were payments 69/69; the review fixes added 28 tests and
+> re-ran every gate (see "Review fixes" below).
 
 Typecheck (`npm run check -w @polaris/stellar`, `tsc -p tsconfig.json`): exit 0, no output.
 
@@ -203,3 +207,83 @@ console.log(summary.title, summary.lines, payloadHashOf(unsignedXdr, "Test SDF N
   returning `guarded_route_not_available` today.
 - Then the **headless e2e** (S7/S8): `Intent → XDR → dev-key sign → submitSignedTx`
   against testnet, asserting an over-limit payment is rejected with guard `#105`.
+
+---
+
+## Review fixes
+
+Applied the corrections from `backlog/send-payment-review.md`. Scope touched:
+`stellar/src/payments/**` (code + tests) and this file only.
+
+### B1 (blocking) — `resolveAlias` leaked `Object.prototype` members
+
+- `resolveAlias` now lowercases+trims the key and reads it only when
+  `Object.prototype.hasOwnProperty.call(book, key)`, returning `undefined`
+  otherwise (`aliases.ts`).
+- `parseAliasBook` now builds the book with `Object.create(null)` and refuses the
+  reserved names `__proto__`, `constructor`, `prototype` with the explicit error
+  `alias name "<name>" is reserved and cannot be used`.
+- Regression tests: `resolveAlias(book, "constructor"|"__proto__"|"toString"|
+  "hasOwnProperty"|"valueOf")` all return `undefined` (also on a plain-proto book);
+  `sendPayment` with those recipients rejects with `PaymentRefusal`
+  `unknown_recipient` instead of throwing a raw `TypeError`, for every one of the
+  five names.
+
+### Suggestion 1 — non-string `asset` / `recipient` threw raw `TypeError`s
+
+- Non-string `intent.asset` → `PaymentRefusal("unsupported_asset")`.
+- Non-string `intent.recipient` / `intent.alias` → `PaymentRefusal("unknown_recipient")`.
+- A whole `null` / `undefined` intent → `PaymentRefusal("invalid_intent")` instead
+  of dereferencing `intent.kind`.
+- Tests cover `asset: null`, `asset: 5`, `recipient: 5`, `recipient: null`,
+  `recipient: undefined`, and whole-intent `null` / `undefined`.
+
+### Suggestion 3 — trustline-precheck read failure mislabelled
+
+- New refusal code `trustline_check_failed` (added to the `PaymentRefusal` union
+  and the table above). The `checkTrustline` catch now throws it; `account_not_found`
+  is reserved for `loadAccount` failures only.
+- Tests: a throwing `checkTrustline` → `trustline_check_failed`; an owner
+  `loadAccount` failure with a passing trustline precheck stays `account_not_found`.
+
+### Test-quality gaps (review §6)
+
+- **Summary is decoded, not copied:** non-canonical input `"00010.5000000"` is
+  accepted and the XDR/summary are canonical (`op.amount === "10.5000000"`, title
+  `Send 10.5 USDC to ada`); a summary built from the intent text could not produce this.
+- **Arbitrary mode:** `mode: "weird"` is refused with `mode_not_supported`
+  (fail-closed, not just the two named modes).
+- **Negative summary decoder:** a two-operation tx whose first op is not a payment
+  throws `/not a payment/`; a fee-bump envelope throws `/fee-bump envelopes are not supported/`.
+- **Removed the tautological test** (`ALIASES.ada.address === ADA`); replaced by a
+  round-trip test that the committed `stellar/config/aliases.json` parses and every
+  alias's address round-trips through `resolveAlias` and is a valid ed25519 strkey.
+
+### Non-blocking hand-off (documented)
+
+- **`defaultPaymentDeps` passes no `checkTrustline`.** A live USDC payment to a
+  recipient without a USDC trustline therefore passes the precheck and fails later
+  at submit with `op_no_trust`; the demo setup must pre-create the trustline (slice
+  risk #7). Only injected `PaymentDeps` can enable the precheck today.
+- **`payloadHash` is not on `ChainToolResult`.** It is exposed via
+  `payloadHashOf(xdr, passphrase)` and `buildPaymentSummary(...).payloadHash`; the
+  shell must call one of them to build `approval_request` before wiring the tool.
+
+### Gates after the fixes (verbatim)
+
+```
+$ caffeinate -i npm run check -w @polaris/stellar
+> tsc -p tsconfig.json
+EXIT=0                                            # no output
+
+$ caffeinate -i npm run test:payments -w @polaris/stellar
+ Test Files  5 passed (5)
+      Tests  97 passed (97)
+EXIT=0
+
+$ caffeinate -i npm test -w @polaris/stellar      # keeper -> anchor -> payments
+# keeper (node:test):  tests 67, pass 67, fail 0
+# anchor (vitest):     Test Files  5 passed (5), Tests 111 passed (111)
+# payments (vitest):   Test Files  5 passed (5), Tests  97 passed (97)
+EXIT=0
+```

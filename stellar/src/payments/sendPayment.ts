@@ -26,6 +26,7 @@ export type PaymentRefusalCode =
   | "mode_not_supported"
   | "guarded_route_not_available"
   | "recipient_no_trustline"
+  | "trustline_check_failed"
   | "account_not_found";
 
 /**
@@ -105,7 +106,14 @@ function assertPositiveAmount(amount: unknown): string {
 
 export function createSendPayment(deps: PaymentDeps): ChainTool {
   return async (rawIntent: Intent): Promise<ChainToolResult> => {
-    const intent = rawIntent as PaymentIntent;
+    const intent = rawIntent as PaymentIntent | null | undefined;
+
+    if (intent === null || intent === undefined || typeof intent !== "object") {
+      throw new PaymentRefusal(
+        "invalid_intent",
+        `sendPayment expects a kind "send" intent object, got ${JSON.stringify(intent)}`,
+      );
+    }
 
     if (intent.kind !== "send") {
       throw new PaymentRefusal("invalid_intent", `sendPayment expects kind "send", got ${JSON.stringify(intent.kind)}`);
@@ -122,6 +130,12 @@ export function createSendPayment(deps: PaymentDeps): ChainTool {
       );
     }
 
+    if (typeof intent.asset !== "string") {
+      throw new PaymentRefusal(
+        "unsupported_asset",
+        `asset must be a string code (allowed: USDC, XLM), got ${JSON.stringify(intent.asset)}`,
+      );
+    }
     const spec = deps.assets.get(intent.asset);
     if (!spec) {
       throw new PaymentRefusal(
@@ -132,7 +146,14 @@ export function createSendPayment(deps: PaymentDeps): ChainTool {
 
     const amount = assertPositiveAmount(intent.amount);
 
-    const alias = (intent.recipient ?? intent.alias ?? "").trim().toLowerCase();
+    const rawRecipient = intent.recipient ?? intent.alias ?? "";
+    if (typeof rawRecipient !== "string") {
+      throw new PaymentRefusal(
+        "unknown_recipient",
+        `recipient must be an alias string, got ${JSON.stringify(rawRecipient)}`,
+      );
+    }
+    const alias = rawRecipient.trim().toLowerCase();
     if (!alias) {
       throw new PaymentRefusal(
         "unknown_recipient",
@@ -153,7 +174,7 @@ export function createSendPayment(deps: PaymentDeps): ChainTool {
         ok = await deps.checkTrustline(entry.address, spec);
       } catch (e) {
         throw new PaymentRefusal(
-          "account_not_found",
+          "trustline_check_failed",
           `could not check the ${spec.code} trustline for ${alias}: ${(e as Error).message}`,
         );
       }

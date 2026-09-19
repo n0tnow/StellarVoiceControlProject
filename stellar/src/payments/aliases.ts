@@ -14,6 +14,13 @@ import { StrKey } from "@stellar/stellar-sdk";
 /** Alias names are lowercase and start with a letter (C3). */
 const ALIAS_NAME = /^[a-z][a-z0-9_-]{0,31}$/;
 
+/**
+ * Names that would collide with `Object.prototype` members. The book uses a
+ * null prototype and `resolveAlias` only reads own properties, but a reserved
+ * name here is refused explicitly so a typo can never become a silent lookup.
+ */
+const RESERVED_ALIAS_NAMES = new Set(["__proto__", "constructor", "prototype"]);
+
 export interface AliasEntry {
   address: string;
   network: "testnet";
@@ -51,8 +58,11 @@ export function parseAliasBook(input: unknown): ParsedAliasBook {
   }
   if (!isPlainObject(raw)) throw new Error("alias book must be a JSON object of { alias: entry }");
 
-  const book: AliasBook = {};
+  const book: AliasBook = Object.create(null);
   for (const [name, value] of Object.entries(raw)) {
+    if (RESERVED_ALIAS_NAMES.has(name)) {
+      throw new Error(`alias name ${JSON.stringify(name)} is reserved and cannot be used`);
+    }
     if (!ALIAS_NAME.test(name)) {
       throw new Error(`alias name ${JSON.stringify(name)} must match [a-z][a-z0-9_-]{0,31}`);
     }
@@ -78,10 +88,15 @@ export function parseAliasBook(input: unknown): ParsedAliasBook {
   return { book, warnings: findAliasCollisions(book) };
 }
 
-/** Case-insensitive, trimmed lookup. Returns undefined for anything not a known alias name. */
+/**
+ * Case-insensitive, trimmed lookup. Returns undefined for anything not a known
+ * alias name. Only OWN properties are read, so `Object.prototype` members
+ * (`constructor`, `toString`, …) can never leak through as a resolved entry.
+ */
 export function resolveAlias(book: AliasBook, name: string): AliasEntry | undefined {
   if (typeof name !== "string") return undefined;
-  return book[name.trim().toLowerCase()];
+  const key = name.trim().toLowerCase();
+  return Object.prototype.hasOwnProperty.call(book, key) ? book[key] : undefined;
 }
 
 /** Human-readable warnings for aliases that share one address (allowed by C3). */

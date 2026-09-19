@@ -1,4 +1,5 @@
 import { fileURLToPath } from "node:url";
+import { StrKey } from "@stellar/stellar-sdk";
 import { describe, expect, it } from "vitest";
 import { loadAliasBook } from "../loadAliases.ts";
 import { findAliasCollisions, parseAliasBook, resolveAlias } from "../aliases.ts";
@@ -16,6 +17,18 @@ describe("parseAliasBook", () => {
     expect(book.ada).toEqual({ address: ADA, network: "testnet", ctRegistered: true });
     expect(book.bob?.sppReady).toBeUndefined();
     expect(warnings).toEqual([]);
+  });
+
+  it("builds the book with a null prototype", () => {
+    const { book } = parseAliasBook(VALID);
+    expect(Object.getPrototypeOf(book)).toBeNull();
+    expect((book as Record<string, unknown>).toString).toBeUndefined();
+  });
+
+  it.each(["__proto__", "constructor", "prototype"])("rejects the reserved alias name %s", (name) => {
+    expect(() => parseAliasBook({ [name]: { address: ADA, network: "testnet" } })).toThrow(
+      /reserved and cannot be used/,
+    );
   });
 
   it("accepts a JSON string", () => {
@@ -74,6 +87,19 @@ describe("resolveAlias", () => {
     expect(resolveAlias(book, "nobody")).toBeUndefined();
     expect(resolveAlias(book, ADA)).toBeUndefined();
   });
+
+  it.each(["constructor", "__proto__", "toString", "hasOwnProperty", "valueOf"])(
+    "never resolves inherited Object.prototype member %s",
+    (name) => {
+      expect(resolveAlias(book, name)).toBeUndefined();
+    },
+  );
+
+  it("also refuses prototype keys on a plain (non-null-proto) book", () => {
+    const plain: Record<string, { address: string; network: "testnet" }> = {};
+    expect(resolveAlias(plain, "constructor")).toBeUndefined();
+    expect(resolveAlias(plain, "toString")).toBeUndefined();
+  });
 });
 
 describe("committed stellar/config/aliases.json", () => {
@@ -86,5 +112,15 @@ describe("committed stellar/config/aliases.json", () => {
     expect(book.ada?.address).toBe(ADA);
     expect(book.ada?.ctRegistered).toBe(true);
     expect(book.carol?.sppReady).toBe(false);
+  });
+
+  it("round-trips every committed alias address through the book", () => {
+    const { book } = loadAliasBook(CONFIG);
+    for (const name of Object.keys(book)) {
+      const entry = resolveAlias(book, name);
+      expect(entry).toBeDefined();
+      expect(entry?.address).toBe(book[name]?.address);
+      expect(StrKey.isValidEd25519PublicKey(entry?.address ?? "")).toBe(true);
+    }
   });
 });

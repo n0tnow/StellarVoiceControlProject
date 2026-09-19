@@ -2,8 +2,9 @@ import { Transaction, TransactionBuilder } from "@stellar/stellar-sdk";
 import { describe, expect, it, vi } from "vitest";
 import { TESTNET_PASSPHRASE } from "../../anchor/config.ts";
 import { TESTNET_USDC_ISSUER } from "../assets.ts";
+import type { PaymentIntent } from "../sendPayment.ts";
 import { payloadHashOf, toHex } from "../summary.ts";
-import { ADA, ALIASES, baseIntent, makeDeps, OWNER, RAW_UNKNOWN, refusalOf, runPayment } from "./helpers.ts";
+import { ADA, baseIntent, makeDeps, OWNER, RAW_UNKNOWN, refusalOf, runPayment } from "./helpers.ts";
 
 function decode(xdr: string): Transaction {
   const tx = TransactionBuilder.fromXDR(xdr, TESTNET_PASSPHRASE);
@@ -117,6 +118,14 @@ describe("sendPayment — summary is decoded from the XDR", () => {
     expect(payloadHashOf(res.unsignedXdr, TESTNET_PASSPHRASE)).toBe(toHex(tx.hash()));
     expect(payloadHashOf(res.unsignedXdr, TESTNET_PASSPHRASE)).toMatch(/^[0-9a-f]{64}$/);
   });
+
+  it("derives the summary from the decoded XDR, not the intent text", async () => {
+    const res = await runPayment(makeDeps(), { ...baseIntent, amount: "00010.5000000" });
+    expect(paymentOp(res.unsignedXdr).op.amount).toBe("10.5000000");
+    expect(res.summary.title).toBe("Send 10.5 USDC to ada");
+    expect(res.summary.lines[0]).toBe(`Pay 10.5 USDC (issuer ${SHORT_ISSUER})`);
+    expect(res.summary.estimatedFee).toBe("0.00001 XLM");
+  });
 });
 
 describe("sendPayment — amount validation", () => {
@@ -167,6 +176,37 @@ describe("sendPayment — asset and recipient refusals", () => {
     const err = await refusalOf(() => runPayment(makeDeps(), { kind: "send", asset: "USDC", amount: "10" }));
     expect(err.code).toBe("unknown_recipient");
   });
+
+  it.each(["constructor", "__proto__", "toString", "hasOwnProperty", "valueOf"])(
+    "refuses the inherited prototype key %s as an unknown alias, without a raw TypeError",
+    async (recipient) => {
+      const err = await refusalOf(() => runPayment(makeDeps(), { ...baseIntent, recipient }));
+      expect(err).toBeInstanceOf(Error);
+      expect(err.code).toBe("unknown_recipient");
+    },
+  );
+
+  it.each([
+    ["asset null", { asset: null }],
+    ["asset number", { asset: 5 }],
+    ["recipient number", { recipient: 5 }],
+    ["recipient null", { recipient: null }],
+    ["recipient undefined", { recipient: undefined }],
+  ])("refuses a non-string field (%s) with a typed refusal", async (_label, override) => {
+    const err = await refusalOf(() => runPayment(makeDeps(), { ...baseIntent, ...override } as PaymentIntent));
+    expect(err).toBeInstanceOf(Error);
+    expect(["unsupported_asset", "unknown_recipient"]).toContain(err.code);
+  });
+
+  it("refuses a null intent with invalid_intent", async () => {
+    const err = await refusalOf(() => runPayment(makeDeps(), null as unknown as PaymentIntent));
+    expect(err.code).toBe("invalid_intent");
+  });
+
+  it("refuses an undefined intent with invalid_intent", async () => {
+    const err = await refusalOf(() => runPayment(makeDeps(), undefined as unknown as PaymentIntent));
+    expect(err.code).toBe("invalid_intent");
+  });
 });
 
 describe("sendPayment — modes and routes (fail-closed)", () => {
@@ -178,6 +218,13 @@ describe("sendPayment — modes and routes (fail-closed)", () => {
 
   it("refuses private mode", async () => {
     const err = await refusalOf(() => runPayment(makeDeps(), { ...baseIntent, mode: "private" }));
+    expect(err.code).toBe("mode_not_supported");
+  });
+
+  it("refuses an arbitrary unknown mode (fail-closed, not just the named ones)", async () => {
+    const err = await refusalOf(() =>
+      runPayment(makeDeps(), { ...baseIntent, mode: "weird" } as unknown as PaymentIntent),
+    );
     expect(err.code).toBe("mode_not_supported");
   });
 
@@ -218,6 +265,30 @@ describe("sendPayment — account and trustline prechecks", () => {
     expect(err.code).toBe("account_not_found");
     expect(err.message).toContain("horizon 404");
   });
+
+  it("maps a trustline-precheck read failure to trustline_check_failed, not account_not_found", async () => {
+    const checkTrustline = vi.fn(async () => {
+      throw new Error("horizon 503");
+    });
+    const err = await refusalOf(() => runPayment(makeDeps({ checkTrustline }), baseIntent));
+    expect(err.code).toBe("trustline_check_failed");
+    expect(err.message).toContain("horizon 503");
+  });
+
+  it("still maps an owner loadAccount failure to account_not_found when a trustline check also runs", async () => {
+    const err = await refusalOf(() =>
+      runPayment(
+        makeDeps({
+          checkTrustline: async () => true,
+          loadAccount: async () => {
+            throw new Error("horizon 404");
+          },
+        }),
+        baseIntent,
+      ),
+    );
+    expect(err.code).toBe("account_not_found");
+  });
 });
 
 describe("sendPayment — intent kind", () => {
@@ -225,11 +296,5 @@ describe("sendPayment — intent kind", () => {
     const err = await refusalOf(() => runPayment(makeDeps(), { ...baseIntent, kind: "swap" }));
     expect(err.code).toBe("invalid_intent");
     expect(err.message).toContain("send");
-  });
-});
-
-describe("sendPayment — alias book fixtures are valid", () => {
-  it("resolves ada from the fixture book", () => {
-    expect(ALIASES.ada.address).toBe(ADA);
   });
 });
