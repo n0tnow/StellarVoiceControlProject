@@ -22,7 +22,7 @@ function run(signals: TurnSignal[]): (TurnSession | null)[] {
 }
 
 /** The stage of a frame (`null` = no session / collapsed pill). */
-function stageOf(frame: TurnSession | null): string | null {
+function stageOf(frame: TurnSession | null | undefined): string | null {
   return frame?.stage ?? null;
 }
 
@@ -45,12 +45,15 @@ test("a successful turn never collapses between the hotkey and the end of speech
   }
   assert.equal(frames.at(-1), null, "the turn ends once speech finishes");
 
+  // "thinking" holds from release through the STT gap and the whole agent turn
+  // (including the TTS synthesis wait) — never "checking", never an early
+  // "speaking". "speaking" appears only after the real playback-start signal.
   assert.deepEqual(frames.map(stageOf), [
     "listening",
     "thinking",
     "thinking",
     "thinking",
-    "checking",
+    "thinking",
     "speaking",
     null,
   ]);
@@ -141,13 +144,64 @@ test("capture chatter outside a turn never opens the shell", () => {
   assert.equal(reduceTurnSession(null, { type: "speech_finished" }), null);
 });
 
-test("speech only starts from the checking phase", () => {
-  const listening: TurnSession = { id: 1, stage: "listening", failureLabel: null };
+/* ------------------------------------------------------------------ *
+ * A9 — no stage may be entered before the event that marks it.
+ * ------------------------------------------------------------------ */
+
+test("no signal can enter 'speaking' before a real playback-start event", () => {
+  // Every pre-playback step must stay off 'speaking', including the whole
+  // synthesis wait, which deliberately keeps the honest 'thinking' label.
+  const frames = run([
+    capture("recording"),
+    capture("ready"),
+    capture("transcribing"),
+    capture("idle"),
+    { type: "transcribed" },
+  ]);
+  for (const frame of frames) {
+    assert.notEqual(stageOf(frame), "speaking");
+  }
+  assert.equal(stageOf(frames.at(-1)), "thinking");
+});
+
+test("speech_started is the only way into 'speaking', and only from 'thinking'", () => {
+  // From a live recording ("listening") a playback event can never be honoured.
+  const listening = reduceTurnSession(null, capture("recording"));
+  assert.equal(listening?.stage, "listening");
   assert.equal(reduceTurnSession(listening, { type: "speech_started" })?.stage, "listening");
+
+  // From 'thinking' it is the expected, and only, transition into 'speaking'.
+  const thinking = reduceTurnSession(listening, capture("ready"));
+  assert.equal(thinking?.stage, "thinking");
+  assert.equal(reduceTurnSession(thinking, { type: "speech_started" })?.stage, "speaking");
+});
+
+test("a playback-finished event before playback started cannot end the turn", () => {
+  // The core A9 bug: a synthesis failure used to emit only 'idle', which must not
+  // be read as "the answer finished playing". The turn stays up until its own
+  // failure/dwell path settles it.
+  const thinking = run([capture("recording"), capture("ready")]).at(-1) ?? null;
+  assert.equal(thinking?.stage, "thinking");
+  assert.equal(reduceTurnSession(thinking, { type: "speech_finished" })?.stage, "thinking");
+});
+
+test("'listening' is entered by capture recording and by nothing else", () => {
+  assert.equal(reduceTurnSession(null, capture("recording"))?.stage, "listening");
+  for (const signal of [
+    capture("ready"),
+    capture("transcribing"),
+    capture("idle"),
+    { type: "transcribed" } as TurnSignal,
+    { type: "speech_started" } as TurnSignal,
+  ]) {
+    const frame = reduceTurnSession(null, signal);
+    assert.notEqual(stageOf(frame), "listening", `unexpected listening from ${signal.type}`);
+  }
 });
 
 test("a late capture event cannot pull a speaking turn backwards", () => {
   const speaking: TurnSession = { id: 2, stage: "speaking", failureLabel: null };
   assert.equal(reduceTurnSession(speaking, capture("ready"))?.stage, "speaking");
   assert.equal(reduceTurnSession(speaking, capture("transcribing"))?.stage, "speaking");
+  assert.equal(reduceTurnSession(speaking, { type: "transcribed" })?.stage, "speaking");
 });

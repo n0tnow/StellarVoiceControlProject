@@ -17,7 +17,7 @@ import {
   runTurn,
   toAgentError,
 } from "@polaris/agent";
-import type { Intent } from "@polaris/interfaces";
+import type { AgentStage, Intent } from "@polaris/interfaces";
 
 /**
  * Logical transport label, only ever used in error copy. The real provider root
@@ -86,12 +86,35 @@ const llm = new OpenAiCompatibleLlm({
   fetchImpl: tauriAgentFetch,
 });
 
+/** Per-turn observation hooks. Used by the shell to drive the honest stage. */
+export interface AgentTurnHooks {
+  /**
+   * Forwarded from the agent core's `agent_status` events. The shell uses
+   * `thinking` to enter its honest "Thinking" stage at the exact moment the
+   * transcript is handed to the agent, rather than guessing from capture state.
+   */
+  onAgentStage?: (stage: AgentStage) => void;
+}
+
 /**
  * Runs one transcript through the agent. Never throws: a provider failure comes
  * back as a labelled failure so the UI can stay one line while the console keeps
  * the full detail. An intent is logged with its latency, like A1's transcript.
+ *
+ * The optional `hooks` only observe; they never change the turn's outcome. The
+ * subscription is removed in `finally`, so a hook cannot leak across turns.
  */
-export async function runAgentTurn(transcript: string): Promise<AgentRun> {
+export async function runAgentTurn(
+  transcript: string,
+  hooks?: AgentTurnHooks,
+): Promise<AgentRun> {
+  const unsubscribe = hooks?.onAgentStage
+    ? bus.subscribe((event) => {
+        if (event.type === "agent_status") {
+          hooks.onAgentStage?.(event.stage);
+        }
+      })
+    : undefined;
   const started = performance.now();
   try {
     const result = await runTurn({ transcript, registry, llm, bus });
@@ -119,5 +142,7 @@ export async function runAgentTurn(transcript: string): Promise<AgentRun> {
       ok: false,
       failure: { transcript, label: agentError.label, detail: agentError.detail, latencyMs },
     };
+  } finally {
+    unsubscribe?.();
   }
 }

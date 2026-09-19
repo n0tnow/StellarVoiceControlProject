@@ -15,6 +15,27 @@
  * `speech_finished` (a healthy turn ending) and `settled` (a failure's dwell
  * elapsing).
  *
+ * ## Every stage is entered by the event that actually marks it (A9)
+ *
+ * The A8 machine was structurally right but optimistic: `transcribed` jumped
+ * straight to `checking`, so the *entire* model call wore a "Checking" label,
+ * and the shell's `speaking` stage was driven by the request to speak rather than
+ * by real audio. Each stage here is entered by one specific signal:
+ *
+ * - `listening` — only a capture `recording` event.
+ * - `thinking` — from capture release / transcription (the machine is working on
+ *   the utterance) through the model call. This deliberately covers the TTS
+ *   synthesis wait too: it is honest ("Polaris is working"), whereas "Speaking"
+ *   would not be.
+ * - `speaking` — only a `speech_started` signal, which the shell raises from the
+ *   Rust `speech_status: speaking` event the backend emits at **real playback
+ *   start**. A synthesis-only wait can therefore never show "Speaking".
+ *
+ * The old `checking` stage (validating the tool arguments into an `Intent`) is
+ * gone: that validation is synchronous and takes microseconds, so a label for it
+ * could never be read. The report records that measurement rather than flashing
+ * an unreadable state.
+ *
  * It is pure on purpose — no React, no Tauri, no timers. The failure dwell and
  * the stuck-turn watchdog are scheduled by the caller and delivered as ordinary
  * signals, so the machine is deterministic and unit-testable
@@ -26,7 +47,7 @@ import type { CaptureState } from "@polaris/interfaces";
  * The visible phase of a live turn. `failed` is terminal but still visible: the
  * shell stays expanded with the short failure label until the caller settles it.
  */
-export type TurnStage = "listening" | "thinking" | "checking" | "speaking" | "failed";
+export type TurnStage = "listening" | "thinking" | "speaking" | "failed";
 
 /** One turn, from hotkey-down to the single moment it ends. */
 export interface TurnSession {
@@ -40,6 +61,7 @@ export interface TurnSession {
 /** Everything that can move a session. Raw capture states are passed through. */
 export type TurnSignal =
   | { type: "capture"; state: CaptureState; label: string | null }
+  /** The final transcript was handed to the agent (the agent's `thinking` stage). */
   | { type: "transcribed" }
   | { type: "failed"; label: string }
   | { type: "speech_started" }
@@ -59,6 +81,8 @@ function fail(session: TurnSession | null, label: string): TurnSession {
  * - a healthy turn is never `null` between `recording` and `speech_finished`;
  * - capture `ready` / `transcribing` / `idle` only advance or hold the stage,
  *   never end the session — `idle` is the STT gap that used to collapse the shell;
+ * - `speaking` is reachable **only** through `speech_started`, and only from
+ *   `thinking`; no other signal can enter it early;
  * - a failure ends the session exactly once, via one `settled`;
  * - a stale `speech_*` from a superseded turn cannot move or end a newer one.
  */
@@ -75,13 +99,13 @@ export function reduceTurnSession(
           return { id: nextId(session), stage: "listening", failureLabel: null };
         case "error":
           return fail(session, signal.label ?? "Mic error");
-        // Release and transcription move the turn into "thinking". Only a stage
-        // still in the capture phase may advance, so a late event can never pull
-        // a speaking turn backwards.
+        // Release and transcription move the turn into "thinking" — from here
+        // until real playback the machine is working on the utterance. Only a
+        // turn still in the capture phase may advance, so a late event can never
+        // pull a speaking turn backwards.
         case "ready":
         case "transcribing":
-          return session !== null &&
-            (session.stage === "listening" || session.stage === "thinking")
+          return session !== null && session.stage === "listening"
             ? { ...session, stage: "thinking" }
             : session;
         // The STT worker returns capture to `idle` *before* it emits the final
@@ -92,16 +116,19 @@ export function reduceTurnSession(
       }
     }
     case "transcribed":
-      return session !== null &&
-        (session.stage === "listening" || session.stage === "thinking")
-        ? { ...session, stage: "checking" }
+      // The transcript was handed to the agent. It arrives while the session is
+      // already `thinking`; this only recovers a session that skipped the
+      // capture transitions (e.g. a snapshot read after startup).
+      return session !== null && session.stage === "listening"
+        ? { ...session, stage: "thinking" }
         : session;
     case "failed":
       return fail(session, signal.label);
     case "speech_started":
-      // Only a turn that is waiting on the model/voice may start speaking; a
-      // queued or stale utterance from a previous turn is ignored.
-      return session?.stage === "checking" ? { ...session, stage: "speaking" } : session;
+      // Only a turn that is still waiting on the model/voice may start speaking;
+      // a queued or stale utterance from a previous turn is ignored. Crucially,
+      // this is the *single* way into `speaking`.
+      return session?.stage === "thinking" ? { ...session, stage: "speaking" } : session;
     case "speech_finished":
       // A healthy turn completes here — the one and only place it ends itself.
       return session?.stage === "speaking" ? null : session;

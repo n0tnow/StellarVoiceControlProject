@@ -309,23 +309,21 @@
 
 /* Step A1: the same bars, slower and shallower, read as "working" rather than
    "listening". No layout change — the indicator keeps its exact geometry.
-   Step A8: thinking, checking and speaking share this one treatment, so the
-   bars never restart or jump as the turn advances between those stages. Kept as
-   a single rule so the three states cannot drift apart. */
+   Step A8: thinking and speaking share this one treatment, so the bars never
+   restart or jump as the turn advances between those stages. Kept as a single
+   rule so the two states cannot drift apart. (A9 dropped the `checking` state:
+   the intent-validation step is synchronous and unreadable.) */
 .state-transcribing .notch-indicator span,
-.state-checking .notch-indicator span,
 .state-speaking .notch-indicator span {
   animation: listen 1150ms ease-in-out infinite alternate;
 }
 
 .state-transcribing .notch-indicator span:nth-child(2),
-.state-checking .notch-indicator span:nth-child(2),
 .state-speaking .notch-indicator span:nth-child(2) {
   animation-delay: -380ms;
 }
 
 .state-transcribing .notch-indicator span:nth-child(3),
-.state-checking .notch-indicator span:nth-child(3),
 .state-speaking .notch-indicator span:nth-child(3) {
   animation-delay: -700ms;
 }
@@ -381,7 +379,6 @@
 
   .state-recording .notch-indicator span,
   .state-transcribing .notch-indicator span,
-  .state-checking .notch-indicator span,
   .state-speaking .notch-indicator span {
     animation: none;
   }

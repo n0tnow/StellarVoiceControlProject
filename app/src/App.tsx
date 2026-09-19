@@ -4,6 +4,7 @@ import type { CaptureStatus, NotchGeometry } from "@polaris/interfaces";
 
 import { StageLabel } from "@/components/StageLabel";
 import { runAgentTurn } from "@/lib/agent";
+import { executeApprovedIntent } from "@/lib/chain";
 import { speakTurnResult } from "@/lib/speech";
 import { reduceTurnSession } from "@/lib/turnSession";
 import {
@@ -97,10 +98,10 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [session?.id, session?.stage]);
 
-  // Stuck-turn watchdog: only the bounded pre-speech stages are watched, and any
+  // Stuck-turn watchdog: only the bounded pre-speech stage is watched, and any
   // stage change clears the timer. Playback is trusted to end itself.
   useEffect(() => {
-    if (session?.stage !== "thinking" && session?.stage !== "checking") return;
+    if (session?.stage !== "thinking") return;
     const timer = setTimeout(
       () => dispatchTurn({ type: "failed", label: "Timed out" }),
       TURN_STAGE_TIMEOUT_MS,
@@ -122,20 +123,53 @@ export default function App() {
       const transcript = raw.trim();
       if (transcript.length === 0 || agentBusyRef.current) return;
       agentBusyRef.current = true;
-      dispatchTurn({ type: "transcribed" });
-      void runAgentTurn(transcript)
+      // The agent core emits `agent_status: thinking` at the exact moment it
+      // takes the transcript; that event — not this call — enters the thinking
+      // stage. Nothing here may jump ahead to "speaking": that is raised only by
+      // the backend's real playback-start event.
+      void runAgentTurn(transcript, {
+        onAgentStage: (stage) => {
+          if (stage === "thinking") dispatchTurn({ type: "transcribed" });
+        },
+      })
         .then((run) => {
           if (disposed) return;
-          if (run.ok) {
-            // Speak first, then let the `speech_status` stream move the session
-            // to "speaking": a slow TTS backend keeps the shell on "checking"
-            // rather than collapsing it.
-            speakTurnResult(run.outcome);
-          } else {
+          if (!run.ok) {
             // Only the short label reaches the notch; the full detail is already
             // on the console and in the Rust log.
             dispatchTurn({ type: "failed", label: run.failure.label });
+            return;
           }
+          if (!run.outcome.intent) {
+            // A conversational turn has nothing to execute: speak the answer and
+            // let the real `speech_status` stream end the turn.
+            speakTurnResult(run.outcome);
+            return;
+          }
+          // A produced intent goes down the single A9 execution seam (approval
+          // gate → chain tool) before anything is spoken. The confirmation is
+          // spoken only once an unsigned transaction exists; while Owner B's
+          // tools are `NotImplementedError` stubs, the notch says so plainly and
+          // settles instead of hanging.
+          void executeApprovedIntent(run.outcome.intent)
+            .then((outcome) => {
+              if (disposed) return;
+              if (outcome.status === "executed") {
+                console.info(
+                  "chain tool produced an unsigned transaction",
+                  outcome.result?.summary,
+                );
+                speakTurnResult(run.outcome);
+              } else {
+                console.warn(`execution ${outcome.status}: ${outcome.detail ?? ""}`);
+                dispatchTurn({ type: "failed", label: outcome.label ?? "Chain error" });
+              }
+            })
+            .catch((error: unknown) => {
+              if (disposed) return;
+              console.error("execution seam failed unexpectedly", error);
+              dispatchTurn({ type: "failed", label: "Chain error" });
+            });
         })
         .finally(() => {
           agentBusyRef.current = false;
@@ -235,19 +269,18 @@ export default function App() {
 
   // The CSS treatment reuses the existing `state-*` language: capture's
   // `recording`/`transcribing` names stay the selectors for the listening and
-  // thinking stages, `checking` joins the working group, and a failed session
-  // borrows the error treatment.
+  // thinking stages, and a failed session borrows the error treatment. (A9
+  // removed the `checking` stage: the intent-validation step is synchronous and
+  // unreadable, so no label is flashed for it.)
   const shellState = connectionError || session?.stage === "failed"
     ? "error"
     : session?.stage === "listening"
       ? "recording"
       : session?.stage === "thinking"
         ? "transcribing"
-        : session?.stage === "checking"
-          ? "checking"
-          : session?.stage === "speaking"
-            ? "speaking"
-            : "idle";
+        : session?.stage === "speaking"
+          ? "speaking"
+          : "idle";
 
   // The shell is expanded for the whole of a live turn, and only a live turn
   // (plus a connection in progress or the one-time permission hint) expands it.
@@ -265,15 +298,13 @@ export default function App() {
         ? "Listening"
         : session?.stage === "thinking"
           ? "Thinking"
-          : session?.stage === "checking"
-            ? "Checking"
-            : session?.stage === "speaking"
-              ? "Speaking"
-              : showPermissionHint
-                ? "Grant access"
-                : connected
-                  ? "Ready"
-                  : "Connecting";
+          : session?.stage === "speaking"
+            ? "Speaking"
+            : showPermissionHint
+              ? "Grant access"
+              : connected
+                ? "Ready"
+                : "Connecting";
   const detail = connectionError
     ? "Reconnecting…"
     : session?.stage === "failed"
@@ -281,12 +312,10 @@ export default function App() {
       : session?.stage === "listening"
         ? "Release to finish"
         : session?.stage === "thinking"
-          ? "Transcribing…"
-          : session?.stage === "checking"
-            ? "Working…"
-            : session?.stage === "speaking"
-              ? "Polaris is talking"
-              : showPermissionHint
+          ? "Working…"
+          : session?.stage === "speaking"
+            ? "Polaris is talking"
+            : showPermissionHint
                 ? "System Settings › Privacy & Security › Accessibility"
                 : "Starting up…";
   const error = connectionError ?? status.error;

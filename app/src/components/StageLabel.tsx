@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
  *
  * A plain text swap is a hard cut, which the owner asked us to remove. Keeping
  * the outgoing label on top for the length of the fade lets the two overlap, so
- * `listening -> thinking -> checking -> speaking` reads as one motion. The
+ * `listening -> thinking -> speaking` reads as one motion. The
  * outgoing layer is skipped entirely when the user prefers reduced motion.
  */
 const prefersReducedMotion =
