@@ -96,9 +96,15 @@ export type SpeakFn = (text: string) => Promise<void>;
  * newest command is the one the user still cares about. In-flight audio is not
  * interrupted.
  */
+interface PendingUtterance {
+  text: string;
+  /** Per-utterance failure hook, for the caller that enqueued it. */
+  onError?: (error: unknown) => void;
+}
+
 export class SpeechQueue {
   #busy = false;
-  #pending: string | null = null;
+  #pending: PendingUtterance | null = null;
   #idleWaiters: Array<() => void> = [];
   readonly #speak: SpeakFn;
   readonly #onError: (error: unknown) => void;
@@ -122,18 +128,25 @@ export class SpeechQueue {
    * Requests an utterance. Blank text is ignored. Never throws and never blocks
    * the caller: playback is awaited internally, so a slow or failed backend
    * cannot delay the visible result.
+   *
+   * `onError` is called only if *this* utterance fails, in addition to the
+   * queue-wide handler. It exists for the shell: with step A9, a synthesis
+   * failure emits no `speech_status: speaking`, so the turn's caller needs a
+   * direct signal that no audio will arrive (otherwise the turn lingers on
+   * "thinking" until the watchdog). A superseded pending utterance is dropped,
+   * so its `onError` is never called — the newer utterance owns the turn.
    */
-  enqueue(text: string): void {
+  enqueue(text: string, onError?: (error: unknown) => void): void {
     const trimmed = text.trim();
     if (trimmed.length === 0) {
       return;
     }
     if (this.#busy) {
-      this.#pending = trimmed;
+      this.#pending = { text: trimmed, ...(onError ? { onError } : {}) };
       return;
     }
     this.#busy = true;
-    void this.#drain(trimmed);
+    void this.#drain({ text: trimmed, ...(onError ? { onError } : {}) });
   }
 
   /** Resolves once the queue is empty. Used by tests and shutdown paths. */
@@ -144,13 +157,14 @@ export class SpeechQueue {
     return new Promise((resolve) => this.#idleWaiters.push(resolve));
   }
 
-  async #drain(first: string): Promise<void> {
-    let current: string | null = first;
+  async #drain(first: PendingUtterance): Promise<void> {
+    let current: PendingUtterance | null = first;
     while (current !== null) {
       try {
-        await this.#speak(current);
+        await this.#speak(current.text);
       } catch (error) {
         this.#onError(error);
+        current.onError?.(error);
       }
       current = this.#pending;
       this.#pending = null;

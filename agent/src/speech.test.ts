@@ -162,6 +162,39 @@ test("a failed utterance is reported and does not stop the queue", async () => {
   assert.equal(queue.speaking, false);
 });
 
+test("the per-utterance error hook fires only for its own utterance", async () => {
+  const own: unknown[] = [];
+  const queue = new SpeechQueue(async (text) => {
+    if (text === "bad") throw new Error("tts down");
+  });
+
+  queue.enqueue("bad", (error) => own.push(error));
+  queue.enqueue("good", (error) => own.push(error));
+  await queue.whenIdle();
+
+  assert.equal(own.length, 1, "only the failing utterance reports");
+});
+
+test("a dropped (superseded) utterance never reports a failure", async () => {
+  const own: string[] = [];
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const queue = new SpeechQueue(async (text) => {
+    if (text === "one") await held;
+  });
+
+  queue.enqueue("one");
+  queue.enqueue("two", () => own.push("two"));
+  queue.enqueue("three", () => own.push("three"));
+  release();
+  await queue.whenIdle();
+
+  // "two" was superseded by "three" and must never run — nor report.
+  assert.deepEqual(own, []);
+});
+
 test("whenIdle resolves immediately when nothing is speaking", async () => {
   const queue = new SpeechQueue(async () => {});
   await queue.whenIdle();

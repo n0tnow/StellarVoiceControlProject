@@ -37,9 +37,17 @@ const queue = new SpeechQueue(
 /**
  * Speaks a successful agent turn. Non-blocking: the call returns immediately and
  * the utterance is serialized behind any audio still playing.
+ *
+ * `onFailure` fires only if this utterance never produces audio (e.g. both TTS
+ * backends failed). Step A9 made "Speaking" real-playback-driven, so there is no
+ * `speech_status` event to settle a turn that failed during synthesis; the
+ * caller uses this to settle it instead of waiting for the watchdog.
  */
-export function speakTurnResult(result: SpokenResult): void {
-  queue.enqueue(spokenText(result));
+export function speakTurnResult(
+  result: SpokenResult,
+  onFailure?: (error: unknown) => void,
+): void {
+  queue.enqueue(spokenText(result), onFailure);
 }
 
 /** True while an utterance is playing; exposed for tests and future mute UI. */

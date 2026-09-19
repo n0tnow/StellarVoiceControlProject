@@ -3,10 +3,10 @@ import type { UnlistenFn } from "@tauri-apps/api/event";
 import type { CaptureStatus, NotchGeometry } from "@polaris/interfaces";
 
 import { StageLabel } from "@/components/StageLabel";
-import { runAgentTurn } from "@/lib/agent";
+import { runAgentTurn, type AgentOutcome } from "@/lib/agent";
 import { executeApprovedIntent } from "@/lib/chain";
 import { speakTurnResult } from "@/lib/speech";
-import { reduceTurnSession } from "@/lib/turnSession";
+import { reduceTurnSession, type TurnSession } from "@/lib/turnSession";
 import {
   getCaptureStatus,
   getHotkeyPermission,
@@ -88,6 +88,10 @@ export default function App() {
   // One transcript must produce exactly one agent turn, even though React
   // StrictMode attaches the event listener twice in development.
   const agentBusyRef = useRef(false);
+  // Latest session, readable from async callbacks that were started during a
+  // turn. A late failure from a superseded turn must not fail the current one.
+  const sessionRef = useRef<TurnSession | null>(session);
+  sessionRef.current = session;
 
   // A failed turn stays up for its dwell, then a single `settled` ends it. The
   // effect is keyed on the session id so a new failure re-arms while a re-render
@@ -119,6 +123,21 @@ export default function App() {
     // moves from "thinking" to "checking". The guard keeps a StrictMode
     // double-listener (or a re-emitted transcript) from starting two model calls
     // for one utterance.
+    // Speaks a successful turn, settling "thinking" if the utterance produced no
+    // audio at all. With A9's real-playback "Speaking", a TTS failure emits no
+    // `speech_status`, so without this the notch would wait for the watchdog.
+    // The session id guard keeps a stale failure from a superseded turn from
+    // failing a newer one.
+    const speakWithSettle = (outcome: AgentOutcome): void => {
+      const turnId = sessionRef.current?.id;
+      speakTurnResult(outcome, (error) => {
+        console.warn("speech produced no audio; settling the turn", error);
+        if (sessionRef.current?.id === turnId) {
+          dispatchTurn({ type: "failed", label: "Voice error" });
+        }
+      });
+    };
+
     const runFromTranscript = (raw: string): void => {
       const transcript = raw.trim();
       if (transcript.length === 0 || agentBusyRef.current) return;
@@ -143,7 +162,7 @@ export default function App() {
           if (!run.outcome.intent) {
             // A conversational turn has nothing to execute: speak the answer and
             // let the real `speech_status` stream end the turn.
-            speakTurnResult(run.outcome);
+            speakWithSettle(run.outcome);
             return;
           }
           // A produced intent goes down the single A9 execution seam (approval
@@ -159,7 +178,7 @@ export default function App() {
                   "chain tool produced an unsigned transaction",
                   outcome.result?.summary,
                 );
-                speakTurnResult(run.outcome);
+                speakWithSettle(run.outcome);
               } else {
                 console.warn(`execution ${outcome.status}: ${outcome.detail ?? ""}`);
                 dispatchTurn({ type: "failed", label: outcome.label ?? "Chain error" });
