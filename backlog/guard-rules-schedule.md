@@ -259,6 +259,81 @@ I also initially committed B1, M3 and m1 together; that commit was reset and spl
 into `2bcf399` (M3 + m1) and `ae39f7d` (B1/M1) before pushing, so the history is
 atomic as the constitution requires.
 
+## Review round 2 — G1/G2 fixed + second redeploy
+
+Round 2 left two findings open (G1, G2) plus deployment-record gaps. All are
+addressed in this worktree.
+
+### G1 — re-pointing an alias left the old address known
+
+`set_alias` wrote `Known(new)` but never cleared `Known(old)`, and `remove_alias`
+could only drop the address the alias currently mapped to, so a stale marker had
+no removal path at all. With `known_recipients_only = true`, moving an alias to a
+new wallet left the **previous** wallet agent-payable without owner approval.
+
+**Fix** (`6607c11`): `Known` is refcounted per `(owner, recipient)` in a new
+`DataKey::KnownRefs`. `set_alias` drops one reference from the old address and
+adds one for the new; `remove_alias` drops one; the marker goes away with the
+last reference. There is no reverse alias index to consult — alias names are
+arbitrary strings and the storage API cannot enumerate keys — so a counter is the
+only way to answer "does another alias still resolve here?" while keeping the
+invariant exact rather than approximate. Side effect: the old `remove_alias`
+caveat (two aliases sharing one marker, removing either un-trusts the address) is
+gone.
+
+Regression tests: `repointing_an_alias_un_marks_the_old_address` (also asserts
+the executor path refuses the abandoned wallet and pays the new one) and
+`an_address_stays_known_while_another_alias_points_at_it` (shared address stays
+known until the last alias goes).
+
+### G2 — keeper-path TTL hygiene
+
+`execute_schedule` bumped only the `Schedule` entry. `NextSchedId` (written only
+by `create_schedule`) and `OwnerScheds` (written on create, and on `deindex` only
+when a schedule goes inactive) were never extended by a running schedule, so a
+long-lived recurring schedule could let both fall below the bump threshold.
+Protocol 23 auto-restores archived persistent entries, so this was a restore-cost
+problem rather than data loss — but the bill would land on the untrusted keeper,
+whose `list_due` path reads both entries.
+
+**Fix** (`bdf9fb1`): an active run bumps `OwnerScheds`; the inactive branch keeps
+using `deindex`, which bumps the index when it rewrites it. Both branches extend
+`NextSchedId`. Documented tradeoff: `NextSchedId` is the one shared storage entry
+left, so two runs landing in the same ledger now contend on it — a bounded rent
+bump traded for TTL hygiene.
+
+Test: `execute_schedule_extends_the_index_and_id_counter_ttl` walks the ledger to
+just inside the bump window, asserts both TTLs are within threshold, runs the
+schedule, then asserts both were pushed back out. A true archival test was not
+needed — the test host emulates Protocol 23 auto-restoration, and remaining TTL
+is directly observable through `testutils::storage::Persistent::get_ttl`, which
+is exactly the quantity the fix changes.
+
+### Deployment record
+
+- `DEPLOYED.md` test count corrected (27 → 38 after this round; it had been 35
+  since round 1) — re-verified with a real run, not assumed.
+- `TooManySchedules` error doc no longer says "Per-owner or global".
+- Deploy tx hash and wasm sha256 are recorded for every deployment. The current
+  artifact's sha256 was re-derived by fetching the deployed code with
+  `stellar contract fetch`, so artifact and chain agree.
+- **Second redeploy:** the fixes change the wasm (23,787 bytes, sha256
+  `c4f65e6542bb5d7e512d4417c1b71b20d7210ca7e665992b4e3cc27f04be98e6`).
+  New contract **`CDRLSFJ5WIC5UMF2LWPF3NRVDOKE7CN3DAYGKDWQ5TJJMVB7FRHRCK4D`**
+  (deploy tx `f6017b43cef06047b6c3bc04e2f88a2e9fb0b3ee3b3aa5a0261a0c43dfacaf59`);
+  `CDIWQTYA…` marked DEPRECATED with its own tx hash and wasm hash. `demo.env`
+  updated.
+- Spec check: `stellar contract info interface --id CDRLSFJ5W…` shows the same
+  19 functions, 3 types, 4 events and the 100–116 error block as the source; the
+  fetched wasm re-hashes to the local build.
+- Demo re-run against the new contract: all 8 steps as expected (agent 3 settled,
+  agent 25 refused `#105`, owner 25 settled, early schedule call `#110`,
+  `list_due` → `[[1],0]`, keeper settled the schedule; payee ended at
+  `108.0000000 PGUSD`, owner `spent_today` `350000000`).
+
+Test/quality gate for this round: `cargo test -p polaris_guard` **38 passed,
+0 failed**; `cargo clippy --all-targets` clean.
+
 ## Unfinished (handed off)
 
 - **Per-asset daily budgets (`Spent(owner, asset)`).** Until they land, `set_rule`
@@ -275,9 +350,11 @@ atomic as the constitution requires.
   is final for this milestone. Deliberate for a hackathon build; if we want
   upgradeability it must be added *before* users configure rules, and a storage
   schema version should land with it.
-- **`remove_alias` shares one `Known` marker between aliases** pointing at the same
-  address, so removing either un-trusts the recipient. Documented in the code; a
-  refcount would fix it.
+- **A schedule run extends the shared `NextSchedId` entry** (round-2 G2), so two
+  runs landing in the same ledger contend on that one entry. It is a bounded rent
+  bump, not a lock held across the transfer, and it buys TTL hygiene for the
+  keeper path; if keeper throughput ever matters, a per-owner id source or
+  batching removes it.
 - **Keeper sweep cost grows with ids ever created, not schedules still active.**
   `list_due` scans a bounded id window (<=100 entries per call) and skips holes left
   by cancels and completed runs, so someone creating throwaway schedules raises
