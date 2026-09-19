@@ -275,30 +275,6 @@
               "key": {
                 "vec": [
                   {
-                    "symbol": "ActiveScheds"
-                  }
-                ]
-              },
-              "durability": "persistent",
-              "val": {
-                "vec": []
-              }
-            }
-          },
-          "ext": "v0"
-        },
-        "live_until": 2074600
-      },
-      {
-        "entry": {
-          "last_modified_ledger_seq": 0,
-          "data": {
-            "contract_data": {
-              "ext": "v0",
-              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
-              "key": {
-                "vec": [
-                  {
                     "symbol": "Executor"
                   },
                   {

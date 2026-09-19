@@ -72,10 +72,12 @@ const BUMP_TO: u32 = 120 * DAY_IN_LEDGERS;
 /// make `daily_limit` meaningless. This constant stays as the structural bound for
 /// when `Spent(owner, asset)` lands.
 const MAX_ALLOWED_ASSETS: u32 = 10;
-/// Bounds `list_schedules` and the per-owner index entry size.
+/// Active schedules one owner may hold. Per-owner, so filling it harms nobody else.
 const MAX_ACTIVE_PER_OWNER: u32 = 25;
-/// Bounds the global due-scan index. `list_due` never reads more than this.
-const MAX_ACTIVE_GLOBAL: u32 = 200;
+/// Hard ceiling on how many schedule entries a single [`PolarisGuard::list_due`]
+/// call may read. The network allows ~200 ledger entry reads per transaction, so
+/// this leaves comfortable headroom for the rest of the footprint.
+const MAX_DUE_SCAN: u32 = 100;
 
 const VIA_OWNER: Symbol = symbol_short!("owner");
 const VIA_EXECUTOR: Symbol = symbol_short!("executor");
@@ -208,6 +210,22 @@ pub struct DaySpend {
 /// can serve many wallets; `Known` is the reverse index of `Alias`, needed
 /// because `known_recipients_only` asks "is this *address* known?" and the alias
 /// book is keyed by the spoken name.
+///
+/// # No shared mutable list
+///
+/// There is deliberately **no global index of schedules**. An earlier revision
+/// kept one (`ActiveScheds`) and it was both a cross-tenant denial of service —
+/// a handful of funded accounts could fill a capped global list and permanently
+/// block every other user's `create_schedule`, with no admin and no upgrade path
+/// to recover — and a serialization point, since every create, cancel and final
+/// run across *all* owners wrote that one ledger entry.
+///
+/// The layout now follows the append-only enumeration pattern from Stellar's
+/// storage-strategies guide: a monotonic counter, one entry per item, and
+/// pagination pushed to the caller (see [`PolarisGuard::list_due`]). `NextSchedId`
+/// is the only remaining shared entry, and only `create_schedule` writes it — the
+/// keeper never touches it, and two owners contend only if they create schedules
+/// in the very same ledger.
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
@@ -220,9 +238,9 @@ pub enum DataKey {
     Spent(Address),
     Schedule(u32),
     /// Active schedule ids of one owner (bounded by `MAX_ACTIVE_PER_OWNER`).
+    /// Per-owner, so one tenant filling it affects nobody else.
     OwnerScheds(Address),
-    /// Active schedule ids across all owners (bounded by `MAX_ACTIVE_GLOBAL`).
-    ActiveScheds,
+    /// Monotonic id source. Written only by `create_schedule`.
     NextSchedId,
 }
 
@@ -507,12 +525,9 @@ impl PolarisGuard {
             .persistent()
             .get(&DataKey::OwnerScheds(owner.clone()))
             .unwrap_or(Vec::new(&env));
-        let mut active: Vec<u32> = env
-            .storage()
-            .persistent()
-            .get(&DataKey::ActiveScheds)
-            .unwrap_or(Vec::new(&env));
-        if owned.len() >= MAX_ACTIVE_PER_OWNER || active.len() >= MAX_ACTIVE_GLOBAL {
+        // Per-owner only. There is no global cap: one would let a few funded
+        // accounts lock every other user out of scheduling, permanently.
+        if owned.len() >= MAX_ACTIVE_PER_OWNER {
             return Err(Error::TooManySchedules);
         }
 
@@ -543,14 +558,9 @@ impl PolarisGuard {
         bump(&env, &skey);
 
         owned.push_back(id);
-        active.push_back(id);
         let okey = DataKey::OwnerScheds(owner.clone());
         env.storage().persistent().set(&okey, &owned);
         bump(&env, &okey);
-        env.storage()
-            .persistent()
-            .set(&DataKey::ActiveScheds, &active);
-        bump(&env, &DataKey::ActiveScheds);
 
         ScheduleCreated {
             owner,
@@ -700,24 +710,63 @@ impl PolarisGuard {
         out
     }
 
-    /// Ids the keeper should call right now, oldest-registered first. Read-only
-    /// and bounded twice over: the scanned index is capped at
-    /// `MAX_ACTIVE_GLOBAL`, and `limit` caps the result.
-    pub fn list_due(env: Env, limit: u32) -> Vec<u32> {
-        let mut out = Vec::new(&env);
-        if limit == 0 {
-            return out;
-        }
-        let now = env.ledger().timestamp();
-        let ids: Vec<u32> = env
-            .storage()
+    /// The id that will be handed to the next schedule created. Schedule ids are
+    /// `1..next_schedule_id()`, so this is the upper bound of the keeper's scan.
+    pub fn next_schedule_id(env: Env) -> u32 {
+        env.storage()
             .persistent()
-            .get(&DataKey::ActiveScheds)
-            .unwrap_or(Vec::new(&env));
-        for id in ids.iter() {
-            if out.len() >= limit {
-                break;
-            }
+            .get(&DataKey::NextSchedId)
+            .unwrap_or(1u32)
+    }
+
+    /// Paginated due-schedule scan for the keeper. Read-only.
+    ///
+    /// Returns `(due_ids, next_cursor)`. It examines **at most `limit` ids**
+    /// starting at `cursor` (clamped to `MAX_DUE_SCAN`), not "the first `limit`
+    /// due schedules" — bounding the *scan* is what keeps the footprint
+    /// predictable regardless of how many schedules exist.
+    ///
+    /// `next_cursor` is the id to pass next, or `0` once the scan has reached the
+    /// end of the id space. A keeper sweep is therefore:
+    ///
+    /// ```text
+    /// cursor = 0
+    /// loop {
+    ///     (ids, cursor) = list_due(cursor, 100)
+    ///     for id in ids { execute_schedule(id) }
+    ///     if cursor == 0 { break }          // one full pass done
+    /// }
+    /// ```
+    ///
+    /// ## Cost as the id space grows
+    ///
+    /// Ids are never reused, so a full sweep costs `ceil(next_schedule_id /
+    /// limit)` read-only simulations, each reading at most `limit` ledger entries.
+    /// Cancelled and exhausted schedules leave **holes** — the id stays readable
+    /// but is skipped — so the sweep cost tracks the total number of schedules
+    /// ever created, not the number currently active. Someone creating many
+    /// throwaway schedules therefore raises the keeper's polling cost; they cannot
+    /// block anyone from scheduling, which is the tradeoff this layout chooses
+    /// (see [`DataKey`]). If sweep cost ever matters, the keeper should remember
+    /// the lowest id still active and start its cursor there.
+    pub fn list_due(env: Env, cursor: u32, limit: u32) -> (Vec<u32>, u32) {
+        let mut out = Vec::new(&env);
+        let end_of_space = Self::next_schedule_id(env.clone());
+        let start = if cursor < 1 { 1 } else { cursor };
+        let window = if limit > MAX_DUE_SCAN {
+            MAX_DUE_SCAN
+        } else {
+            limit
+        };
+        if window == 0 || start >= end_of_space {
+            return (out, 0);
+        }
+        // `start + window` cannot overflow: both are bounded by `end_of_space`,
+        // itself a u32 counter, and `window <= MAX_DUE_SCAN`.
+        let end = core::cmp::min(start.saturating_add(window), end_of_space);
+
+        let now = env.ledger().timestamp();
+        for id in start..end {
             if let Some(s) = env
                 .storage()
                 .persistent()
@@ -728,7 +777,8 @@ impl PolarisGuard {
                 }
             }
         }
-        out
+        let next_cursor = if end >= end_of_space { 0 } else { end };
+        (out, next_cursor)
     }
 }
 
@@ -847,7 +897,12 @@ fn record_spend(env: &Env, owner: &Address, amount: i128) -> Result<(), Error> {
     Ok(())
 }
 
-/// Drops a schedule id from both indexes once it stops being active.
+/// Frees the owner's slot once a schedule stops being active.
+///
+/// Only the owner's own index is touched — there is no global list to maintain,
+/// so a cancel or a final run never contends with another tenant. The `Schedule`
+/// entry itself survives with `active: false`, leaving a hole in the id space
+/// that `list_due` skips.
 fn deindex(env: &Env, owner: &Address, id: u32) {
     let okey = DataKey::OwnerScheds(owner.clone());
     if let Some(mut owned) = env.storage().persistent().get::<_, Vec<u32>>(&okey) {
@@ -855,19 +910,6 @@ fn deindex(env: &Env, owner: &Address, id: u32) {
             owned.remove(i);
             env.storage().persistent().set(&okey, &owned);
             bump(env, &okey);
-        }
-    }
-    if let Some(mut active) = env
-        .storage()
-        .persistent()
-        .get::<_, Vec<u32>>(&DataKey::ActiveScheds)
-    {
-        if let Some(i) = active.first_index_of(id) {
-            active.remove(i);
-            env.storage()
-                .persistent()
-                .set(&DataKey::ActiveScheds, &active);
-            bump(env, &DataKey::ActiveScheds);
         }
     }
 }

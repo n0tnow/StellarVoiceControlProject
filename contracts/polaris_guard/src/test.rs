@@ -7,12 +7,15 @@
 extern crate std;
 
 use soroban_sdk::{
-    testutils::{Address as _, Ledger as _, MockAuth, MockAuthInvoke},
+    testutils::{Address as _, Events as _, Ledger as _, MockAuth, MockAuthInvoke},
     token::{StellarAssetClient, TokenClient},
-    Address, Env, IntoVal, String, Vec,
+    Address, Env, Event as _, IntoVal, String, Symbol, Vec,
 };
 
-use crate::{Error, PolarisGuard, PolarisGuardClient, Rule};
+use crate::{
+    Error, Paid, PolarisGuard, PolarisGuardClient, Rule, ScheduleCancelled, ScheduleCreated,
+    ScheduleRun,
+};
 
 /// 1 USDC in raw units (7 decimals), so the numbers below read like the UI does.
 const USDC: i128 = 10_000_000;
@@ -349,8 +352,44 @@ fn guard_error_codes_cannot_be_confused_with_token_error_codes() {
     // Regression guard for the collision this suite originally caught: the SAC
     // raises AllowanceError = 9, which a client would happily decode into
     // whatever the guard numbered 9. Everything we define lives at 100+.
-    assert!(Error::NotConfigured as u32 >= 100);
-    assert!(Error::InsufficientAllowance as u32 >= 100);
+    //
+    // The whole enum is listed explicitly rather than spot-checked: these
+    // discriminants are permanent public ABI, so adding a variant should force a
+    // deliberate edit here. A compile error when a variant is added or renamed is
+    // the point.
+    let all = [
+        Error::NotConfigured,
+        Error::InvalidAmount,
+        Error::InvalidRule,
+        Error::OverPerTxLimit,
+        Error::OverDailyLimit,
+        Error::NeedsOwnerApproval,
+        Error::AssetNotAllowed,
+        Error::NoExecutor,
+        Error::NotExecutor,
+        Error::ScheduleNotFound,
+        Error::ScheduleNotDue,
+        Error::ScheduleInactive,
+        Error::InvalidSchedule,
+        Error::NotScheduleOwner,
+        Error::TooManySchedules,
+        Error::Overflow,
+        Error::InsufficientAllowance,
+    ];
+    assert_eq!(
+        all.len(),
+        17,
+        "a variant was added without updating this test"
+    );
+    for e in all {
+        assert!(
+            (e as u32) >= 100,
+            "{e:?} collides with the SAC's 1-13 error range"
+        );
+    }
+    // And the codes are exactly the contiguous block DEPLOYED.md documents.
+    assert_eq!(Error::NotConfigured as u32, 100);
+    assert_eq!(Error::InsufficientAllowance as u32, 116);
 }
 
 // ---------------------------------------------------------------------------
@@ -411,7 +450,7 @@ fn schedule_is_not_due_before_its_time() {
         &0,
         &1,
     );
-    assert_eq!(fx.guard.list_due(&10), Vec::from_array(&env, []));
+    assert_eq!(fx.guard.list_due(&0, &10), (Vec::from_array(&env, []), 0));
     assert_eq!(
         fx.guard.try_execute_schedule(&id),
         Err(Ok(Error::ScheduleNotDue))
@@ -419,7 +458,7 @@ fn schedule_is_not_due_before_its_time() {
     assert_eq!(fx.token.balance(&fx.alice), 0);
 
     env.ledger().set_timestamp(T0 + 100);
-    assert_eq!(fx.guard.list_due(&10), Vec::from_array(&env, [id]));
+    assert_eq!(fx.guard.list_due(&0, &10), (Vec::from_array(&env, [id]), 0));
     fx.guard.execute_schedule(&id);
     assert_eq!(fx.token.balance(&fx.alice), 5 * USDC);
 
@@ -428,7 +467,7 @@ fn schedule_is_not_due_before_its_time() {
     assert!(!s.active);
     assert_eq!(s.runs_left, 0);
     assert_eq!(fx.guard.list_schedules(&fx.owner).len(), 0);
-    assert_eq!(fx.guard.list_due(&10), Vec::from_array(&env, []));
+    assert_eq!(fx.guard.list_due(&0, &10), (Vec::from_array(&env, []), 0));
     assert_eq!(
         fx.guard.try_execute_schedule(&id),
         Err(Ok(Error::ScheduleInactive))
@@ -622,7 +661,7 @@ fn cancel_stops_a_schedule() {
 
     fx.guard.cancel_schedule(&fx.owner, &id);
     assert_eq!(fx.guard.list_schedules(&fx.owner).len(), 0);
-    assert_eq!(fx.guard.list_due(&10), Vec::from_array(&env, []));
+    assert_eq!(fx.guard.list_due(&0, &10), (Vec::from_array(&env, []), 0));
     assert_eq!(
         fx.guard.try_execute_schedule(&id),
         Err(Ok(Error::ScheduleInactive))
@@ -669,6 +708,12 @@ fn unknown_schedule_id_is_reported() {
     assert_eq!(fx.guard.get_schedule(&999), None);
     assert_eq!(
         fx.guard.try_execute_schedule(&999),
+        Err(Ok(Error::ScheduleNotFound))
+    );
+    // Cancel reports the same thing rather than NotScheduleOwner, so the app can
+    // distinguish "no such schedule" from "not yours".
+    assert_eq!(
+        fx.guard.try_cancel_schedule(&fx.owner, &999),
         Err(Ok(Error::ScheduleNotFound))
     );
 }
@@ -807,4 +852,415 @@ fn rule_rejects_more_than_one_allowed_asset() {
     none.allowed_assets = Vec::new(&env);
     fx.guard.set_rule(&fx.owner, &none);
     fx.guard.set_rule(&fx.owner, &rule(&env, &fx.asset, false));
+}
+
+// ---------------------------------------------------------------------------
+// Schedule caps — per owner only, never global
+// ---------------------------------------------------------------------------
+
+#[test]
+fn schedule_cap_is_per_owner_and_does_not_block_other_owners() {
+    // The regression this encodes: a global cap let a handful of funded accounts
+    // fill a shared list and permanently block everyone else's create_schedule,
+    // with no admin and no upgrade path to recover.
+    let env = Env::default();
+    env.mock_all_auths();
+    let fx = setup(&env);
+    configure(&fx, &env, false);
+
+    // Fill owner A's allowance of active schedules with far-future one-shots.
+    for _ in 0..25 {
+        fx.guard.create_schedule(
+            &fx.owner,
+            &fx.alice,
+            &fx.asset,
+            &USDC,
+            &(T0 + 10_000_000),
+            &0,
+            &1,
+        );
+    }
+    assert_eq!(fx.guard.list_schedules(&fx.owner).len(), 25);
+    assert_eq!(
+        fx.guard.try_create_schedule(
+            &fx.owner,
+            &fx.alice,
+            &fx.asset,
+            &USDC,
+            &(T0 + 10_000_000),
+            &0,
+            &1
+        ),
+        Err(Ok(Error::TooManySchedules))
+    );
+
+    // A completely unrelated owner is unaffected.
+    let owner_b = Address::generate(&env);
+    StellarAssetClient::new(&env, &fx.asset).mint(&owner_b, &(100 * USDC));
+    fx.token
+        .approve(&owner_b, &fx.guard_id, &(100 * USDC), &500_000);
+    fx.guard.set_rule(&owner_b, &rule(&env, &fx.asset, false));
+    let b_id = fx
+        .guard
+        .create_schedule(&owner_b, &fx.bob, &fx.asset, &(2 * USDC), &T0, &0, &1);
+    assert_eq!(fx.guard.list_schedules(&owner_b).len(), 1);
+
+    // ...and B's schedule still runs while A is at its cap.
+    fx.guard.execute_schedule(&b_id);
+    assert_eq!(fx.token.balance(&fx.bob), 2 * USDC);
+
+    // Cancelling one of A's frees exactly one slot.
+    let freed = fx.guard.list_schedules(&fx.owner).first().unwrap().id;
+    fx.guard.cancel_schedule(&fx.owner, &freed);
+    fx.guard.create_schedule(
+        &fx.owner,
+        &fx.alice,
+        &fx.asset,
+        &USDC,
+        &(T0 + 10_000_000),
+        &0,
+        &1,
+    );
+    assert_eq!(fx.guard.list_schedules(&fx.owner).len(), 25);
+}
+
+// ---------------------------------------------------------------------------
+// Multi-tenancy — nothing leaks between two owners
+// ---------------------------------------------------------------------------
+
+#[test]
+fn two_owners_are_fully_isolated() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let fx = setup(&env);
+
+    let a = fx.owner.clone();
+    let b = Address::generate(&env);
+    let exec_b = Address::generate(&env);
+    StellarAssetClient::new(&env, &fx.asset).mint(&b, &(1_000 * USDC));
+    fx.token
+        .approve(&b, &fx.guard_id, &(1_000 * USDC), &500_000);
+
+    // Different rules.
+    configure(&fx, &env, false); // A: auto 10 / per-tx 50 / daily 200
+    let mut rule_b = rule(&env, &fx.asset, false);
+    rule_b.auto_approve_limit = USDC;
+    rule_b.per_tx_limit = 2 * USDC;
+    rule_b.daily_limit = 4 * USDC;
+    fx.guard.set_rule(&b, &rule_b);
+    fx.guard.set_executor(&b, &exec_b);
+
+    assert_eq!(fx.guard.get_rule(&a).unwrap().per_tx_limit, 50 * USDC);
+    assert_eq!(fx.guard.get_rule(&b).unwrap().per_tx_limit, 2 * USDC);
+
+    // Executors are bound to their own owner in BOTH directions.
+    assert_eq!(fx.guard.get_executor(&a), Some(fx.executor.clone()));
+    assert_eq!(fx.guard.get_executor(&b), Some(exec_b.clone()));
+    assert_eq!(
+        fx.guard
+            .try_pay_executor(&fx.executor, &b, &fx.alice, &fx.asset, &USDC),
+        Err(Ok(Error::NotExecutor)),
+        "A's agent must not be able to spend B's money"
+    );
+    assert_eq!(
+        fx.guard
+            .try_pay_executor(&exec_b, &a, &fx.alice, &fx.asset, &USDC),
+        Err(Ok(Error::NotExecutor)),
+        "B's agent must not be able to spend A's money"
+    );
+
+    // B's tighter rule binds B without touching A.
+    assert_eq!(
+        fx.guard
+            .try_pay_executor(&exec_b, &b, &fx.alice, &fx.asset, &(3 * USDC)),
+        Err(Ok(Error::OverPerTxLimit))
+    );
+    fx.guard
+        .pay_executor(&fx.executor, &a, &fx.alice, &fx.asset, &(3 * USDC));
+
+    // Spend counters are per owner.
+    assert_eq!(fx.guard.spent_today(&a), 3 * USDC);
+    assert_eq!(fx.guard.spent_today(&b), 0);
+    fx.guard
+        .pay_executor(&exec_b, &b, &fx.alice, &fx.asset, &USDC);
+    assert_eq!(fx.guard.spent_today(&a), 3 * USDC);
+    assert_eq!(fx.guard.spent_today(&b), USDC);
+
+    // Exhausting B's daily budget leaves A free to keep paying.
+    fx.guard.pay_owner(&b, &fx.alice, &fx.asset, &(2 * USDC));
+    fx.guard.pay_owner(&b, &fx.alice, &fx.asset, &USDC);
+    assert_eq!(fx.guard.spent_today(&b), 4 * USDC);
+    assert_eq!(
+        fx.guard.try_pay_owner(&b, &fx.alice, &fx.asset, &USDC),
+        Err(Ok(Error::OverDailyLimit))
+    );
+    fx.guard.pay_owner(&a, &fx.alice, &fx.asset, &(10 * USDC));
+
+    // Alias books are separate.
+    let ada = String::from_str(&env, "ada");
+    fx.guard.set_alias(&a, &ada, &fx.alice);
+    assert_eq!(fx.guard.get_alias(&a, &ada), Some(fx.alice.clone()));
+    assert_eq!(fx.guard.get_alias(&b, &ada), None);
+    assert!(fx.guard.is_known_recipient(&a, &fx.alice));
+    assert!(!fx.guard.is_known_recipient(&b, &fx.alice));
+
+    // Schedules are listed per owner, and only their owner may cancel them.
+    let a_id = fx
+        .guard
+        .create_schedule(&a, &fx.alice, &fx.asset, &USDC, &(T0 + 500), &0, &1);
+    let b_id = fx
+        .guard
+        .create_schedule(&b, &fx.bob, &fx.asset, &USDC, &(T0 + 500), &0, &1);
+    assert_eq!(fx.guard.list_schedules(&a).len(), 1);
+    assert_eq!(fx.guard.list_schedules(&b).len(), 1);
+    assert_eq!(fx.guard.list_schedules(&a).first().unwrap().id, a_id);
+    assert_eq!(
+        fx.guard.try_cancel_schedule(&a, &b_id),
+        Err(Ok(Error::NotScheduleOwner))
+    );
+    assert_eq!(
+        fx.guard.try_cancel_schedule(&b, &a_id),
+        Err(Ok(Error::NotScheduleOwner))
+    );
+
+    // A revoking its executor does not disarm B's.
+    fx.guard.revoke_executor(&a);
+    assert_eq!(fx.guard.get_executor(&a), None);
+    assert_eq!(fx.guard.get_executor(&b), Some(exec_b));
+}
+
+// ---------------------------------------------------------------------------
+// Pagination
+// ---------------------------------------------------------------------------
+
+#[test]
+fn list_due_paginates_and_bounds_its_scan() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let fx = setup(&env);
+    configure(&fx, &env, false);
+
+    // Empty id space: nothing to scan, and the cursor says "done".
+    assert_eq!(fx.guard.next_schedule_id(), 1);
+    assert_eq!(fx.guard.list_due(&0, &10), (Vec::from_array(&env, []), 0));
+
+    // Ten due schedules, ids 1..=10.
+    for _ in 0..10 {
+        fx.guard
+            .create_schedule(&fx.owner, &fx.alice, &fx.asset, &USDC, &T0, &0, &1);
+    }
+    assert_eq!(fx.guard.next_schedule_id(), 11);
+
+    // A window of 4 returns the first four and a cursor pointing at id 5.
+    let (page1, c1) = fx.guard.list_due(&0, &4);
+    assert_eq!(page1, Vec::from_array(&env, [1, 2, 3, 4]));
+    assert_eq!(c1, 5);
+
+    let (page2, c2) = fx.guard.list_due(&c1, &4);
+    assert_eq!(page2, Vec::from_array(&env, [5, 6, 7, 8]));
+    assert_eq!(c2, 9);
+
+    // The last page ends the sweep: cursor 0.
+    let (page3, c3) = fx.guard.list_due(&c2, &4);
+    assert_eq!(page3, Vec::from_array(&env, [9, 10]));
+    assert_eq!(c3, 0);
+
+    // A zero limit scans nothing; a cursor past the end is immediately done.
+    assert_eq!(fx.guard.list_due(&0, &0), (Vec::from_array(&env, []), 0));
+    assert_eq!(fx.guard.list_due(&99, &10), (Vec::from_array(&env, []), 0));
+
+    // An oversized limit is clamped to MAX_DUE_SCAN rather than rejected, and
+    // still terminates because the scan stops at the end of the id space.
+    let (all, cursor) = fx.guard.list_due(&0, &10_000);
+    assert_eq!(all.len(), 10);
+    assert_eq!(cursor, 0);
+}
+
+#[test]
+fn list_due_skips_holes_and_undue_schedules() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let fx = setup(&env);
+    configure(&fx, &env, false);
+
+    let due1 = fx
+        .guard
+        .create_schedule(&fx.owner, &fx.alice, &fx.asset, &USDC, &T0, &0, &1);
+    let cancelled = fx
+        .guard
+        .create_schedule(&fx.owner, &fx.alice, &fx.asset, &USDC, &T0, &0, &1);
+    let later = fx.guard.create_schedule(
+        &fx.owner,
+        &fx.alice,
+        &fx.asset,
+        &USDC,
+        &(T0 + 10_000),
+        &0,
+        &1,
+    );
+    let due2 = fx
+        .guard
+        .create_schedule(&fx.owner, &fx.alice, &fx.asset, &USDC, &T0, &0, &1);
+
+    fx.guard.cancel_schedule(&fx.owner, &cancelled);
+
+    // The cancelled id leaves a hole; the not-yet-due one is simply skipped.
+    assert_eq!(
+        fx.guard.list_due(&0, &10),
+        (Vec::from_array(&env, [due1, due2]), 0)
+    );
+    // The hole still occupies an id, so the scan window walks over it.
+    let (page, cursor) = fx.guard.list_due(&0, &2);
+    assert_eq!(page, Vec::from_array(&env, [due1]));
+    assert_eq!(cursor, 3);
+
+    // Running a one-shot turns it into another hole.
+    fx.guard.execute_schedule(&due1);
+    assert_eq!(
+        fx.guard.list_due(&0, &10),
+        (Vec::from_array(&env, [due2]), 0)
+    );
+
+    // Once `later` comes due it appears without anything being re-indexed.
+    env.ledger().set_timestamp(T0 + 10_000);
+    assert_eq!(
+        fx.guard.list_due(&0, &10),
+        (Vec::from_array(&env, [later, due2]), 0)
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Events — these are the keeper/UI ABI
+// ---------------------------------------------------------------------------
+
+/// Events published by the guard itself in the most recent invocation, with the
+/// token's own events filtered out.
+fn guard_events(env: &Env, guard_id: &Address) -> std::vec::Vec<soroban_sdk::xdr::ContractEvent> {
+    env.events()
+        .all()
+        .filter_by_contract(guard_id)
+        .events()
+        .to_vec()
+}
+
+#[test]
+fn paid_event_is_emitted_with_the_right_shape() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let fx = setup(&env);
+    configure(&fx, &env, false);
+
+    fx.guard
+        .pay_executor(&fx.executor, &fx.owner, &fx.alice, &fx.asset, &(5 * USDC));
+    let expected = Paid {
+        owner: fx.owner.clone(),
+        to: fx.alice.clone(),
+        asset: fx.asset.clone(),
+        amount: 5 * USDC,
+        via: Symbol::new(&env, "executor"),
+    };
+    assert_eq!(
+        guard_events(&env, &fx.guard_id),
+        std::vec![expected.to_xdr(&env, &fx.guard_id)]
+    );
+
+    // The owner path reports a different `via`, so the UI can tell them apart.
+    fx.guard
+        .pay_owner(&fx.owner, &fx.alice, &fx.asset, &(5 * USDC));
+    let expected = Paid {
+        owner: fx.owner.clone(),
+        to: fx.alice.clone(),
+        asset: fx.asset.clone(),
+        amount: 5 * USDC,
+        via: Symbol::new(&env, "owner"),
+    };
+    assert_eq!(
+        guard_events(&env, &fx.guard_id),
+        std::vec![expected.to_xdr(&env, &fx.guard_id)]
+    );
+}
+
+#[test]
+fn no_event_is_emitted_when_a_payment_is_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let fx = setup(&env);
+    configure(&fx, &env, false);
+
+    let _ = fx
+        .guard
+        .try_pay_executor(&fx.executor, &fx.owner, &fx.alice, &fx.asset, &(25 * USDC));
+    assert!(
+        guard_events(&env, &fx.guard_id).is_empty(),
+        "a rejected payment must not look like a settled one"
+    );
+}
+
+#[test]
+fn schedule_lifecycle_events_are_emitted() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let fx = setup(&env);
+    configure(&fx, &env, false);
+
+    // created
+    let id = fx.guard.create_schedule(
+        &fx.owner,
+        &fx.alice,
+        &fx.asset,
+        &(2 * USDC),
+        &T0,
+        &3_600,
+        &2,
+    );
+    let expected = ScheduleCreated {
+        owner: fx.owner.clone(),
+        id,
+        to: fx.alice.clone(),
+        asset: fx.asset.clone(),
+        amount: 2 * USDC,
+        next_run_at: T0,
+        interval_secs: 3_600,
+        runs: 2,
+    };
+    assert_eq!(
+        guard_events(&env, &fx.guard_id),
+        std::vec![expected.to_xdr(&env, &fx.guard_id)]
+    );
+
+    // run — Paid and ScheduleRun, in that order
+    fx.guard.execute_schedule(&id);
+    let paid = Paid {
+        owner: fx.owner.clone(),
+        to: fx.alice.clone(),
+        asset: fx.asset.clone(),
+        amount: 2 * USDC,
+        via: Symbol::new(&env, "schedule"),
+    };
+    let run = ScheduleRun {
+        owner: fx.owner.clone(),
+        id,
+        amount: 2 * USDC,
+        next_run_at: T0 + 3_600,
+        runs_left: 1,
+        active: true,
+    };
+    assert_eq!(
+        guard_events(&env, &fx.guard_id),
+        std::vec![
+            paid.to_xdr(&env, &fx.guard_id),
+            run.to_xdr(&env, &fx.guard_id)
+        ]
+    );
+
+    // cancelled
+    fx.guard.cancel_schedule(&fx.owner, &id);
+    let cancelled = ScheduleCancelled {
+        owner: fx.owner.clone(),
+        id,
+    };
+    assert_eq!(
+        guard_events(&env, &fx.guard_id),
+        std::vec![cancelled.to_xdr(&env, &fx.guard_id)]
+    );
 }
