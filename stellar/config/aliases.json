@@ -1,0 +1,16 @@
+{
+  "ada": {
+    "address": "GARXWVNCJ22U2OR23LAB5Z5RWI2XFIJZA2R3TRPFUKKY65JQZZOEWWCO",
+    "network": "testnet",
+    "ctRegistered": true
+  },
+  "bob": {
+    "address": "GB3HO3WGM273M2OZLE5DVRN5WNCNSART6H6SAHP4CXGK34MMGNNDYLX5",
+    "network": "testnet"
+  },
+  "carol": {
+    "address": "GB7YX7MYCIGU6DRSBACQ4HJHQAVUP4K7BHT7NP5VP6IYVACDSEF3F2EE",
+    "network": "testnet",
+    "sppReady": false
+  }
+}

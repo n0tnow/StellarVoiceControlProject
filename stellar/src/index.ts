@@ -41,7 +41,9 @@ function todo(tool: string): ChainTool {
  * TODO(B): implement in this order — `sendPayment` first (it is the M2 vertical
  * slice), then `swap`/`guardPolicy`. `depositTry` (SEP-10/38/6 anchor) is in ./anchor.
  */
-export const sendPayment = todo("sendPayment");
+// Real payment builder (Intent -> unsigned XDR + decoded summary). Configure it once
+// with `configurePayments(deps)`; calling it before that throws a typed refusal.
+export { sendPayment } from "./payments/index.ts";
 export const swap = todo("swap");
 export const guardPolicy = todo("guardPolicy");
 
