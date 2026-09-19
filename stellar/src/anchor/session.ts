@@ -17,6 +17,7 @@ import { authenticate, completeChallenge, isExpired, requestChallenge } from "./
 import { discoverAnchor, findAsset } from "./sep1.ts";
 import { ensureCustomer, type CustomerInfo } from "./sep12.ts";
 import { getPrice } from "./sep38.ts";
+import { sanitizeAnchorText } from "./text.ts";
 import {
   buildWithdrawPayment,
   getInfo,
@@ -369,7 +370,9 @@ export class AnchorSession {
       this.withdrawRequest = undefined; // one withdraw order = at most one payment
       const explorerUrl = explorerTxUrl(out.hash, this.ctx.networkPassphrase);
       const memo = instructions.memo;
-      const memoText = memo ? ` with ${memo.type} memo ${memo.type === "hash" ? shortKey(memo.value) : memo.value}` : ", with no memo";
+      // The on-chain memo is exact; the narrated echo is sanitised like every anchor string.
+      const memoEcho = sanitizeAnchorText(memo?.value, 28) ?? "?";
+      const memoText = memo ? ` with ${memo.type} memo ${memo.type === "hash" ? shortKey(memo.value) : memoEcho}` : ", with no memo";
       this.explain.record(
         "withdraw.pay",
         `Sent ${amountAsset} ${asset.code} to the anchor's account ${shortKey(instructions.accountId)}${memoText} ` +

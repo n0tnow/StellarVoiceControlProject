@@ -277,10 +277,12 @@ export async function startWithdraw(
   if (fee !== undefined) out.feePercent = fee;
   const eta = num(raw.eta);
   if (eta !== undefined) out.eta = eta;
+  // The memo value still goes on chain exactly as the anchor sent it; only the echo is sanitised.
+  const memoEcho = out.memo ? sanitizeAnchorText(out.memo.value, 28) ?? "?" : undefined;
   ctx.explain.record(
     "sep6.withdraw",
     `SEP-6: asked the anchor to cash out ${p.amount} ${p.assetCode}. It created order ${out.id} and told us to pay ${shortKey(accountId)}` +
-      `${out.memo ? ` with ${out.memo.type} memo ${out.memo.type === "hash" ? shortKey(out.memo.value) : out.memo.value}` : ", with no memo"}.`,
+      `${out.memo ? ` with ${out.memo.type} memo ${out.memo.type === "hash" ? shortKey(out.memo.value) : memoEcho}` : ", with no memo"}.`,
     "The memo is a reference number: it is how the anchor matches our on-chain payment to this order, so it must be included exactly.",
   );
   return out;

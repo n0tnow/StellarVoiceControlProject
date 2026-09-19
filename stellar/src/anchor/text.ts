@@ -4,7 +4,14 @@
  * explain record or a step result goes through `sanitizeAnchorText` first.
  */
 
-const DEFAULT_MAX = 200;
+/**
+ * Default hard cap (characters) for any anchor-authored text that can reach
+ * narration, the model or a log: explain `anchorSaid`, HTTP error details and
+ * TOML parse errors. Callers with a tighter format (memo ≤ 28 bytes, ids)
+ * pass their own cap; nothing untrusted is ever echoed uncapped.
+ */
+export const MAX_ANCHOR_TEXT = 200;
+const DEFAULT_MAX = MAX_ANCHOR_TEXT;
 
 // C0/C1 controls, DEL, zero-width and bidi-override characters, line/paragraph separators.
 const HIDDEN = new RegExp(

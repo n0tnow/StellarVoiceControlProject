@@ -6,7 +6,7 @@ import { parse } from "smol-toml";
 import { MAX_TOML_BYTES, requestText } from "./http.ts";
 import { shortKey } from "./explain.ts";
 import { assertSafeEndpoint, parseHomeDomain, type NetPolicy } from "./net.ts";
-import { sanitizeAnchorText } from "./text.ts";
+import { MAX_ANCHOR_TEXT, sanitizeAnchorText } from "./text.ts";
 import type { AnchorContext, AnchorToml, TomlCurrency } from "./types.ts";
 
 export class TomlError extends Error {
@@ -30,7 +30,10 @@ export function parseStellarToml(homeDomain: string, text: string, policy: NetPo
   try {
     doc = parse(text) as Record<string, unknown>;
   } catch (e) {
-    throw new TomlError(`stellar.toml of ${homeDomain} is not valid TOML: ${(e as Error).message}`);
+    // The parser message quotes the offending line, i.e. anchor-authored bytes:
+    // sanitise and cap it before it can reach the model or the voice.
+    const detail = sanitizeAnchorText((e as Error).message, MAX_ANCHOR_TEXT);
+    throw new TomlError(`${homeDomain} does not publish a valid stellar.toml${detail ? ` (parser said: ${detail})` : ""}`);
   }
   const webAuth = str(doc.WEB_AUTH_ENDPOINT);
   const transfer = str(doc.TRANSFER_SERVER);
@@ -97,10 +100,12 @@ export async function discoverAnchor(ctx: AnchorContext, homeDomainInput: string
       `${homeDomain} runs on a different Stellar network than this wallet (${sanitizeAnchorText(toml.networkPassphrase, 60)}) — refusing to talk to it`,
     );
   }
+  // Endpoint paths are anchor-authored too: sanitise (and cap) before narrating them.
+  const path = (u: string): string => sanitizeAnchorText(new URL(u).pathname, 120) ?? "/";
   ctx.explain.record(
     "sep1.discover",
-    `SEP-1: read ${homeDomain}'s public stellar.toml and learned where to log in (${new URL(toml.webAuthEndpoint).pathname}), ` +
-      `move money (${new URL(toml.transferServer).pathname}), do KYC and fetch quotes. The anchor's signing key is ${shortKey(toml.signingKey)}. ` +
+    `SEP-1: read ${homeDomain}'s public stellar.toml and learned where to log in (${path(toml.webAuthEndpoint)}), ` +
+      `move money (${path(toml.transferServer)}), do KYC and fetch quotes. The anchor's signing key is ${shortKey(toml.signingKey)}. ` +
       `All of its endpoints use https on ${homeDomain}.`,
     "Everything about an anchor is published in one standard file, so all we need from you is the anchor's domain name. We only accept https endpoints on that same domain.",
   );
