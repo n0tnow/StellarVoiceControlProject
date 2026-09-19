@@ -53,3 +53,6 @@ export * as anchor from "./anchor/index.ts";
 
 /** Off-chain keeper that triggers due `polaris_guard` schedules (untrusted; see src/keeper/README.md). */
 export * as keeper from "./keeper/index.ts";
+
+/** Deterministic, offline suggestions engine (T3). Pure: never applies a change (D11). */
+export * as suggest from "./suggest/index.ts";
