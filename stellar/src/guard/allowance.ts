@@ -30,7 +30,14 @@ function invalidAmount(message: string): GuardClientError {
   return new GuardClientError({ name: "InvalidAmount", kind: "rule_violated", code: 101, message });
 }
 
-/** `currentLedger + days * 17280`, with the protocol's per-entry cap left to the network. */
+/**
+ * `currentLedger + days * 17280`, with the protocol's per-entry cap left to
+ * the network.
+ *
+ * A caller-supplied `days` large enough to push the result past `u32::MAX`
+ * surfaces as a raw `TypeError` from the later `nativeToScVal(..., "u32")`
+ * rather than a typed `GuardClientError` — callers must keep `days` sane.
+ */
 export function allowanceExpiryLedger(currentLedger: number, days: number = ALLOWANCE_WINDOW_DAYS): number {
   if (!Number.isInteger(currentLedger) || currentLedger < 0) {
     throw new GuardClientError({

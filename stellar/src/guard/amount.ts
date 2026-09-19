@@ -30,7 +30,12 @@ function invalidAmount(message: string): GuardClientError {
   return new GuardClientError({ name: "InvalidAmount", kind: "rule_violated", code: 101, message });
 }
 
-/** Strict decimal string -> raw units. Zero is allowed; negatives are not. */
+/**
+ * Strict decimal string -> raw units. Zero is allowed; negatives are not.
+ * The integer part is capped at 12 digits (stricter than i128::MAX, and
+ * consistent with `sendPayment`'s `MAX_STROOPS`); the 7-fraction-digit cap is
+ * the token's. Anything else is a typed `InvalidAmount`.
+ */
 export function toRawUnits(amount: string): bigint {
   if (typeof amount !== "string" || !AMOUNT_RE.test(amount)) {
     throw invalidAmount(

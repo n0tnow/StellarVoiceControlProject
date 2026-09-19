@@ -9,7 +9,7 @@
  * The contract id is a required option — never a constant — so a future
  * `polaris_guard_v2` can run side by side (decision D9).
  */
-import { nativeToScVal } from "@stellar/stellar-sdk";
+import { Address, nativeToScVal } from "@stellar/stellar-sdk";
 import type { xdr } from "@stellar/stellar-sdk";
 import { buildGuardCallSummary } from "./describe.ts";
 import { buildUnsignedInvoke, simulateReadValue, DEFAULT_TX_TIMEOUT_SECONDS } from "./invoke.ts";
@@ -32,6 +32,27 @@ const scI128 = (amount: bigint): xdr.ScVal => nativeToScVal(amount, { type: "i12
 const scU32 = (n: number): xdr.ScVal => nativeToScVal(n, { type: "u32" });
 const scU64 = (n: bigint): xdr.ScVal => nativeToScVal(n, { type: "u64" });
 const scString = (s: string): xdr.ScVal => nativeToScVal(s, { type: "string" });
+
+/**
+ * Encode the `Rule` struct exactly as the contract's derived `ScSpecEntry`
+ * expects: `scvSymbol` keys, `scvI128` limits, a `Vec<scvAddress>` allowlist
+ * and `scvBool`. An untyped `nativeToScVal(rule)` silently produces
+ * `scvString` keys / `scvU64` values / `scvString` addresses, which the host
+ * rejects on-chain.
+ */
+const ruleToScVal = (rule: Rule): xdr.ScVal =>
+  nativeToScVal(
+    { ...rule, allowed_assets: rule.allowed_assets.map((asset) => new Address(asset)) },
+    {
+      type: {
+        auto_approve_limit: ["symbol", "i128"],
+        per_tx_limit: ["symbol", "i128"],
+        daily_limit: ["symbol", "i128"],
+        allowed_assets: ["symbol", "address"],
+        known_recipients_only: ["symbol", "bool"],
+      },
+    },
+  );
 
 /** The v0.1 ABI as a class. Construct with `createGuardClient`. */
 class SorobanGuardClient implements GuardClient {
@@ -86,7 +107,7 @@ class SorobanGuardClient implements GuardClient {
   // -- owner: policy --------------------------------------------------------
 
   setRule(owner: string, rule: Rule): Promise<GuardCall> {
-    return this.write(owner, "set_rule", [scAddress(owner), nativeToScVal(rule)]);
+    return this.write(owner, "set_rule", [scAddress(owner), ruleToScVal(rule)]);
   }
 
   async getRule(owner: string): Promise<Rule | null> {

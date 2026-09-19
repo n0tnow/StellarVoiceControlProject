@@ -15,8 +15,8 @@
   injected client, applies the routing policy, builds `pay_executor` / `pay_owner`, and returns a
   summary decoded from the produced XDR. `direct` is byte-for-byte unchanged.
 - All new tests are offline (fake RPC). No network calls were made.
-- **Gates green:** `check` clean; `test:guard` 113/113; full `test` = keeper 67 + anchor 111 +
-  payments 113 + guard 113 = **404 tests, 0 failures**.
+- **Gates green:** `check` clean; `test:guard` 133/133; full `test` = keeper 67 + anchor 111 +
+  payments 113 + guard 133 = **424 tests, 0 failures**. (Review-fix round: see §"Review fixes".)
 
 ## Completed
 
@@ -119,15 +119,17 @@ Drift guards (tests): `GUARD_ERROR_NAMES` ≡ `keeper/errors.ts#GUARD_ERRORS` �
 ```
 npm run check -w @polaris/stellar     # tsc, clean
 npm run test:guard -w @polaris/stellar
-  Test Files  6 passed (6)   Tests  113 passed (113)
+  Test Files  7 passed (7)   Tests  133 passed (133)
 npm test -w @polaris/stellar
   test:keeper   tests 67  pass 67  fail 0
   test:anchor   Test Files 5 passed   Tests 111 passed
-  test:payments Test Files 6 passed   Tests 113 passed   (includes 13 new guarded tests)
-  test:guard    Test Files 6 passed   Tests 113 passed
+  test:payments Test Files 6 passed   Tests 113 passed   (includes 16 new guarded tests)
+  test:guard    Test Files 7 passed   Tests 133 passed
 ```
 
-New tests: **126** (113 in `src/guard`, 13 in `src/payments/__tests__/sendPayment.guarded.test.ts`).
+New tests: **149** for the review-fix state — 133 in `src/guard` (113 from the original slice + 20
+golden-ABI) and 16 in `src/payments/__tests__/sendPayment.guarded.test.ts`. (The pre-review report
+undercounted the guarded file as 13; the correct 16 makes the original slice **129** new tests.)
 They decode every produced XDR and assert contract id, function name, argument order/types/values,
 signer (tx source), fee/network, plus read decoding, allowance math, routing branches, error mapping
 and the two drift guards. A source scan asserts no guard source contains the deployed id
@@ -201,3 +203,57 @@ const { unsignedXdr, summary, payloadHash } = await client.payExecutor(
   `buildUnsignedInvoke` for `set_rule`/`set_executor` → submit; then `sendPayment({route:"guarded"})`
   for a small (expect `pay_executor` settle) and a large amount (expect `#105` →
   `pay_owner` after owner signature). Record the tx hashes in this report.
+
+## Review fixes (2026-09-19, W-guard)
+
+The independent review `backlog/guard-client-review.md` returned **reject** on one blocking ABI bug
+(`setRule` mis-encoding). This round fixes it and adds the missing ABI evidence. No commit/push (per
+task).
+
+### B1 (blocking) — `setRule` mis-encoded the `Rule` struct
+
+- `client.ts` now encodes the struct through `ruleToScVal` with explicit spec types: `scvSymbol`
+  keys, `scvI128` limits, `allowed_assets` as a `Vec<scvAddress>` (each asset wrapped in an
+  `Address`), and `scvBool` for `known_recipients_only`. The untyped `nativeToScVal(rule)` produced
+  `scvString` keys, `scvU64` limits and `scvString` addresses, which the host rejects on `set_rule`.
+- Audited every other encode site (alias `String` args, `u32`/`u64` schedule fields, all address
+  args, allowance args): no further untyped struct/map/array encodings; all are explicit.
+- `client.test.ts` now asserts the decoded `set_rule` map directly — every key `scvSymbol`, all
+  three limits `scvI128`, `allowed_assets` elements `scvAddress` (the review's exact check, which
+  failed against the submitted code).
+
+### Golden ABI test from the real compiled contract
+
+- New committed fixture `__tests__/fixtures/polaris_guard.spec.json`: base64 XDR of each
+  `ScSpecEntry`, extracted **offline** from the compiled wasm at
+  `contracts/target/wasm32v1-none/release/polaris_guard.wasm` (sha256 `c4f65e65…98e6`, recorded as
+  `wasmSha256` and re-checked at test load). The wasm itself is not committed; no network step.
+- New `__tests__/abi-golden.test.ts` loads the fixture into `contract.Spec`, then for all 17 wrapped
+  methods builds representative arguments and requires the client's produced invocation args to be
+  **byte-for-byte equal** (base64 XDR) to `spec.funcArgsToScVals(fn, {...})`, and the arity to match.
+- Drift guard: `spec.funcs()` must equal the 17 wrapped functions plus the explicit `NOT_WRAPPED`
+  list (`execute_schedule`, `list_due`, keeper-only), so a new contract function fails the test until
+  it is wrapped or explicitly listed as not wrapped.
+- Struct round-trips: the canonical `Rule` / `Schedule` ScVals (spec-encoded) decode to the same
+  `Rule`/`Schedule` objects through both `spec.scValToNative` and the client's raw `scValToNative`
+  read path. The test fixtures `ruleScVal`/`scheduleScVal` were corrected to emit fields in the
+  contract's alphabetical derive order (byte-identical to the spec encoding).
+
+### Proof the golden test can fail (mutation)
+
+Reverting `setRule` to the untyped `nativeToScVal(rule)` makes `abi-golden.test.ts` fail on
+`set_rule` with a per-argument diff (spec `scvSymbol`/`scvI128`/`scvAddress` vs client
+`scvString`/`scvU64`/`scvString`); the other 19 golden tests stayed green. Restored immediately;
+`check` clean.
+
+### Non-blocking notes
+
+- The offline fake RPC accepts **any** simulation payload, so it cannot validate the ABI: **only**
+  `abi-golden.test.ts` and the later live testnet run guard the encoding. Recorded explicitly here
+  because the review's break attempts showed the `scvMap`-only assertion and fake RPC let B1 through.
+- Applied the cheap (documentation-only) review notes: `toRawUnits` docstring now states the
+  12-integer-digit cap, and `allowanceExpiryLedger` flags the untyped `u32` overflow risk for absurd
+  `days`.
+- Deliberately not addressed this round (outside the blocking scope): value-level assertions in
+  `client.test.ts`, `buildApproveAllowance` spender cross-check, typed errors in the summary
+  builders, and the live RPC assembly/testnet verification (still UNVERIFIED, as before).

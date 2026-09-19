@@ -92,29 +92,33 @@ export const SCHEDULE: Schedule = {
   active: true,
 };
 
-/** Rule as an ScVal map, exactly as the contract would return it. */
+/**
+ * Rule as an ScVal map, exactly as the contract's derived struct spec returns
+ * it. Fields are emitted **alphabetically** because `soroban-sdk`'s
+ * `derive_struct` sorts them; `nativeToScVal` does the same for a plain object.
+ */
 export function ruleScVal(rule: Rule): xdr.ScVal {
   return xdr.ScVal.scvMap([
-    mapEntry("auto_approve_limit", i128(rule.auto_approve_limit)),
-    mapEntry("per_tx_limit", i128(rule.per_tx_limit)),
-    mapEntry("daily_limit", i128(rule.daily_limit)),
     mapEntry("allowed_assets", xdr.ScVal.scvVec(rule.allowed_assets.map(scAddress))),
+    mapEntry("auto_approve_limit", i128(rule.auto_approve_limit)),
+    mapEntry("daily_limit", i128(rule.daily_limit)),
     mapEntry("known_recipients_only", xdr.ScVal.scvBool(rule.known_recipients_only)),
+    mapEntry("per_tx_limit", i128(rule.per_tx_limit)),
   ]);
 }
 
-/** Schedule as an ScVal map, exactly as the contract would return it. */
+/** Schedule as an ScVal map, exactly as the contract's derived struct spec returns it. */
 export function scheduleScVal(schedule: Schedule): xdr.ScVal {
   return xdr.ScVal.scvMap([
-    mapEntry("id", u32(schedule.id)),
-    mapEntry("owner", scAddress(schedule.owner)),
-    mapEntry("to", scAddress(schedule.to)),
-    mapEntry("asset", scAddress(schedule.asset)),
-    mapEntry("amount", i128(schedule.amount)),
-    mapEntry("next_run_at", u64(schedule.next_run_at)),
-    mapEntry("interval_secs", u64(schedule.interval_secs)),
-    mapEntry("runs_left", u32(schedule.runs_left)),
     mapEntry("active", xdr.ScVal.scvBool(schedule.active)),
+    mapEntry("amount", i128(schedule.amount)),
+    mapEntry("asset", scAddress(schedule.asset)),
+    mapEntry("id", u32(schedule.id)),
+    mapEntry("interval_secs", u64(schedule.interval_secs)),
+    mapEntry("next_run_at", u64(schedule.next_run_at)),
+    mapEntry("owner", scAddress(schedule.owner)),
+    mapEntry("runs_left", u32(schedule.runs_left)),
+    mapEntry("to", scAddress(schedule.to)),
   ]);
 }
 

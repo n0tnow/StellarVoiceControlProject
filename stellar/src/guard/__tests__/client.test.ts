@@ -35,6 +35,30 @@ describe("guard client — writes build the exact v0.1 invocation", () => {
     expect(call.name).toBe("set_rule");
     expect(call.args[0]?.type).toBe("scvAddress");
     expect(call.args[1]?.type).toBe("scvMap");
+    const ruleArg = call.args[1];
+    if (ruleArg?.type !== "scvMap") throw new Error(`set_rule rule arg is ${ruleArg?.type}, not scvMap`);
+    const entries = ruleArg.map ?? [];
+    const byKey = new Map<string, xdr.ScVal>(
+      entries.map((e) => {
+        if (e.key.type !== "scvSymbol") throw new Error(`non-symbol Rule key: ${e.key.type}`);
+        return [e.key.sym.toString(), e.val] as const;
+      }),
+    );
+    expect([...byKey.keys()].sort()).toEqual([
+      "allowed_assets",
+      "auto_approve_limit",
+      "daily_limit",
+      "known_recipients_only",
+      "per_tx_limit",
+    ]);
+    for (const entry of entries) expect(entry.key.type).toBe("scvSymbol");
+    for (const limit of ["auto_approve_limit", "per_tx_limit", "daily_limit"]) {
+      expect(byKey.get(limit)?.type).toBe("scvI128");
+    }
+    const assets = byKey.get("allowed_assets");
+    if (assets?.type !== "scvVec") throw new Error(`allowed_assets is ${assets?.type}, not scvVec`);
+    expect((assets.vec ?? []).map((a) => a.type)).toEqual(["scvAddress"]);
+    expect(byKey.get("known_recipients_only")?.type).toBe("scvBool");
     expect(call.tx.source).toBe(OWNER);
     expect(call.args[1] && invokedCall(res.unsignedXdr).tx.signatures).toHaveLength(0);
     expect(res.payloadHash).toBe(toHex(call.tx.hash()));
