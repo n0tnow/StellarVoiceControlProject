@@ -20,7 +20,7 @@
 - [x] Project topic finalized (2026-09-19: Polaris — see docs/architecture.md §1)
 - [x] Technical architecture decision made (2026-09-19: docs/architecture.md, registered in docs/reports/INDEX.md)
 - [x] Technology stack selected (2026-09-19: Tauri v2 + Rust core + React/TS/Vite + Tailwind + shadcn/ui)
-- [ ] Repository skeleton created
+- [x] Repository skeleton created (2026-09-19: npm workspaces — `interfaces/`, `agent/`, `app/`, `stellar/`, `contracts/` + `Makefile`/`scripts/`; report: `backlog/2026-09-19-monorepo-skeleton.md`)
 - [x] model-ladder.md model table filled in (2026-09-19: table + PONG log filled; file is local-only and never committed, see .gitignore)
 
 ## Milestone 2 — Vertical Slice 🔲
@@ -35,6 +35,14 @@
 ### M2 — Owner A Track: Voice Pipeline, step-by-step 🔲
 > Rule: **one feature at a time, no skipping.** Do not start step N+1 until step N's
 > acceptance test passes and is demoed. Each step is its own branch + PR + review.
+
+### M2 — Progress log
+> 2026-09-19 — **Skeleton landed** (`feat/monorepo-skeleton`): all four layers exist and
+> build (`make check`), and the shell already carries the typed `polaris-event` stream
+> from Rust to the log pane. Because of that, **A0 shrinks to audio capture + hotkey**:
+> the window, the log pane, the event plumbing and `app_info` are already in place
+> (`dev_self_test` is the temporary stand-in for the hotkey path and must be deleted
+> when A0 lands).
 
 #### A0 — Test harness 🔲
 - [ ] Minimal Tauri window: a "record" button (or hotkey) + a text log pane.

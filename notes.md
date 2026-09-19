@@ -66,7 +66,21 @@
 - **Follow-ups (docs):** `docs/architecture.md` facts to correct: Raven ownership/canonical host, `skills.*` family missing from the MCP catalog list, LumenLoop auth, Scout tool count, SEP-38 field names, SEP-6 amount units.
 - **Status:** open (follow-ups: deadline/criteria verification, architecture.md corrections)
 
-## 2026-09-19 — Versioning & Commit Cadence (agent workflow)
+## 2026-09-19 — Monorepo Skeleton Landed (first code)
+- **Idea:** Land the first code in the repository: the monorepo skeleton for all layers, so both owners can start their step-by-step tracks (M2 A0–A5 for Owner A, chain work for Owner B) without waiting on each other.
+- **Discussion:** Done directly by the coordinating agent in one worktree (`feat/monorepo-skeleton`) instead of parallel workers — the two-person async review workflow (§notes 2026-09-19) still applies: one branch, one PR, one review. The skeleton had to be *verifiable*, not empty folders: every layer typechecks/builds, and the shell already carries the typed event stream end to end.
+- **Decision:**
+  1. **Workspaces:** root npm workspaces (`interfaces`, `agent`, `stellar`, `app`); npm (not pnpm/bun) so one toolchain covers the repo; Node 22 pinned via `.nvmrc`.
+  2. **Pinned versions:** TypeScript 7.0.2, React 19.3.0, Vite 8.3.0, Tailwind 4.3.3 (`@tailwindcss/vite`), Tauri crates 2.11.5 / `tauri-build` 2.6.3, `@tauri-apps/api` 2.11.1, `@tauri-apps/cli` 2.11.4, Soroban SDK 28.0.0.
+  3. **`@polaris/interfaces` is source-only** (`exports` → `src/index.ts`, no build step); Vite + tsconfig alias it. It carries the seam types plus exactly two runtime values: `POLARIS_EVENT_NAME` and `isPolarisEvent`.
+  4. **Rust mirror of the seam:** `app/src-tauri/src/types.rs` (`Intent`, `TxSummary`) and `events.rs` (`PolarisEvent`). Wire shape is pinned by unit tests — snake_case type tags, camelCase fields (`rename_all_fields = "camelCase"`), e.g. `{"type":"hotkey","state":"down"}`.
+  5. **Event channel name is `polaris-event`** (alphanumerics + dash only) to stay clear of Tauri's event-name validation rules.
+  6. **`contracts/` is a separate Cargo workspace** from `app/src-tauri`, so a Soroban wasm build never pulls the desktop dependency tree (and vice versa).
+  7. **Step A0 harness is partly pre-wired:** the shell window, log pane and `dev_self_test` command exist so the stream can be exercised by hand; the command is explicitly temporary and is deleted when the real hotkey + microphone land.
+  8. **No CI yet** (hackathon): `make check` / `scripts/check.sh` is the gate (typecheck all workspaces → vite build → agent smoke test → `cargo check`), with `caffeinate -i` for the long parts per AGENTS.md §4.
+  9. **Icons are generator-produced** (`scripts/generate-icons.py`, stdlib only): the PNG set + `.icns` are committed because Tauri needs them at compile time, but the script is the source of truth — never hand-edit the binaries (`--check` verifies presence).
+- **Gotcha found (worth remembering):** Vite 8 is rolldown/Oxc-based and **no longer bundles esbuild** — an explicit `build.minify: "esbuild"` fails with `Cannot find package 'esbuild'`. Leave the minifier at its default (Oxc) or install esbuild deliberately.
+- **Status:** decided
 - **Idea:** Make the version-control usage explicit for agents: commit/push intervals, when to update `main`, and when real-time coordination between the two collaborators is needed.
 - **Decision:** Documented as §9 in AGENTS.md/CLAUDE.md:
   1. **Commit** after every completed logical step (atomic, single-topic) — no timer-based commits.

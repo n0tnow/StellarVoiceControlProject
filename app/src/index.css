@@ -1,0 +1,52 @@
+@import "tailwindcss";
+
+/* Polaris design tokens (Tailwind v4 `@theme`).
+   Dark, calm, "cockpit" palette — the panel is meant to be glanced at while
+   talking, so contrast comes from typography and one accent colour. */
+@theme {
+  --color-polaris-bg: #070b18;
+  --color-polaris-panel: #0d1428;
+  --color-polaris-panel-alt: #111a33;
+  --color-polaris-line: #1e2a4d;
+  --color-polaris-text: #e6ecff;
+  --color-polaris-muted: #8ea0cc;
+  --color-polaris-accent: #7dd3fc;
+  --color-polaris-accent-strong: #38bdf8;
+  --color-polaris-ok: #4ade80;
+  --color-polaris-warn: #fbbf24;
+  --color-polaris-danger: #f87171;
+
+  --font-sans: "SF Pro Text", -apple-system, BlinkMacSystemFont, "Inter", system-ui, sans-serif;
+  --font-mono: "SF Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background-color: var(--color-polaris-bg);
+    color: var(--color-polaris-text);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    /* Desktop chrome, not a document: no text selection unless asked for. */
+    user-select: none;
+    overflow: hidden;
+  }
+
+  .selectable {
+    user-select: text;
+  }
+}
+
+/* Scrollbars that do not fight the dark panel. */
+@layer utilities {
+  .polaris-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-polaris-line) transparent;
+  }
+}

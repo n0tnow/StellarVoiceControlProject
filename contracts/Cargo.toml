@@ -1,0 +1,28 @@
+# Polaris — Soroban contracts workspace (Owner B).
+#
+# Separate Cargo workspace from the Tauri app so a contract build never pulls the
+# desktop dependency tree (and vice versa).
+#
+# Build:  cargo build --target wasm32v1-none --release -p polaris_guard
+# Test:   cargo test -p polaris_guard
+# Deploy: stellar contract deploy ... (contract IDs are documented in the README)
+[workspace]
+resolver = "2"
+members = ["polaris_guard"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+
+[workspace.dependencies]
+soroban-sdk = "28.0.0"
+
+# Soroban wasm builds: small, deterministic, no unwinding.
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = "symbols"

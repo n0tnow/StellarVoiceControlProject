@@ -1,0 +1,17 @@
+{
+  "name": "@polaris/stellar",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Polaris chain layer: anchor client (SEP-10/38/6), protocol integration, typed bindings. Owner B.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "types": "./src/index.ts",
+  "scripts": {
+    "check": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@polaris/interfaces": "*"
+  }
+}

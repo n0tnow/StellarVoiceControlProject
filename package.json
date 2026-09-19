@@ -1,0 +1,27 @@
+{
+  "name": "polaris",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Polaris — push-to-talk Stellar assistant (Genesis hackathon)",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "workspaces": [
+    "interfaces",
+    "agent",
+    "stellar",
+    "app"
+  ],
+  "scripts": {
+    "check": "npm run check --workspaces --if-present",
+    "typecheck": "npm run check --workspaces --if-present",
+    "build": "npm run build --workspaces --if-present",
+    "dev": "npm run tauri:dev -w @polaris/app",
+    "start:app": "npm run tauri:dev -w @polaris/app",
+    "agent": "npm run start -w @polaris/agent"
+  },
+  "devDependencies": {
+    "typescript": "7.0.2"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "name": "@polaris/agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Polaris agent core: tool registry, agent loop, event bus (step A2 skeleton).",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "types": "./src/index.ts",
+  "scripts": {
+    "start": "node src/demo.ts",
+    "check": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@polaris/interfaces": "*"
+  }
+}

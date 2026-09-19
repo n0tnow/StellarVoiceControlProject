@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Base capability for the Polaris main window: core IPC, event stream and window control. Plugin permissions (global shortcut, later) are added per step.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

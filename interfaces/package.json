@@ -1,0 +1,14 @@
+{
+  "name": "@polaris/interfaces",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The only TS seam between Owner A (app/, agent/) and Owner B (stellar/, contracts/). Mirrors docs/interfaces.md.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "types": "./src/index.ts",
+  "scripts": {
+    "check": "tsc -p tsconfig.json"
+  }
+}

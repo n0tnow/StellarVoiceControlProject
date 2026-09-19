@@ -1,0 +1,23 @@
+[package]
+name = "polaris-app"
+version = "0.1.0"
+description = "Polaris desktop shell (Owner A: hotkey, audio, Touch ID, event stream)"
+edition = "2021"
+rust-version = "1.77"
+publish = false
+
+[lib]
+# Tauri v2 mobile prep: the app is a library plus a thin binary.
+name = "polaris_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.6.3", features = [] }
+
+[dependencies]
+tauri = { version = "2.11.5", features = [] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Step A0 will add: cpal (audio capture), tauri-plugin-global-shortcut (hotkey).
+# Step A5 will add: security-framework (Keychain) + objc2-local-authentication (Touch ID).

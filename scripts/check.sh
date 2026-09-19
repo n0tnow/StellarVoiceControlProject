@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Polaris — full static check: JS typecheck (all workspaces) + Rust check.
+#
+#   bash scripts/check.sh            # JS + Tauri shell
+#   bash scripts/check.sh --chain    # also build/test the Soroban crate
+#
+# Long operations are wrapped in `caffeinate -i` (AGENTS.md §4).
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+WITH_CHAIN=0
+[[ "${1:-}" == "--chain" ]] && WITH_CHAIN=1
+
+echo "== JS: typecheck all workspaces"
+npm run check --workspaces --if-present
+
+echo "== JS: production build of the shell (vite)"
+npm run build -w @polaris/app
+
+echo "== JS: agent skeleton smoke test"
+npm run start -w @polaris/agent
+
+echo "== Rust: cargo check (Tauri shell)"
+caffeinate -i cargo check --manifest-path app/src-tauri/Cargo.toml
+
+if [[ "$WITH_CHAIN" == "1" ]]; then
+  echo "== Rust: cargo test (Soroban contracts)"
+  caffeinate -i cargo test --manifest-path contracts/Cargo.toml
+fi
+
+echo "== all checks passed"
