@@ -497,3 +497,62 @@
   (A9 caller-side glue untested; blank text drops without `onError`).
 - **Status:** implemented on `fix/a10-review-majors`; pushed, no PR.
   `backlog/2026-09-20-a10-review-fixes.md`.
+
+---
+
+## 2026-09-20 — A11: measure the turn before optimising, Anthropic behind the port, reply language
+
+- **Context:** the owner still found the whole turn slow but had no breakdown, wants
+  to compare Claude Sonnet 5 / Haiku 4.5 against `glm-5.3-flash`, and reported that
+  an English command was answered in Turkish by an English voice. `stellar/` and
+  `contracts/` were not touched.
+- **Decisions:**
+  1. **Instrument first, and make it a single terminal block.** A process-global
+     turn trace in Rust (`timing.rs`) is opened at the hotkey release and closed at
+     playback end; the webview's phases arrive through a `polaris_phase` command, so
+     the owner's terminal sees everything (the webview console does not). Behind
+     `POLARIS_TIMING`, on by default while the breakdown is being established.
+     Reason: the coordinator's earlier numbers were provider-side, not the app's.
+  2. **Streaming playback is confirmed, not assumed.** In every real Fish run the
+     `tts first audio byte` and `playback start` marks are the same millisecond and
+     far before `playback end` — the app is not buffering the body before playing.
+     The mark is a lower bound (ffplay's own ~0.4 s startup is not captured).
+  3. **The provider's cost is time-to-first-byte.** `first byte → full response` was
+     3 ms; streaming the body would buy nothing. The dominant remaining term is the
+     Fish free-tier tail, which spiked to 17.6 s on one run (reported, not hidden).
+  4. **Anthropic is a second implementation of the same `AgentLlm` port**, selected
+     by `POLARIS_AGENT_PROVIDER`; `POLARIS_AGENT_MODEL` stays the model id. It gets
+     its **own** base URL variable (`POLARIS_ANTHROPIC_BASE_URL`) because the shared
+     `POLARIS_AGENT_BASE_URL` points at OpenCode Zen Go. Thinking is off for latency
+     (Sonnet 5: `thinking:{type:"disabled"}`, no `budget_tokens`; Haiku 4.5: omit
+     the field, never `output_config.effort`).
+  5. **Rust hand-rolls the wire format, Node uses the official SDK.** The Rust
+     transport is provider-aware (`x-api-key` + `anthropic-version` + `/v1/messages`
+     vs Bearer + `x-opencode-session` + `/chat/completions`); the Node benchmark uses
+     `@anthropic-ai/sdk`. `ANTHROPIC_API_KEY` stays in Rust/Node, never in the bundle.
+  6. **The model reports the language; no detection library is added.** A `language`
+     field on a tool call, or a leading `[xx]` tag on a text answer, is normalised
+     and forwarded to TTS. The confirmation sentence is now localised (tr/en); before
+     this it was hard-coded English, which is exactly how an English voice read
+     Turkish text.
+  7. **Voice choice stays the owner's.** `Speaker::speak` takes the language and
+     looks up an optional `POLARIS_TTS_REFERENCE_ID_<LANG>` / `..._LOCAL_VOICE_<LANG>`
+     override, falling back to the pinned voice. The pinned voice is required, so a
+     language with no override can never silently change it. Fish's `/v1/tts` body
+     has no language field (re-read from the API reference) — the voice is the only
+     language lever.
+  8. **The STT locale is the likely real root cause and needs an owner decision.**
+     `POLARIS_STT_LOCALE` is unset → fixed `tr-TR`; Apple's recognizer is
+     single-locale, so English speech is transcribed with Turkish orthography and the
+     model answers Turkish. There is no bilingual locale and no on-device audio
+     language ID; Groq's auto-detect is the cloud alternative (audio leaves the
+     machine). The default was left unchanged rather than guessed.
+- **Verification:** app 19, agent 91 (was 61), cargo 118/3 ignored (was 107/3),
+  clippy + typecheck + build clean. Real runs: GLM bench (tr 2131 / en 1235 / chat
+  1767 median, 9/9 correct), English and Turkish `e2e:speak` turns with agent-phase
+  timelines and Rust TTS blocks, and a live per-language override run. No Anthropic
+  numbers exist — `ANTHROPIC_API_KEY` is absent, and none were invented.
+- **Still open:** Anthropic comparison (needs the key), a full in-app mic-run trace,
+  the STT locale decision, and confirmation templates only for `tr`/`en`.
+- **Status:** implemented on `feat/a11-anthropic-and-language`; pushed, no PR.
+  `backlog/2026-09-20-a11-anthropic-and-language.md`.
