@@ -45,19 +45,20 @@ The rescued reports are now indexed in the root `backlog.md` under "Round-2 Repo
 ## Round-2 merge plan
 
 **Merge order: `#8` → `#10` → `#9` → `#11` → docs PR (this one).** Completed:
-**#10 merged 2026-09-19T14:29:54Z as `a8c4416`**, **#9 merged 2026-09-19T14:30:00Z as `259dbe9`**.
-Remaining: **#11 → PR #12** (#8 is independent and still awaiting Owner A review; #12 merges last).
+**#10 merged 2026-09-19T14:29:54Z as `a8c4416`**, **#9 merged 2026-09-19T14:30:00Z as `259dbe9`**,
+**#11 merged 2026-09-19T14:36:38Z as `a01d6a1`** (`origin/main`).
+Remaining: **this docs PR (#12) merges last, now**; #8 is independent and still awaiting Owner A review.
 
 | Order | PR | Branch | Title | Status (2026-09-19) |
 |---|---|---|---|---|
 | 1 | [#8](https://github.com/n0tnow/StellarVoiceControlProject/pull/8) | `docs/rule-types-and-decisions` | docs: rule/schedule types, guard ABI and 2026-09-19 decisions | open (draft); **awaits Owner A review** — the only gate |
 | 2 | [#10](https://github.com/n0tnow/StellarVoiceControlProject/pull/10) | `feat/guard-rules-schedule` | feat(guard): on-chain rule engine + scheduler for `polaris_guard`, deployed to testnet | **merged 2026-09-19T14:29:54Z as `a8c4416`**; locally reviewed (`review-pr10` worktree); tests green per [`backlog/guard-rules-schedule.md`](guard-rules-schedule.md) (now on `main`) |
-| 3 | [#9](https://github.com/n0tnow/StellarVoiceControlProject/pull/9) | `feat/keeper` | feat(keeper): off-chain keeper that triggers due `polaris_guard` schedules | **merged 2026-09-19T14:30:00Z as `259dbe9`**; its shared files (five, see below) are now on `main` and await #11's sync |
-| 4 | [#11](https://github.com/n0tnow/StellarVoiceControlProject/pull/11) | `feat/anchor-sep6` | feat(anchor): SEP-6 anchor client (deposit + withdraw) with explain-log | open (draft); **currently syncing with `main` and owns the five-shared-file resolution** (see below); 111/111 anchor tests green per [`backlog/anchor-sep6.md`](anchor-sep6.md) |
+| 3 | [#9](https://github.com/n0tnow/StellarVoiceControlProject/pull/9) | `feat/keeper` | feat(keeper): off-chain keeper that triggers due `polaris_guard` schedules | **merged 2026-09-19T14:30:00Z as `259dbe9`**; its five shared files were resolved by #11's merged sync (see below) |
+| 4 | [#11](https://github.com/n0tnow/StellarVoiceControlProject/pull/11) | `feat/anchor-sep6` | feat(anchor): SEP-6 anchor client (deposit + withdraw) with explain-log | **merged 2026-09-19T14:36:38Z as `a01d6a1`**; resolved the five shared files in its sync (see below); 111/111 anchor tests green per [`backlog/anchor-sep6.md`](anchor-sep6.md) (now on `main`) |
 | 5 | [PR #12](https://github.com/n0tnow/StellarVoiceControlProject/pull/12) | `docs/round2-status` | docs: round-2 status, rescued reports and merge plan | this PR; merges last so its index links resolve |
 
-> Dependency notes: **#8 is independent of #9/#10/#11** — it may merge before or after #11. The
-> hard dependencies are **#9 before #11** (five shared files) — #9 is already on `main` — and
+> Dependency notes: **#8 is independent of #9/#10/#11** — it may merge before or after #12. The
+> hard dependencies are **#9 before #11** (five shared files) — both are on `main` — and
 > **this docs PR (#12) last** (it indexes report files that land with #8–#11).
 
 > PR [#7](https://github.com/n0tnow/StellarVoiceControlProject/pull/7) (notch research) is open and
@@ -71,17 +72,17 @@ PR #9 and PR #11 both change **five shared files**: `.env.example`, `package-loc
 **Whichever merges second rebases onto `main` and resolves the conflicts as follows** — per the
 merge order above, **PR #11 owns the resolution**:
 
-- keeper's `test` script becomes `node --test` **scoped to `src/keeper`**
-  (`node --test "src/keeper/**/*.test.ts"`); `main` currently carries the broader
-  `node --test "src/**/*.test.ts"` from the merged #9, so this is a change made by #11's sync;
+- keeper's `test` script is now `node --test` **scoped to `src/keeper`**
+  (`node --test "src/keeper/**/*.test.ts"`); #11's sync changed it from the broader
+  `node --test "src/**/*.test.ts"` that merged #9 put on `main`;
 - anchor keeps `vitest` **scoped to `src/anchor`** (`test:anchor`);
 - `stellar/src/index.ts` re-exports both `./anchor` and `./keeper`;
 - `.env.example` documents both sets of variables;
-- #11's sync resolves all five shared files (`stellar/package.json`, `stellar/tsconfig.json`,
-  `.env.example`, `package-lock.json`, `stellar/src/index.ts`) and **completes the unified test
-  wiring**: `test` runs keeper's `node --test` scoped to `src/keeper` plus anchor's `vitest` scoped
-  to `src/anchor`, with the `scripts/check.sh` integration (a single entry point for all
-  workspaces) handled in the same sync.
+- #11's sync resolved all five shared files (`stellar/package.json`, `stellar/tsconfig.json`,
+  `.env.example`, `package-lock.json`, `stellar/src/index.ts`) and **completed the unified test
+  wiring on `main`**: `test` = `test:keeper` (`node --test` scoped to `src/keeper`) +
+  `test:anchor` (`vitest` scoped to `src/anchor`), with the `scripts/check.sh` integration
+  (`npm test -w @polaris/stellar`) in place.
 
 ### Test-runner decision (interim)
 
@@ -89,29 +90,34 @@ merge order above, **PR #11 owns the resolution**:
   `vitest` for anchor).
 - No cross-references between the PRs' scripts; neither PR's `test` script may invoke the other's
   runner or assume the other's source tree.
-- The unified test entry point lands in **#11's sync** (combined `test`: keeper scope + anchor
-  scope), together with the `scripts/check.sh` integration.
+- The unified test entry point landed in **#11's sync** (merged `a01d6a1`: combined `test` =
+  keeper scope + anchor scope), together with the `scripts/check.sh` integration.
 
-### Cleanup items (pending, do after the corresponding merge)
+### Cleanup items (post-#11 reality, 2026-09-19)
 
-- Worktrees to remove: `review-pr10`, `review-pr11` (both detached HEAD), `local-notes`
-  (branch `chore/local-notes` already merged via
-  [PR #1](https://github.com/n0tnow/StellarVoiceControlProject/pull/1)), and after their merges
-  `anchor-sep6`, `guard-rules`, `keeper`, `rule-types-docs`, plus `docs-round2` (this one).
+- Removable now (merge-complete): `.worktrees/review-pr10`, `.worktrees/review-pr11` (both
+  detached HEAD), `.worktrees/local-notes` (branch `chore/local-notes` merged via
+  [PR #1](https://github.com/n0tnow/StellarVoiceControlProject/pull/1)), `.worktrees/guard-rules`
+  (#10), `.worktrees/keeper` (#9), `.worktrees/anchor-sep6` (#11).
   Command: `git worktree remove .worktrees/<name>` (from the main clone).
-- Local branches to delete after their PRs merge: `feat/anchor-sep6`, `feat/guard-rules-schedule`,
-  `feat/keeper`, `docs/rule-types-and-decisions`, `docs/round2-status`, `chore/local-notes`.
-- Remote branches to delete after merge (GitHub may auto-delete): `feat/anchor-sep6`,
-  `feat/guard-rules-schedule`, `feat/keeper`, `docs/rule-types-and-decisions`, `docs/round2-status`.
-  **Already deleted upstream — do not wait on them:** `origin/chore/local-notes`,
-  `origin/feat/a0-harness`, `origin/fix/ladder-restore`; their stale local remote-tracking refs
-  clear on the next `git fetch --prune` (the #5/#6 work is already rescued, see above).
+- Remaining worktrees until their PRs merge: `.worktrees/rule-types-docs` (#8) and
+  `.worktrees/docs-round2` (#12, this PR — merged right after the final refresh).
+- Local branches deletable now: `feat/anchor-sep6`, `feat/guard-rules-schedule`, `feat/keeper`,
+  `chore/local-notes`; after their PRs merge: `docs/rule-types-and-decisions` (#8) and
+  `docs/round2-status` (#12).
+- **KEEP:** the local rescue branches `rescue/a0-harness` (`7a024a6`) and
+  `rescue/model-ladder-restore` (`4ac06b0`) — they hold the only surviving copies of the PR #5/#6
+  work (the remote branches were deleted upstream).
+- Stale remote-tracking refs `origin/feat/a0-harness` and `origin/fix/ladder-restore` can be pruned
+  with `git fetch --prune` now that the rescue branches exist (they do).
+- Remote branches to delete after their PRs merge (GitHub did not auto-delete): `feat/anchor-sep6`,
+  `feat/guard-rules-schedule`, `feat/keeper` are merge-complete;
+  `docs/rule-types-and-decisions` (#8) and `docs/round2-status` (#12) after those PRs merge.
 
 ## Open questions / uncertainty
 
-- The root `backlog.md` index rows for PRs #8/#11 link report files that only exist on those
-  branches until the respective PR merges (`backlog/keeper.md` and
-  `backlog/guard-rules-schedule.md` already landed with the merged #9/#10); the docs PR is
-  intentionally last in the merge order so the remaining links are valid on `main` immediately
-  after the docs PR merges.
-- GitHub shows no recorded review decision on #8/#11; local review worktrees exist for #10/#11.
+- The root `backlog.md` index row for #8 links `backlog/rule-types-docs.md`, which lands when #8
+  merges; all other report files (`keeper.md`, `guard-rules-schedule.md`, `anchor-sep6.md`) are
+  already on `main` with the merged #9/#10/#11.
+- GitHub shows no recorded review decision on #8; #10/#11 were merged after local review (their
+  review worktrees are now removable).

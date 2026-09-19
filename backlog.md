@@ -13,19 +13,19 @@
 | Date | Task | Worker/Agent | Status | Report | Priority |
 |---|---|---|---|---|---|
 | 2026-09-19 | **A0 — harness**: global hotkey (press/release) + microphone capture to WAV + wire both into the existing log pane; delete the temporary `dev_self_test` command | Owner A | open — [PR #6](https://github.com/n0tnow/StellarVoiceControlProject/pull/6) closed unmerged; resume from `rescue/a0-harness` (`7a024a6`) | [`backlog/2026-09-19-a0-harness.md`](backlog/2026-09-19-a0-harness.md) | P0 |
-| 2026-09-19 | Owner B: fill in `stellar/` (anchor SEP-10/38/6 client, `sendPayment` tool) — stubs throw `NotImplementedError` today | Owner B | [#10](https://github.com/n0tnow/StellarVoiceControlProject/pull/10) merged 2026-09-19 (`a8c4416`), [#9](https://github.com/n0tnow/StellarVoiceControlProject/pull/9) merged 2026-09-19 (`259dbe9`); [#11](https://github.com/n0tnow/StellarVoiceControlProject/pull/11) open — syncing with `main` | [`backlog/anchor-sep6.md`](backlog/anchor-sep6.md), [`backlog/keeper.md`](backlog/keeper.md), [`backlog/guard-rules-schedule.md`](backlog/guard-rules-schedule.md) | P0 |
+| 2026-09-19 | Owner B: fill in `stellar/` (anchor SEP-10/38/6 client, `sendPayment` tool) — stubs throw `NotImplementedError` today | Owner B | merged 2026-09-19 — [#10](https://github.com/n0tnow/StellarVoiceControlProject/pull/10) (`a8c4416`), [#9](https://github.com/n0tnow/StellarVoiceControlProject/pull/9) (`259dbe9`), [#11](https://github.com/n0tnow/StellarVoiceControlProject/pull/11) (`a01d6a1`) | [`backlog/anchor-sep6.md`](backlog/anchor-sep6.md), [`backlog/keeper.md`](backlog/keeper.md), [`backlog/guard-rules-schedule.md`](backlog/guard-rules-schedule.md) | P0 |
 
 ## Round-2 Reports (2026-09-19)
 
-> Index of the round-2 worker reports. PRs #10 (`a8c4416`) and #9 (`259dbe9`) merged 2026-09-19, so
-> `backlog/guard-rules-schedule.md` and `backlog/keeper.md` are already on `main`;
-> `backlog/anchor-sep6.md` and `backlog/rule-types-docs.md` land with PRs #11 and #8 (remaining
-> order: #11 → docs PR; #8 is independent, awaiting Owner A review). The rescued #5/#6 reports land
-> with the docs PR. See `backlog/2026-09-19-closed-prs-and-round2-plan.md`.
+> Index of the round-2 worker reports. PRs #10 (`a8c4416`), #9 (`259dbe9`) and #11 (`a01d6a1`)
+> merged 2026-09-19, so `backlog/guard-rules-schedule.md`, `backlog/keeper.md` and
+> `backlog/anchor-sep6.md` are already on `main`; `backlog/rule-types-docs.md` lands with PR #8
+> (independent, awaiting Owner A review). The rescued #5/#6 reports land with this docs PR.
+> See `backlog/2026-09-19-closed-prs-and-round2-plan.md`.
 
 | Date | Task | Worker/Agent | Status | Report | Priority |
 |---|---|---|---|---|---|
-| 2026-09-19 | Anchor SEP-6 client (deposit + withdraw) with explain-log — round-2 hardening complete | Owner B / W4, W4b | open (draft) — [PR #11](https://github.com/n0tnow/StellarVoiceControlProject/pull/11) (syncing with `main`; owns the shared-file resolution) | [`backlog/anchor-sep6.md`](backlog/anchor-sep6.md) | P0 |
+| 2026-09-19 | Anchor SEP-6 client (deposit + withdraw) with explain-log — round-2 hardening complete | Owner B / W4, W4b | merged 2026-09-19 — [PR #11](https://github.com/n0tnow/StellarVoiceControlProject/pull/11) (`a01d6a1`; resolved the shared files and completed the unified test wiring) | [`backlog/anchor-sep6.md`](backlog/anchor-sep6.md) | P0 |
 | 2026-09-19 | Off-chain keeper triggering due `polaris_guard` schedules | Owner B / W3 | merged 2026-09-19 — [PR #9](https://github.com/n0tnow/StellarVoiceControlProject/pull/9) (`259dbe9`) | [`backlog/keeper.md`](backlog/keeper.md) | P1 |
 | 2026-09-19 | On-chain rule engine + scheduler for `polaris_guard` (testnet deployment) | Owner B / W1 | merged 2026-09-19 — [PR #10](https://github.com/n0tnow/StellarVoiceControlProject/pull/10) (`a8c4416`) | [`backlog/guard-rules-schedule.md`](backlog/guard-rules-schedule.md) | P1 |
 | 2026-09-19 | Rule/schedule types, guard ABI and 2026-09-19 decisions | Owner B / W5 | open (draft) — [PR #8](https://github.com/n0tnow/StellarVoiceControlProject/pull/8) (awaits Owner A review) | [`backlog/rule-types-docs.md`](backlog/rule-types-docs.md) | P1 |
