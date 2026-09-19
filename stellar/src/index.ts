@@ -50,3 +50,6 @@ export const guardPolicy = todo("guardPolicy");
 // has approved the payload hash.
 export { depositTry, withdrawTry, submitSignedTx, type SubmitResult } from "./anchor/chainTools.ts";
 export * as anchor from "./anchor/index.ts";
+
+/** Off-chain keeper that triggers due `polaris_guard` schedules (untrusted; see src/keeper/README.md). */
+export * as keeper from "./keeper/index.ts";

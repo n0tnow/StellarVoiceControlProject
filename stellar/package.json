@@ -4,6 +4,9 @@
   "private": true,
   "description": "Polaris chain layer: anchor client (SEP-10/38/6), protocol integration, typed bindings. Owner B.",
   "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
   "exports": {
     ".": "./src/index.ts",
     "./anchor/testing": "./src/anchor/testing.ts"
@@ -11,8 +14,11 @@
   "types": "./src/index.ts",
   "scripts": {
     "check": "tsc -p tsconfig.json",
-    "test": "npm run test:anchor",
+    "test": "npm run test:keeper && npm run test:anchor",
+    "test:keeper": "node --test \"src/keeper/**/*.test.ts\"",
     "test:anchor": "vitest run src/anchor",
+    "keeper": "node --env-file-if-exists=../.env src/keeper/cli.ts",
+    "keeper:once": "node --env-file-if-exists=../.env src/keeper/cli.ts --once",
     "anchor:e2e": "node src/anchor/e2e.ts"
   },
   "dependencies": {
