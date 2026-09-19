@@ -50,8 +50,44 @@
   `listDue(cursor, limit) -> {ids, nextCursor}` and loops **bounded** (stops at `KEEPER_MAX_PER_TICK` eligible ids, at
   `nextCursor === null`, when the cursor does not advance, or after 10 pages; a failure on a later page keeps what was
   found). The one place that knows the on-chain `list_due` signature is `SorobanChain.listDue` in `chain.ts`
-  (currently a single page, `nextCursor: null`). 6 tests cover the cursor loop.
+  (a single page with `nextCursor: null` in that round; superseded by Round 3 below). 6 tests cover the cursor loop.
 - Unit tests now: 53 (`npm test -w @polaris/stellar`), `npm run check` green.
+
+### Round 3 (2026-09-19): paginated ABI + restore-path/host-error fixes
+The guard was redeployed with the paginated ABI (`CDIWQTYA7OBF2FKLLHQWYZ2Q2L4PAEBLLMFRXVY4R7MAM45LX7Q2R2XB`,
+read-only reference: `.worktrees/guard-rules/contracts/polaris_guard/src/lib.rs:752`). Per the coordinator this round is
+code+tests only — no live testnet E2E until the guard worker's final redeploy (the ID may change again).
+
+- **ABI (was a blocker):** `SorobanChain.listDue` (`chain.ts`) now calls `list_due(cursor: u32, limit: u32)` and decodes
+  the `(Vec<u32>, u32)` tuple; the contract's end-of-space cursor `0` maps to `nextCursor: null`. The stale comment was
+  replaced with the current signature/semantics. The keeper's bounded cursor loop (`keeper.ts`) needed no change and its
+  6 cursor-loop fakes still pass. New fake-RPC tests: two-arg call argument assertion, mid-list cursor decode, and a
+  two-page sweep ending at cursor 0.
+- **K2 (restore fee cap):** `restore()` built/signed/submitted a `RestoreFootprint` without checking
+  `KEEPER_MAX_FEE_STROOPS`; only `execute()` had the cap. The RPC-supplied `restorePreamble.transactionData` resource fee
+  is attacker-controllable, so the total built fee (base + resource) is now checked BEFORE signing, using an exact
+  BigInt comparison (shared `feeAboveCap` helper; the execute path uses it too). Tests: above-cap restore is rejected
+  with `FeeAboveCap` and nothing is sent; a restore at exactly the cap is allowed.
+- **K3 (restore-pending was reported as executed):** `execute()` returned the restore tx hash as `pending`, the keeper
+  stored it, and on a SUCCESS resolution logged `event:"executed"` although `execute_schedule` never ran. New
+  `restore_pending` `ExecResult` variant; the keeper tracks the pending hash's `purpose` (`execute` | `restore`). A
+  resolved restore now logs `restore_confirmed` (no `executed`) and leaves the id eligible, so the same tick re-executes
+  the schedule; failures log `restore_failed`/`restore_rejected` and back off. Tests at both chain and keeper level,
+  including "restore hash is never in an `executed` line" and "the schedule runs in the same tick the restore settles".
+- **K5:** `getSchedule` tests added: None (`void`) -> `null`, Some -> decoded record with bigint `amount`,
+  `next_run_at`, `interval_secs` (and number `id`/`runs_left`).
+- **K6:** `TOKEN_ERRORS` was stale. Verified against local `soroban-env-host` 28.0.2 sources
+  (`src/builtin_contracts/contract_error.rs`): code 1 is `_Reserved1` and is now intentionally unmapped (degrades to
+  `ContractError#1` / `unknown_contract`); 4 `Unauthorized`, 5 `Authentication`, 7 `AccountIsNotClassic`,
+  14 `InsufficientAccountReserve`, 15 `TooManyAccountSubentries` are mapped; the full 2..15 table is covered by a new
+  test. Guard codes 100-116 are unchanged and still drift-guarded against the contract source.
+- **K7:** keeper README Node floor corrected to **>= 22.18** (default type stripping), and `engines.node: ">=22.18"`
+  added to `stellar/package.json`.
+- Tests now: **64**, 63 pass, 0 fail, **1 conditional skip** (the guard-source drift test skips because this worktree's
+  `contracts/polaris_guard` predates the `#[contracterror]` enum; run with
+  `GUARD_SRC=.worktrees/guard-rules/contracts/polaris_guard/src/lib.rs` it is 64/64 with 0 skips). Workspace-wide
+  `npm run check` green.
+
 
 ### End-to-end on testnet against the REAL deployed guard: DONE
 Guard `CB5CQHV6OK6AF5ANTE7YHJ6UPG5QAIPHB6UVLRLDKNQ22VEQOHU22RYY` (W1's deployment, the version *before* the planned
@@ -125,18 +161,22 @@ was started *before* they were due.
 (An earlier smoke test against a throwaway stand-in contract, before W1's push, is superseded by the above.)
 
 ## Unfinished (handed off)
-- **Re-run the E2E and update `chain.ts` once W1 pushes the final paginated `list_due` + new contract ID**
-  (coordinator will message). Expected change is confined to `SorobanChain.listDue` (+ `GUARD_ERRORS` if the enum
-  changes, and README/report). Commands:
+- **Pending final E2E (do not run yet):** the guard worker is fixing two remaining contract issues and may redeploy to
+  a **new contract ID**. Once the coordinator provides the final ID (and `contracts/DEPLOYED.md` is updated by the
+  guard worker), run the testnet E2E and refresh this report. Commands:
   ```bash
-  export KEEPER_SECRET=<funded testnet key>  GUARD_CONTRACT_ID=<new C... from DEPLOYED.md>
-  npm run keeper:once -w @polaris/stellar -- --dry-run
-  npm run keeper -w @polaris/stellar
+  export KEEPER_SECRET=<funded testnet key>  GUARD_CONTRACT_ID=<final C... from DEPLOYED.md>
+  npm run keeper:once -w @polaris/stellar -- --dry-run   # paging + get_schedule decode
+  npm run keeper -w @polaris/stellar                     # live execute path
   ```
+  What the E2E must confirm for this round: (a) `list_due(cursor, limit)` paging against the real contract (a sweep
+  follows `next_cursor` to `0`), (b) the restore path only if archived entries appear (unlikely on fresh testnet data),
+  (c) the `executed` log still shows the correct post-run `after` state. If the deployed error enum changed, re-check
+  `GUARD_ERRORS` (the drift test does this automatically).
 - `scripts/check.sh` does not run `npm test`; adding it there was out of scope (shared file).
 
 ## Blockers
-- None. (W1's ABI is in flux: paginated `list_due` and a new contract ID are coming; see Unfinished.)
+- None for code+tests. The live E2E is blocked on the guard's final contract ID (see "Pending final E2E").
 
 ## Review Notes
 - Design choices worth a reviewer's eye:
@@ -164,7 +204,8 @@ was started *before* they were due.
 - Reviewer should not be W3.
 
 ## Suggested Next Step
-- After W1's final ABI lands: adjust `SorobanChain.listDue`, re-run the E2E, refresh this report.
+- After the guard's final redeploy: set the new `GUARD_CONTRACT_ID`, re-run the E2E (dry-run then live), refresh this
+  report and the README if any ABI/error detail changed.
 - Then wire `npm test -w @polaris/stellar` into `scripts/check.sh` and decide where the keeper runs (a small VM/launchd
   job on the demo machine; it only needs a few XLM).
 
