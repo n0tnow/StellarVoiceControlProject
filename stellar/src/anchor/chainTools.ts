@@ -13,11 +13,11 @@
  *
  * See the report / README for the recommended `@polaris/interfaces` extension.
  */
-import { TransactionBuilder } from "@stellar/stellar-sdk";
+import { Transaction, TransactionBuilder } from "@stellar/stellar-sdk";
 import type { ChainTool, ChainToolResult, Intent } from "@polaris/interfaces";
 import { assertAmount } from "./amount.ts";
 import { TESTNET_FRIENDBOT_URL, TESTNET_HORIZON_URL, TESTNET_PASSPHRASE } from "./config.ts";
-import { describeXdr } from "./describe.ts";
+import { assertSameTransaction, describeXdr } from "./describe.ts";
 import { ExplainLog } from "./explain.ts";
 import { explorerTxUrl, submitEnvelope } from "./horizon.ts";
 import { displayAsset } from "./sep38.ts";
@@ -102,7 +102,8 @@ export const depositTry: ChainTool = async (intent): Promise<ChainToolResult> =>
  * withdraw to the user's bank. Creates the anchor order, then returns the
  * unsigned on-chain payment the user must approve (decoded summary includes the
  * destination, memo, amount and the asset CODE + ISSUER). After the shell signs
- * it, `submitSignedTx(signedXdr)` submits; then poll with the session.
+ * it, submit with `submitSignedTx(signedXdr, unsignedXdr)` — passing the expected
+ * XDR back enables the hash check (N9) — then poll with the session.
  */
 export const withdrawTry = async (intent: AnchorIntent): Promise<ChainToolResult> => {
   if (intent.kind !== "withdraw") throw new Error(`withdrawTry expects a "withdraw" intent, got "${intent.kind}"`);
@@ -132,9 +133,11 @@ export interface SubmitResult {
 
 /**
  * Submits a signed envelope to Stellar. NOT for SEP-10 challenges: those go to
- * the anchor through `AnchorSession.finishLogin`.
+ * the anchor through `AnchorSession.finishLogin` (a sequence-0 envelope is
+ * refused here with that message). Pass the unsigned XDR the shell signed as
+ * `expectedXdr` to have the returned hash compared before anything is submitted.
  */
-export async function submitSignedTx(signedXdr: string): Promise<SubmitResult> {
+export async function submitSignedTx(signedXdr: string, expectedXdr?: string): Promise<SubmitResult> {
   const ctx: AnchorContext = active?.ctx ?? {
     fetch: (input, init) => fetch(input, init),
     explain: new ExplainLog(),
@@ -147,6 +150,10 @@ export async function submitSignedTx(signedXdr: string): Promise<SubmitResult> {
   };
   const tx = TransactionBuilder.fromXDR(signedXdr, ctx.networkPassphrase);
   if (tx.signatures.length === 0) throw new Error("refusing to submit an unsigned transaction");
+  if (tx instanceof Transaction && tx.sequence === "0") {
+    throw new Error("this is a SEP-10 login challenge (sequence 0); send it to AnchorSession.finishLogin(), not to the network");
+  }
+  if (expectedXdr) assertSameTransaction(expectedXdr, signedXdr, ctx.networkPassphrase);
   const out = await submitEnvelope(ctx, signedXdr);
   ctx.explain.record(
     "submit",

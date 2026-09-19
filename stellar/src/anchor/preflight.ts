@@ -8,6 +8,7 @@
  * through the injected `Signer`.
  */
 import { Account, Asset, BASE_FEE, Operation, TransactionBuilder } from "@stellar/stellar-sdk";
+import { assertSameTransaction } from "./describe.ts";
 import { AnchorHttpError, requestJson } from "./http.ts";
 import { balanceOf, hasTrustline, loadAccount, submitEnvelope, type HorizonAccount } from "./horizon.ts";
 import { shortKey } from "./explain.ts";
@@ -124,6 +125,8 @@ export async function preflight(
       asset,
     });
     const signed = await signer.signTransaction(xdr, { networkPassphrase: ctx.networkPassphrase });
+    // Defence in depth: never submit an envelope that differs from the one we built.
+    assertSameTransaction(xdr, signed, ctx.networkPassphrase);
     const out = await submitEnvelope(ctx, signed);
     trustlineTxHash = out.hash;
     state = await waitForState(ctx, account, asset, (s) => s.hasTrustline, settle);
