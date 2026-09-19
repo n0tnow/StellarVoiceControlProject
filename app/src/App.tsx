@@ -1,7 +1,9 @@
-import { useEffect, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import type { UnlistenFn } from "@tauri-apps/api/event";
-import type { CaptureStatus, NotchGeometry } from "@polaris/interfaces";
+import type { AgentStage, CaptureStatus, NotchGeometry } from "@polaris/interfaces";
 
+import { AgentTrace } from "@/components/AgentTrace";
+import { runAgentTurn, subscribeAgentEvents, type AgentRun } from "@/lib/agent";
 import {
   getCaptureStatus,
   getHotkeyPermission,
@@ -59,6 +61,13 @@ const RECONNECT_MS = 3000;
 const PERMISSION_HINT_MS = 8000;
 
 /**
+ * How long the step-A2 agent trace (transcript + intent/answer) stays under the
+ * notch before it clears itself. Long enough to read, short enough not to linger
+ * over the desktop.
+ */
+const AGENT_TRACE_DWELL_MS = 12000;
+
+/**
  * Polaris notch overlay (step A0).
  *
  * The shell is a pure function of the `capture_status` event stream: idle ->
@@ -74,12 +83,51 @@ export default function App() {
   const [collapsed, setCollapsed] = useState(false);
   const [hotkeyTrusted, setHotkeyTrusted] = useState<boolean | null>(null);
   const [permissionHint, setPermissionHint] = useState(false);
+  const [agentRun, setAgentRun] = useState<AgentRun | null>(null);
+  const [agentStage, setAgentStage] = useState<AgentStage | null>(null);
+  // One transcript must produce exactly one agent turn, even though React
+  // StrictMode attaches the event listener twice in development.
+  const agentBusyRef = useRef(false);
+
+  // The agent core's local bus (not the Tauri stream) drives the stage readout.
+  useEffect(() => {
+    return subscribeAgentEvents((event) => {
+      if (event.type === "agent_status") setAgentStage(event.stage);
+    });
+  }, []);
+
+  // Auto-clear the trace; a live stage only makes sense while a run exists.
+  useEffect(() => {
+    if (!agentRun) {
+      setAgentStage(null);
+      return;
+    }
+    const timer = setTimeout(() => setAgentRun(null), AGENT_TRACE_DWELL_MS);
+    return () => clearTimeout(timer);
+  }, [agentRun]);
 
   useEffect(() => {
     let disposed = false;
     let unlisten: UnlistenFn | undefined;
     let receivedStatus = false;
     let retry: ReturnType<typeof setTimeout> | undefined;
+
+    // Step A2: a final transcript is the input to the agent loop. The guard
+    // keeps a StrictMode double-listener (or a re-emitted transcript) from
+    // starting two model calls for one utterance.
+    const runFromTranscript = (raw: string): void => {
+      const transcript = raw.trim();
+      if (transcript.length === 0 || agentBusyRef.current) return;
+      agentBusyRef.current = true;
+      setAgentRun(null);
+      void runAgentTurn(transcript)
+        .then((run) => {
+          if (!disposed) setAgentRun(run);
+        })
+        .finally(() => {
+          agentBusyRef.current = false;
+        });
+    };
 
     // Subscribe first, then read the snapshot, so no transition is missed
     // between the two. A live event always wins over the startup snapshot.
@@ -92,6 +140,8 @@ export default function App() {
             setStatus(event.status);
           } else if (event.type === "hotkey_permission") {
             setHotkeyTrusted(event.trusted);
+          } else if (event.type === "transcript" && event.final) {
+            runFromTranscript(event.text);
           }
         });
         if (disposed) {
@@ -256,6 +306,7 @@ export default function App() {
           </div>
         </div>
       </section>
+      <AgentTrace run={agentRun} stage={agentStage} />
       <span
         className="sr-only"
         role={state === "error" ? "alert" : "status"}

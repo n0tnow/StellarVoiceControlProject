@@ -344,6 +344,78 @@
   }
 }
 
+/* ------------------------------------------------------------------ *
+ * Agent trace (step A2)
+ *
+ * The transcript + parsed intent live below the shell, never inside it: the
+ * centre column is the camera housing (no pixels) and the ears are too narrow
+ * for an answer. Purely a read-out — the window is click-through, so nothing
+ * here is interactive.
+ * ------------------------------------------------------------------ */
+
+.agent-trace {
+  position: absolute;
+  top: calc(var(--expanded-height) + 10px);
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: var(--expanded-width);
+  padding: 6px 12px;
+  border: 1px solid var(--color-polaris-line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--color-polaris-panel) 92%, transparent);
+  box-shadow: 0 6px 22px #00000066;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.35;
+  text-align: left;
+  overflow: hidden;
+}
+
+.agent-trace p {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-trace-hear {
+  color: var(--color-polaris-muted);
+}
+
+.agent-trace-intent {
+  color: var(--color-polaris-ok);
+}
+
+.agent-trace-answer {
+  color: var(--color-polaris-text);
+}
+
+.agent-trace-error {
+  color: var(--color-polaris-danger);
+}
+
+.agent-trace-tag {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: #ffffff14;
+  color: var(--color-polaris-muted);
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.agent-trace-ms {
+  color: var(--color-polaris-muted);
+}
+
+.agent-trace-model {
+  color: var(--color-polaris-muted);
+  font-size: 9px;
+  opacity: 0.75;
+}
+
 @media (max-width: 480px) {
   .notch-content {
     padding: 0 22px;

@@ -7,6 +7,7 @@
     "allowImportingTsExtensions": true,
     "paths": {
       "@/*": ["./src/*"],
+      "@polaris/agent": ["../agent/src/index.ts"],
       "@polaris/interfaces": ["../interfaces/src/index.ts"]
     }
   },
