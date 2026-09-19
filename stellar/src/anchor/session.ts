@@ -74,7 +74,7 @@ export class AnchorSession {
   readonly homeDomain: string;
   readonly assetCode: string;
   private readonly signer: Signer;
-  private tomlCache: AnchorToml | undefined;
+  private tomlCache: Promise<AnchorToml> | undefined;
   private tokenCache: AuthToken | undefined;
   private customerOk = false;
   private pendingChallenge: string | undefined;
@@ -105,8 +105,14 @@ export class AnchorSession {
     return { data, explain: this.explain.since(mark) };
   }
 
-  private async toml(): Promise<AnchorToml> {
-    if (!this.tomlCache) this.tomlCache = await discoverAnchor(this.ctx, this.homeDomain);
+  private toml(): Promise<AnchorToml> {
+    // Cache the PROMISE so concurrent steps share one discovery request; drop it on failure to allow a retry.
+    if (!this.tomlCache) {
+      this.tomlCache = discoverAnchor(this.ctx, this.homeDomain).catch((e: unknown) => {
+        this.tomlCache = undefined;
+        throw e;
+      });
+    }
     return this.tomlCache;
   }
 
