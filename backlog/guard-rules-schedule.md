@@ -2,7 +2,7 @@
 - **Date:** 2026-09-19
 - **Worker/Agent:** W1 (Claude Opus 5)
 - **Branch/Worktree:** `feat/guard-rules-schedule` / `.worktrees/guard-rules`
-- **PR:** https://github.com/n0tnow/StellarVoiceControlProject/pull/5 (draft)
+- **PR:** https://github.com/n0tnow/StellarVoiceControlProject/pull/10 (draft)
 
 ## Completed
 
