@@ -25,13 +25,25 @@ const FALLBACK_GEOMETRY: NotchGeometry = {
   shellBottomRadius: 15.3,
 };
 
-const IDLE_STATUS: CaptureStatus = { state: "idle", recording: null, error: null };
+const IDLE_STATUS: CaptureStatus = {
+  state: "idle",
+  recording: null,
+  error: null,
+  label: null,
+};
 
 /**
  * How long the expanded "Ready to send" shell stays up before collapsing back
  * to the idle pill. The recording is untouched — it stays on disk for step A1.
  */
 const READY_DWELL_MS = 6000;
+
+/**
+ * How long a step-A1 failure label ("No STT key", "Net error", …) stays up
+ * before the overlay returns to the resting pill. The full detail still reaches
+ * the terminal; the wire state is left as-is and simply presented as idle.
+ */
+const STT_ERROR_DWELL_MS = 5000;
 
 /** Display topology has no Tauri event; re-read geometry on a cheap interval. */
 const GEOMETRY_POLL_MS = 2000;
@@ -128,14 +140,23 @@ export default function App() {
     };
   }, []);
 
-  // Presentation-only dwell: the wire `ready` state persists (the WAV is still
-  // waiting for A1), but the companion collapses so it does not sit expanded.
+  // Presentation-only dwell: the wire `ready` state persists (the WAV was handed
+  // to A1), but the companion collapses so it does not sit expanded. A step-A1
+  // failure label gets the same treatment so the overlay always returns to the
+  // resting pill. `transcribing` deliberately has no dwell — it stays up until
+  // the transcript or failure lands.
   useEffect(() => {
-    if (status.state !== "ready") {
+    const dwell =
+      status.state === "ready"
+        ? READY_DWELL_MS
+        : status.state === "error" && status.label !== null
+          ? STT_ERROR_DWELL_MS
+          : null;
+    if (dwell === null) {
       setCollapsed(false);
       return;
     }
-    const timer = setTimeout(() => setCollapsed(true), READY_DWELL_MS);
+    const timer = setTimeout(() => setCollapsed(true), dwell);
     return () => clearTimeout(timer);
   }, [status]);
 
@@ -153,7 +174,12 @@ export default function App() {
   }, [connected, hotkeyTrusted]);
 
   const state = connectionError ? "error" : status.state;
-  const visual = state === "ready" && collapsed ? "idle" : state;
+  // States that collapse back to the pill after their dwell. A connection error
+  // is never dismissed: it needs the user's attention.
+  const dismissible =
+    !connectionError &&
+    (state === "ready" || (state === "error" && status.label !== null));
+  const visual = dismissible && collapsed ? "idle" : state;
   // One-time hint echo of the macOS Accessibility dialog; only replaces the
   // idle pill, never a real recording/ready/error state.
   const showPermissionHint =
@@ -170,11 +196,15 @@ export default function App() {
     ? "Grant access"
     : state === "recording"
       ? "Listening"
-      : state === "ready"
-        ? "Ready"
-        : state === "error"
-          ? "Mic error"
-          : "Connecting";
+      : state === "transcribing"
+        ? "Thinking"
+        : state === "ready"
+          ? "Ready"
+          : state === "error"
+            ? // A step-A1 failure carries its own short label; a microphone or
+              // connection failure keeps the generic one.
+              (status.label ?? "Mic error")
+            : "Connecting";
   const detail = showPermissionHint
     ? "System Settings › Privacy & Security › Accessibility"
     : connectionError
@@ -185,7 +215,9 @@ export default function App() {
           ? `${(durationMs / 1000).toFixed(1)}s · hold ⌃⌥ again`
           : state === "recording"
             ? "Release to finish"
-            : "Starting up…";
+            : state === "transcribing"
+              ? "Transcribing…"
+              : "Starting up…";
 
   const style = {
     "--idle-width": `${geometry.idleWidth}px`,

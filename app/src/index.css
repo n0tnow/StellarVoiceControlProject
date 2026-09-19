@@ -280,6 +280,20 @@
   animation-delay: -550ms;
 }
 
+/* Step A1: the same bars, slower and shallower, read as "working" rather than
+   "listening". No layout change — the indicator keeps its exact geometry. */
+.state-transcribing .notch-indicator span {
+  animation: listen 1150ms ease-in-out infinite alternate;
+}
+
+.state-transcribing .notch-indicator span:nth-child(2) {
+  animation-delay: -380ms;
+}
+
+.state-transcribing .notch-indicator span:nth-child(3) {
+  animation-delay: -700ms;
+}
+
 /* The error state must never add height: the shell is `--expanded-height` in
    every expanded state, error included. The message shares the existing
    `notch-detail` line — truncating with an ellipsis — and the retry hint stays
@@ -324,7 +338,8 @@
     transition: none;
   }
 
-  .state-recording .notch-indicator span {
+  .state-recording .notch-indicator span,
+  .state-transcribing .notch-indicator span {
     animation: none;
   }
 }
