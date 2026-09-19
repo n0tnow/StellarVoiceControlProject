@@ -1,0 +1,152 @@
+# Anchor client (SEP-6 on/off-ramp)
+
+Anchor-agnostic client for moving between a local currency (TRY) and an on-chain
+asset (USDC) through any anchor that speaks the standard **programmatic** SEPs.
+The only inputs are the anchor's **home domain** (default `tr-mock-anchor.fly.dev`)
+and the **asset code** (default `USDC`). Everything else is discovered.
+
+Testnet only. No key handling: signing is injected through the `Signer` interface.
+
+## What each SEP does in this code
+
+| SEP | Role | Our code | What happens, in plain words |
+|---|---|---|---|
+| SEP-1 | `stellar.toml` discovery | `sep1.ts` | Read `https://<home domain>/.well-known/stellar.toml` and learn the auth, transfer, KYC and quote endpoints plus the anchor's signing key and the asset issuer. Nothing is hard-coded. |
+| SEP-10 | Web authentication | `sep10.ts` | Fetch a challenge (a transaction that can never be submitted), validate it, have the injected signer sign it, trade it for a JWT. Proves we own the key without a password. |
+| SEP-12 | Customer / KYC | `sep12.ts` | Register as a customer. The mock auto-approves after an empty PUT. If a real anchor wants fields, we throw `KycRequiredError` with the field names instead of inventing personal data. |
+| SEP-38 | Price quotes | `sep38.ts` | `GET /price` gives an indicative rate (works without auth): "50 TRY buys about 1.0198 USDC". |
+| SEP-6 | Deposit / withdraw | `sep6.ts` | `GET /deposit`, `GET /withdraw`, `GET /transaction`, plus a polling state machine over the SEP-6 statuses. |
+
+Around them: `preflight.ts` (Friendbot + USDC trustline), `horizon.ts` (account reads, submit),
+`session.ts` (the object the agent drives), `flows.ts` (whole deposit/withdraw journeys),
+`explain.ts` (the narration log), `chainTools.ts` (the `ChainTool` wiring).
+
+Only standard endpoints are used. The one exception is `sandbox.ts`
+(`simulate-bank-transfer`), a mock-only helper that plays "the bank"; it is opt-in
+(`sandboxBank: true`) and would simply not be called against a real anchor.
+
+## Flows
+
+```
+Deposit (TRY -> USDC)                           Withdraw (USDC -> TRY)
+1  SEP-1   discover endpoints                   1  SEP-1   discover endpoints
+2  preflight: funded? USDC trustline?           2  SEP-38  quote
+3  SEP-38  quote                                3  SEP-10  login, SEP-12 KYC
+4  SEP-10  login, SEP-12 KYC                    4  SEP-6   /withdraw -> anchor account + memo
+5  SEP-6   /deposit -> bank instructions        5  WE pay USDC to that account with that memo
+6  (bank transfer; sandbox: simulate)           6  poll -> completed (anchor pays TRY)
+7  poll -> completed, USDC arrives
+8  Horizon: read the resulting balance
+```
+
+## Usage
+
+```ts
+import { anchor } from "@polaris/stellar";
+
+const session = new anchor.AnchorSession({ signer });            // signer: anchor.Signer (Touch ID in the app)
+session.explain.subscribe((r) => speak(`${r.what} ${r.why}`));   // narrate every step
+
+const quote = await session.quoteDeposit("500");                 // { data, explain[] }
+await session.prepareAccount();                                  // friendbot + trustline via signer
+const dep = await session.startDeposit("500");                   // login + KYC run implicitly
+const done = await session.waitForTransaction(dep.data.id);      // repairs pending_trust on its own
+```
+
+Every step method returns `{ data, explain }`, where `explain` is a list of
+`{ step, what, why, at }` records for that step, e.g.
+
+> `sep10.sign` — *SEP-10: proved we own GB3E...V275 by signing the challenge — no password involved and no funds moved.*
+> Why: *A signature can only be made by the holder of the private key, so the anchor now knows this is really you.*
+
+Whole journeys: `anchor.runDepositFlow(session, { amountFiat, sandboxBank })` and
+`anchor.runWithdrawFlow(session, { amountAsset })`.
+
+`ChainTool` contract: `depositTry(intent)` returns the first thing the user must
+approve, with a summary decoded from the XDR: the USDC trustline if still needed,
+otherwise the SEP-10 challenge. After the shell signs it: `submitSignedTx(xdr)` for a
+trustline, or `session.finishLogin(signedXdr)` for the challenge; then continue with
+`session.startDeposit(...)`. Configure once with `configureAnchor({ signer })`.
+
+## The pending_trust gotcha
+
+A Stellar account can only receive an asset after it has a **trustline** for it, and
+it must exist (be funded with XLM) first. If it has not, the anchor accepts the
+deposit, receives the bank transfer, and then parks the order in `pending_trust`
+forever. The SDF workshop demo hit exactly this. We handle it twice:
+
+1. **Preflight** (`prepareAccount` / `preflight`): Friendbot funds a new testnet account,
+   then a `changeTrust` for USDC is signed through the injected signer. Idempotent:
+   nothing is done, signed or paid when the account is already ready.
+2. **Repair while polling** (`waitForTransaction`): if the anchor reports `pending_trust`
+   anyway, the session adds the trustline once and keeps polling. Verified live: the
+   mock completed the stuck order right after the trustline appeared.
+
+On mainnet the zero-XLM user needs sponsored reserves / fee bumps instead of Friendbot
+(see docs/architecture.md section 4.3).
+
+## Verified behaviour of the TR mock anchor (2026-09-19, live)
+
+* SEP-38 `GET /price` works **without** auth and uses `sell_asset` / `buy_asset`
+  (`iso4217:TRY`, `stellar:USDC:<issuer>`). 100 TRY -> 2.0396090 USDC, 50 bps spread.
+* Deposit `amount` is in **TRY**. `/sep6/deposit` reports `min_amount 50 / max_amount 3000`
+  (TRY), but `/sep6/info` prints `0.5 / 300`; treat `/info` as unreliable and use the
+  deposit response.
+* Withdraw `amount` is in **USDC**, and the real minimum is **1 USDC**
+  (`400 "Minimum off-ramp is 1.0000000 USDC"`) although `/sep6/info` says 0.5.
+* Withdraw response: `account_id` (the anchor's treasury account), `memo_type: "id"`,
+  `memo`, `id`, and a rate locked for 30 minutes in `extra_info.message`. There is **no**
+  `withdraw_anchor_account` field until you read the transaction. Paying that account
+  with that memo moves the order `pending_user_transfer_start -> completed` in about
+  5-6 seconds ("TRY paid to TR02... via FAST (simulated)").
+* Deposit statuses seen: `pending_user_transfer_start -> (simulate) pending_anchor -> completed`
+  (about 2 seconds), or `pending_trust -> completed` after the trustline is added.
+* SEP-12: `GET /customer` says `NEEDS_INFO`; any `PUT /customer` (even with no fields)
+  flips it to `ACCEPTED`.
+* SEP-10 challenges carry a `web_auth_domain` operation; our validation requires it.
+
+`testanchor.stellar.org` (SDF) also works as a second home domain for SEP-1/10/6
+discovery and info (assets SRT/USDC/native, amounts 1-10) but demands SEP-12 fields
+(`first_name`, `last_name`, `email_address`), which surface as `KycRequiredError`.
+
+## Mock vs mainnet
+
+| | TR mock anchor (testnet) | Real Turkish anchor (mainnet) |
+|---|---|---|
+| Route | TRY -> USDC in one atomic step | TRY -> TRYB -> USDC (two legs) |
+| Access | Home domain only, no key | No static API key; OAuth and IP allow-listing |
+| KYC | Auto-approved, no data | Real KYC / identity data |
+| Bank leg | Simulated (`simulate-bank-transfer`) | Real bank transfer (FAST / EFT) |
+| Zero-XLM user | Friendbot funds the account | Sponsored reserves / fee bumps needed |
+
+The client stays portable because it only uses standard SEP endpoints; the two-leg
+route and the auth model will need extra steps on top of it.
+
+## Why SEP-24 is deliberately not used in Turkey
+
+Polaris is a voice-controlled wallet, so the wallet must own the whole flow. The
+hosted/interactive deposit style (SEP-24) sends the user to a page the anchor runs
+inside a pop-up; in Turkey that hosted, interactive model is prohibited under MASAK
+rules, while the programmatic SEP-6 model is legal (source: SDF anchor workshop).
+So this client implements SEP-6 only, with SEP-1, 10, 12 and 38 as its supporting
+standards. Nothing here reads, configures or demos the hosted flow, and cross-border
+(SEP-31) and contract-account auth (SEP-45) are out of scope too.
+
+## Testing
+
+```bash
+npm test -w @polaris/stellar                       # unit tests, mocked HTTP, no network
+npm run check -w @polaris/stellar                  # typecheck (also part of `make check`)
+
+# live testnet run: preflight -> quote -> deposit -> simulate bank -> completed -> balance -> withdraw
+npm run anchor:e2e -w @polaris/stellar -- --amount-try 50 --withdraw-usdc 1
+# POLARIS_TEST_SECRET=S... reuses one throwaway wallet; unset = a fresh in-memory key
+```
+
+Keep test deposits small (50-100 TRY): the mock's treasury is shared.
+
+## Not done here
+
+* No real signer: `EnvSigner` (`POLARIS_TEST_SECRET`) is test-only; the Touch ID signer plugs into `Signer`.
+* Firm SEP-38 quotes (`POST /quote`) and `deposit-exchange` / `withdraw-exchange` are not used; indicative quotes only.
+* SEP-6 `fee` endpoint, claimable-balance deposits, refunds handling beyond reporting the status.

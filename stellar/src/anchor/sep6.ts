@@ -1,6 +1,6 @@
 /**
  * SEP-6: programmatic deposit / withdraw. Plain HTTP — the wallet builds its own
- * UI; there is no hosted/interactive page involved (see README).
+ * UI; no anchor-hosted page is involved (see README).
  *
  *   deposit  (off-chain TRY -> on-chain USDC): anchor returns bank instructions;
  *            when the bank transfer arrives the anchor pays USDC on Stellar.
