@@ -102,7 +102,7 @@ Sum = 67+111+121+133+112+121+145+112 = **922 passed, 0 failed** — exact match,
 ```
 Test fixture/public constants: the only token that even resembles a key is the public testnet account `GBKTFHHLB62NDBK6EGNXODHZO2AWZTT2HEGDM4IQTNWYDIHG3TODO7QU` (a `G…` public key in `stellar/src/live/__tests__/status.test.ts:5` and `backlog/e2e-testnet.md:26`) — not secret material.
 
-**Personal-name scan** (`git grep -n "Fatih"` over `*.md *.ts *.rs`, excluding `CLAUDE.md`/`AGENTS.md`):
+**Personal-name scan** (`git grep -n "<collaborator name>"` over `*.md *.ts *.rs`, excluding `CLAUDE.md`/`AGENTS.md`):
 ```
 (none)
 ```
