@@ -116,11 +116,41 @@ test("codes below 100 are token/host errors and are never read as guard policy",
   assert.equal(allowance.kind, "allowance_missing");
   assert.equal(classifyContractText(simText(10)).kind, "allowance_missing"); // BalanceError
   assert.equal(classifyContractText(simText(13)).name, "SacTrustlineMissing");
-  // Unmapped codes on either side degrade to unknown_contract (still backed off).
-  assert.equal(classifyContractText(simText(5)).kind, "unknown_contract");
+  // Code 1 is reserved in soroban-env (`_Reserved1`, formerly InternalError): it
+  // is intentionally unmapped and degrades to unknown_contract.
+  const reserved = classifyContractText(simText(1));
+  assert.equal(reserved.kind, "unknown_contract");
+  assert.equal(reserved.name, "ContractError#1");
   assert.equal(classifyContractText(simText(117)).kind, "unknown_contract");
   for (const code of Object.keys(TOKEN_ERRORS)) assert.ok(Number(code) < 100);
   for (const code of Object.keys(GUARD_ERRORS)) assert.ok(Number(code) >= 100);
+});
+
+test("the token contract error table matches soroban-env contract_error.rs codes 2..15", () => {
+  const expected: Record<number, [string, ErrorKind]> = {
+    2: ["SacOperationNotSupported", "unknown_contract"],
+    3: ["SacAlreadyInitialized", "unknown_contract"],
+    4: ["SacUnauthorized", "auth_required"],
+    5: ["SacAuthentication", "auth_required"],
+    6: ["SacAccountMissing", "rule_violated"],
+    7: ["SacAccountIsNotClassic", "rule_violated"],
+    8: ["SacNegativeAmount", "rule_violated"],
+    9: ["SacAllowanceError", "allowance_missing"],
+    10: ["SacBalanceError", "allowance_missing"],
+    11: ["SacBalanceDeauthorized", "rule_violated"],
+    12: ["SacOverflow", "unknown_contract"],
+    13: ["SacTrustlineMissing", "rule_violated"],
+    14: ["SacInsufficientAccountReserve", "allowance_missing"],
+    15: ["SacTooManyAccountSubentries", "rule_violated"],
+  };
+  assert.equal(Object.keys(TOKEN_ERRORS).length, Object.keys(expected).length);
+  for (const [code, [name, kind]] of Object.entries(expected)) {
+    const e = classifyContractText(simText(Number(code)));
+    assert.equal(e.name, name, `name for #${code}`);
+    assert.equal(e.kind, kind, `kind for #${code}`);
+    assert.equal(e.code, Number(code));
+  }
+  assert.equal(TOKEN_ERRORS[1], undefined, "code 1 is reserved in soroban-env");
 });
 
 test("GUARD_ERRORS matches the #[contracterror] enum in the contract source (drift guard)", (t) => {

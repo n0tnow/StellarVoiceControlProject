@@ -82,23 +82,33 @@ export const GUARD_ERRORS: Readonly<Record<number, GuardErrorDef>> = {
 };
 
 /**
- * Stellar Asset Contract (built-in token) errors, codes 1..13 (docs:
- * developers.stellar.org/docs/tokens/stellar-asset-contract#contract-errors).
- * A code below 100 that reaches the keeper came from the token or the host, not
- * from guard policy; these surface when a `transfer_from` inside the schedule
- * run fails for a token-level reason.
+ * Built-in contract (Stellar Asset Contract / account contract) errors, codes
+ * 1..15 from `soroban-env-host`'s shared `ContractError` enum
+ * (`src/builtin_contracts/contract_error.rs`, soroban-env-host 28.x). A code
+ * below 100 that reaches the keeper came from the token or the host, not from
+ * guard policy; these surface when a `transfer_from` inside a schedule run
+ * fails for a token/account-level reason.
+ *
+ * Code 1 is **intentionally unmapped**: it is `_Reserved1` (formerly
+ * InternalError, now host-internal), so `ContractError#1` with kind
+ * `unknown_contract` is the honest answer and is still backed off.
+ * Codes 2..15 are all mapped here.
  */
 export const TOKEN_ERRORS: Readonly<Record<number, GuardErrorDef>> = {
-  1: { name: "SacInternalError", kind: "unknown_contract" },
   2: { name: "SacOperationNotSupported", kind: "unknown_contract" },
   3: { name: "SacAlreadyInitialized", kind: "unknown_contract" },
+  4: { name: "SacUnauthorized", kind: "auth_required" }, // caller is not allowed
+  5: { name: "SacAuthentication", kind: "auth_required" }, // auth/signature check failed
   6: { name: "SacAccountMissing", kind: "rule_violated" }, // an account involved does not exist
+  7: { name: "SacAccountIsNotClassic", kind: "rule_violated" }, // account contract needs a classic account
   8: { name: "SacNegativeAmount", kind: "rule_violated" },
   9: { name: "SacAllowanceError", kind: "allowance_missing" }, // allowance too small / bad expiry
   10: { name: "SacBalanceError", kind: "allowance_missing" }, // owner balance too low
   11: { name: "SacBalanceDeauthorized", kind: "rule_violated" }, // issuer revoked authorization
   12: { name: "SacOverflow", kind: "unknown_contract" },
   13: { name: "SacTrustlineMissing", kind: "rule_violated" }, // payee/owner has no trustline
+  14: { name: "SacInsufficientAccountReserve", kind: "allowance_missing" }, // owner must fund the reserve
+  15: { name: "SacTooManyAccountSubentries", kind: "rule_violated" }, // account cannot grow further
 };
 
 /** First code in the guard's own range; anything below it belongs to the token/host. */
