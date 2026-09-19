@@ -455,3 +455,45 @@
   JS bundle stayed small (819→241 kB) because `@polaris/stellar` is a lazy import.
 - **Status:** implemented on `feat/a4-speak-intent`; the on-screen animation still
   needs a human eye. `backlog/2026-09-19-a9-execution-seam.md`.
+
+## 2026-09-20 — A10: the demo-critical review findings closed
+- **Context:** an independent review of the whole voice chain (A0–A9) returned
+  APPROVE WITH FIXES — no blockers, 11 majors. The owner is demoing shortly, so
+  the four races and the dangerous approval wiring were fixed first, each with a
+  test that fails without it. `stellar/` and `contracts/` were not touched.
+- **Decisions:**
+  1. **A second utterance while the model is in flight now supersedes the
+     in-flight turn (latest-wins).** The old `agentBusyRef` boolean silently
+     dropped it and the shell then sat on "Thinking" until the 60 s watchdog. The
+     policy is the same one the speech queue already uses, and it is a pure,
+     unit-tested module (`app/src/lib/turnFlow.ts`). Refusing with a Busy label
+     was rejected: it is a dead end at the exact moment the demo shows.
+  2. **The approval default is fail-closed (M5).** `resolveApprover(false)`
+     returns a deny-all gate; only an explicit `POLARIS_ALLOW_AUTO_APPROVE=1`
+     installs the auto-approving placeholder. Rationale: the reviewer's most
+     dangerous finding was that auto-approval + automatic dispatch would execute
+     the first real `ChainTool` with no gesture — and `depositTry` is already
+     real. The stubbed demo can opt back in, but the safe wiring is the default.
+  3. **Both non-terminal stages are watchdogged (M4).** `turnSession.stageWatchdog`
+     bounds `thinking` (60 s) and `speaking` (120 s); previously playback was
+     trusted to end itself and a wedged player held the shell open forever.
+  4. **One shared cross-turn guard (M1).** The speech path's session-id check
+     became `isCurrentTurn` and the execution path now uses it too, so a stale
+     execution outcome cannot overwrite a newer turn.
+  5. **The biometric drop-in is scoped honestly (M6).** The approver sees only
+     the `Intent`, so the seam supports intent-level gating — not the card-level
+     approval that needs the post-tool `summary` + `payloadHash`. Said so in the
+     seam, the shell and the A9 handoff doc.
+  6. **`depositTry` is real (M8).** Corrected the "every `ChainTool` throws
+     `NotImplementedError`" prose to name `sendPayment`/`swap`/`guardPolicy`, and
+     documented the deposit path (unconfigured → `Chain error`; configured → real
+     unsigned XDR, never submitted).
+  7. **A throwing approver no longer escapes (M7).** It maps to a labelled
+     `failed` / "Approval error" outcome, so the "never throws" contract is true.
+- **Verification:** app 12→19, agent 58→61, cargo 107/2→107/3 ignored, clippy +
+  typecheck + build clean (initial JS 242.67 kB, chain chunk lazy). Real command
+  output in `backlog/2026-09-20-a10-review-fixes.md`.
+- **Still open (deliberately):** M9 (confirmation spoken after dispatch) and M11
+  (A9 caller-side glue untested; blank text drops without `onError`).
+- **Status:** implemented on `fix/a10-review-majors`; pushed, no PR.
+  `backlog/2026-09-20-a10-review-fixes.md`.
