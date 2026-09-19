@@ -294,6 +294,21 @@
   animation-delay: -700ms;
 }
 
+/* Step A5: "Speaking" reuses the Thinking animation verbatim — the owner asked
+   for the same visual treatment, not a second style. Kept as a separate selector
+   so the two states share one animation definition and cannot drift. */
+.state-speaking .notch-indicator span {
+  animation: listen 1150ms ease-in-out infinite alternate;
+}
+
+.state-speaking .notch-indicator span:nth-child(2) {
+  animation-delay: -380ms;
+}
+
+.state-speaking .notch-indicator span:nth-child(3) {
+  animation-delay: -700ms;
+}
+
 /* The error state must never add height: the shell is `--expanded-height` in
    every expanded state, error included. The message shares the existing
    `notch-detail` line — truncating with an ellipsis — and the retry hint stays
@@ -339,7 +354,8 @@
   }
 
   .state-recording .notch-indicator span,
-  .state-transcribing .notch-indicator span {
+  .state-transcribing .notch-indicator span,
+  .state-speaking .notch-indicator span {
     animation: none;
   }
 }

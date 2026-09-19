@@ -137,6 +137,9 @@ export const POLARIS_EVENT_NAME = "polaris-event";
 export type HotkeyState = "down" | "up";
 export type AgentStage = "thinking" | "tool_call" | "awaiting_approval" | "done";
 
+/** Whether Polaris is producing audible speech (step A5). */
+export type SpeechState = "speaking" | "idle";
+
 export type PolarisEvent =
   | { type: "hotkey"; state: HotkeyState }
   /**
@@ -149,6 +152,12 @@ export type PolarisEvent =
   | { type: "audio_captured"; path: string; durationMs: number }
   | { type: "transcript"; text: string; final: boolean }
   | { type: "agent_status"; stage: AgentStage }
+  /**
+   * Audible-playback lifecycle. `speaking` is emitted when the sentence is handed
+   * to the TTS backend, `idle` only once playback has finished or failed, so the
+   * notch's "Speaking" state always reflects reality and cannot get stuck.
+   */
+  | { type: "speech_status"; state: SpeechState }
   | {
       type: "approval_request";
       intent: Intent;

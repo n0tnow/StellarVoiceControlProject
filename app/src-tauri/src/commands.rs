@@ -7,7 +7,7 @@ use serde::Serialize;
 use tauri::{AppHandle, State};
 
 use crate::capture::Capture;
-use crate::events::{self, PolarisEvent};
+use crate::events::{self, PolarisEvent, SpeechState};
 use crate::tts::{self, Speaker};
 use crate::types::CaptureStatus;
 
@@ -80,6 +80,11 @@ pub struct SpeechFailure {
 /// async worker. The returned latency covers synthesis *and* playback. Failures
 /// are also pushed on the event stream as a short `error` label, with the full
 /// detail printed to the Rust terminal.
+///
+/// Step A5: the command brackets the playback with `speech_status` events, so the
+/// overlay can show a "Speaking" state for exactly as long as audio is being
+/// produced. `Idle` is emitted on **both** the success and the failure path, so a
+/// TTS failure can never leave the notch stuck on "Speaking".
 #[tauri::command]
 pub async fn speak(
     app: AppHandle,
@@ -90,10 +95,24 @@ pub async fn speak(
     let backend = Arc::clone(speaker.inner());
     let task_backend = Arc::clone(&backend);
     let started = Instant::now();
+    events::emit(
+        &app,
+        PolarisEvent::SpeechStatus {
+            state: SpeechState::Speaking,
+        },
+    );
     let joined = tauri::async_runtime::spawn_blocking(move || {
         tts::speak_and_log(task_backend.as_ref(), &text)
     })
     .await;
+    // Playback has ended (or never started): release the overlay before doing
+    // anything else, so an unexpected error path still clears the state.
+    events::emit(
+        &app,
+        PolarisEvent::SpeechStatus {
+            state: SpeechState::Idle,
+        },
+    );
     let result = match joined {
         Ok(result) => result,
         Err(error) => Err(tts::TtsError::Local(format!(

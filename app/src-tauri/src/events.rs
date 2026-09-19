@@ -31,6 +31,19 @@ pub enum AgentStage {
     Done,
 }
 
+/// Whether Polaris is currently producing audible speech (step A5).
+///
+/// This is driven by the actual blocking playback, not by the request: the
+/// `speak` command emits `Speaking` when it hands the sentence to the backend
+/// and `Idle` only once playback has finished (or failed), so the notch can
+/// never be left stuck showing "Speaking".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SpeechState {
+    Speaking,
+    Idle,
+}
+
 /// Everything the shell pushes to the UI.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", rename_all_fields = "camelCase")]
@@ -64,6 +77,11 @@ pub enum PolarisEvent {
     AgentStatus {
         stage: AgentStage,
     },
+    /// Audible-playback lifecycle (step A5). The overlay keeps the expanded
+    /// "Speaking" state up between these two events.
+    SpeechStatus {
+        state: SpeechState,
+    },
     ApprovalRequest {
         intent: Intent,
         summary: TxSummary,
@@ -92,6 +110,7 @@ impl PolarisEvent {
             Self::AudioCaptured { .. } => "audio_captured",
             Self::Transcript { .. } => "transcript",
             Self::AgentStatus { .. } => "agent_status",
+            Self::SpeechStatus { .. } => "speech_status",
             Self::ApprovalRequest { .. } => "approval_request",
             Self::ApprovalResult { .. } => "approval_result",
             Self::TxSubmitted { .. } => "tx_submitted",
@@ -142,6 +161,22 @@ mod tests {
     fn hotkey_permission_matches_the_ts_union() {
         let json = serde_json::to_string(&PolarisEvent::HotkeyPermission { trusted: false }).unwrap();
         assert_eq!(json, r#"{"type":"hotkey_permission","trusted":false}"#);
+    }
+
+    #[test]
+    fn speech_status_matches_the_ts_union() {
+        // The overlay switches on `state`; both values must round-trip.
+        let json = serde_json::to_string(&PolarisEvent::SpeechStatus {
+            state: SpeechState::Speaking,
+        })
+        .unwrap();
+        assert_eq!(json, r#"{"type":"speech_status","state":"speaking"}"#);
+
+        let json = serde_json::to_string(&PolarisEvent::SpeechStatus {
+            state: SpeechState::Idle,
+        })
+        .unwrap();
+        assert_eq!(json, r#"{"type":"speech_status","state":"idle"}"#);
     }
 
     #[test]

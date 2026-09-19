@@ -21,7 +21,7 @@ mod types;
 use tauri::Manager;
 
 pub use commands::{AppInfo, NETWORK};
-pub use events::{AgentStage, HotkeyState, PolarisEvent, POLARIS_EVENT_NAME};
+pub use events::{AgentStage, HotkeyState, PolarisEvent, SpeechState, POLARIS_EVENT_NAME};
 pub use notch::NotchGeometry;
 pub use types::CaptureStatus;
 

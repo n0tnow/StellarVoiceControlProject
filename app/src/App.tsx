@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import type { UnlistenFn } from "@tauri-apps/api/event";
-import type { AgentStage, CaptureStatus, NotchGeometry } from "@polaris/interfaces";
+import type { AgentStage, CaptureState, CaptureStatus, NotchGeometry } from "@polaris/interfaces";
 
 import { AgentTrace } from "@/components/AgentTrace";
 import { runAgentTurn, subscribeAgentEvents, type AgentRun } from "@/lib/agent";
@@ -86,6 +86,10 @@ export default function App() {
   const [permissionHint, setPermissionHint] = useState(false);
   const [agentRun, setAgentRun] = useState<AgentRun | null>(null);
   const [agentStage, setAgentStage] = useState<AgentStage | null>(null);
+  // Step A5: true while the Rust `speak` command reports audio in flight. Driven
+  // by `speech_status` events, which the command emits at the start of playback
+  // and again — success or failure — once it has finished.
+  const [speaking, setSpeaking] = useState(false);
   // One transcript must produce exactly one agent turn, even though React
   // StrictMode attaches the event listener twice in development.
   const agentBusyRef = useRef(false);
@@ -143,9 +147,14 @@ export default function App() {
           if (disposed) return;
           if (event.type === "capture_status") {
             receivedStatus = true;
+            // A new take always supersedes any speech that was still in flight
+            // (the user cannot meaningfully record and be spoken to at once).
+            if (event.status.state === "recording") setSpeaking(false);
             setStatus(event.status);
           } else if (event.type === "hotkey_permission") {
             setHotkeyTrusted(event.trusted);
+          } else if (event.type === "speech_status") {
+            setSpeaking(event.state === "speaking");
           } else if (event.type === "transcript" && event.final) {
             runFromTranscript(event.text);
           }
@@ -230,16 +239,26 @@ export default function App() {
   }, [connected, hotkeyTrusted]);
 
   const state = connectionError ? "error" : status.state;
+  // One-time hint echo of the macOS Accessibility dialog; only replaces the
+  // idle pill, never a real recording/ready/error state.
+  const showPermissionHint =
+    permissionHint && connected && hotkeyTrusted === false && state === "idle";
   // States that collapse back to the pill after their dwell. A connection error
   // is never dismissed: it needs the user's attention.
   const dismissible =
     !connectionError &&
     (state === "ready" || (state === "error" && status.label !== null));
-  const visual = dismissible && collapsed ? "idle" : state;
-  // One-time hint echo of the macOS Accessibility dialog; only replaces the
-  // idle pill, never a real recording/ready/error state.
-  const showPermissionHint =
-    permissionHint && connected && hotkeyTrusted === false && state === "idle";
+  // Step A5: while audio is actually playing the shell stays expanded and shows
+  // the same "working" treatment as Thinking, labelled "Speaking". It only
+  // applies once capture has returned to idle; a live recording/ready/error
+  // state always takes precedence, and a failed utterance still emits `idle`, so
+  // the shell can never be stuck here.
+  const speakingVisual = speaking && state === "idle" && connected && !showPermissionHint;
+  const visual: CaptureState | "speaking" = speakingVisual
+    ? "speaking"
+    : dismissible && collapsed
+      ? "idle"
+      : state;
   const expanded = visual !== "idle" || !connected || showPermissionHint;
   const error = connectionError ?? status.error;
   const durationMs = status.recording?.durationMs ?? 0;
@@ -260,7 +279,9 @@ export default function App() {
             ? // A step-A1 failure carries its own short label; a microphone or
               // connection failure keeps the generic one.
               (status.label ?? "Mic error")
-            : "Connecting";
+            : visual === "speaking"
+              ? "Speaking"
+              : "Connecting";
   const detail = showPermissionHint
     ? "System Settings › Privacy & Security › Accessibility"
     : connectionError
@@ -273,7 +294,9 @@ export default function App() {
             ? "Release to finish"
             : state === "transcribing"
               ? "Transcribing…"
-              : "Starting up…";
+              : visual === "speaking"
+                ? "Polaris is talking"
+                : "Starting up…";
 
   const style = {
     "--idle-width": `${geometry.idleWidth}px`,

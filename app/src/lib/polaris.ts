@@ -144,6 +144,12 @@ export function describeEvent(event: PolarisEvent): Omit<LogLine, "id" | "at"> {
       };
     case "agent_status":
       return { origin: "agent", title: `Agent: ${stageLabel(event.stage)}`, tone: "neutral" };
+    case "speech_status":
+      return {
+        origin: "rust",
+        title: event.state === "speaking" ? "Speaking" : "Speech finished",
+        tone: event.state === "speaking" ? "accent" : "neutral",
+      };
     case "approval_request":
       return {
         origin: "agent",
