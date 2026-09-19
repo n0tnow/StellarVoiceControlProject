@@ -203,3 +203,37 @@
 - **Status:** decided (implemented on `feat/a1-ondevice-stt`; a real permissioned recognition run
   and the on-device latency/accuracy numbers are still pending a human — see
   `backlog/2026-09-19-a1-ondevice-stt.md`)
+
+## 2026-09-19 — A2: LLM roundtrip, provider port, and keeping the key out of the webview
+- **Idea:** Turn the A1 transcript into a structured, validated `Intent` with a real LLM, behind a
+  swappable port, without executing anything on-chain.
+- **Discussion:** The owner fixed the provider: **OpenCode Zen Go** (OpenAI-compatible,
+  `deepseek-v4.1-flash`). Probing it revealed two things that shaped the design. (1) The endpoint
+  sends **no CORS headers** (an `OPTIONS` preflight is a 404), so a webview `fetch` is blocked.
+  (2) A naive system prompt backfires: with "Ahmet" treated as an unknown person it asks for a
+  wallet address and never calls the tool; a prompt that says address-book names are valid
+  recipients produces the correct `send_payment` call. The architecture diagram puts the agent
+  core in the webview, but `lib.rs` is owned by A3 this round, so no Rust proxy/command could be
+  added.
+- **Decision:**
+  1. **Port over vendor.** `OpenAiCompatibleLlm` implements the existing `AgentLlm` port; the only
+     provider inputs are `POLARIS_AGENT_BASE_URL`, `POLARIS_AGENT_MODEL`, `OPENCODE_API_KEY`.
+     Groq/OpenRouter are a `.env` change. The system prompt is passed through the port, so it is
+     provider-independent too.
+  2. **A2 stops at the intent.** `send_payment` is approval-gated and adds `toIntent()`: the loop
+     validates the model's arguments and returns the shared `Intent`; `run()` is never called for
+     it. A rejected argument set becomes a clarification, not a bogus intent; `tool_choice:"auto"`
+     is kept so off-topic commands produce no call.
+  3. **Key never in the webview.** `OPENCODE_API_KEY` is read only in Node: the agent CLI uses it
+     directly, and the webview calls a same-origin `/agent-api` path that the Vite dev server
+     proxies to the provider with `Authorization` injected server-side. Verified the built bundle
+     contains neither the key nor the provider URL. (Production moves this proxy into Rust.)
+  4. **Errors mirror A1.** A short UI label plus a full detail (`agent/src/errors.ts`), so the
+     console keeps the provider's status/body while the trace stays one line.
+  5. **The intent is not a new wire event.** `interfaces/` and the Rust event mirror are untouched
+     (no new `PolarisEvent` variant); `runTurn` returns the intent in `AgentTurnResult` and the UI
+     renders it from React state below the notch.
+- **Status:** decided (implemented on `feat/a2-llm`; real-provider CLI verified — `Ahmete 5 USDC
+  gönder` → `send_payment(5, USDC, Ahmet)` in ~2.1 s, `bugün hava nasıl` → clarification; the
+  in-app Rust→React→agent path still needs a human with a mic — see
+  `backlog/2026-09-19-a2-llm.md`)

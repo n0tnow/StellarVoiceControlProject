@@ -72,7 +72,7 @@ flowchart TD
         KEY -->|"signature"| ST
     end
 
-    AG --> LLM["Claude API"]
+    AG --> LLM["LLM API (OpenAI-compatible)"]
     AG --> STT["Speech-to-text"]
     AG --> MCP["MCP: Raven, LumenLoop<br/>read-only knowledge"]
     AG --> DEV["Developer mode<br/>workspace files, allow-listed CLI"]
@@ -98,8 +98,10 @@ flowchart TD
 | Read-back | Assistant reads back parsed amount + recipient **before** any approval (guards against STT errors) | 🟡 |
 
 ### 4.2 Agent core
-- **LLM:** Claude via the Anthropic API. Proposed `claude-sonnet-5` for the main loop (latency/cost); vision for screenshots. Optional `claude-haiku-4-5-20251001` for fast intent routing. Needs an API key, stored in a local, git-ignored `.env`. 🟡
-- **Loop:** system prompt (Stellar-specialised, safety rules) → tool-use loop → structured result to UI. Tools are grouped by risk tier (§6).
+- **LLM:** **OpenCode Zen Go**, OpenAI-compatible, model `deepseek-v4.1-flash` (1M context, tool calling). ✅ decided (2026-09-19, owner). The endpoint is reached at `https://opencode.ai/zen/go/v1/chat/completions` with `Authorization: Bearer $OPENCODE_API_KEY`; it requires a per-conversation `x-opencode-session` header and a descriptive `User-Agent`. *Verified:* live curl on 2026-09-19 returns a correct `tool_calls` response for the Turkish command "Ahmete 5 USDC gönder".
+  - **Provider is swappable by construction.** The client (`agent/src/llm/openai.ts`) implements the narrow `AgentLlm` port; base URL, model id and key come only from `POLARIS_AGENT_BASE_URL`, `POLARIS_AGENT_MODEL`, `OPENCODE_API_KEY`. Switching to Groq or OpenRouter (both OpenAI-compatible) is a `.env` change — no code change. A `ScriptedLlm`/`MockLlm` keeps the test suite off the network.
+  - **The key never enters the webview.** The endpoint sends no CORS headers, and the React shell must not hold the credential, so the webview calls a same-origin `/agent-api` path that the Vite dev server proxies to the provider and where it injects `Authorization` server-side (`app/vite.config.ts`). A built bundle therefore contains no secret; production would move that proxy into Rust. 🟡 (dev-proxy only)
+- **Loop:** system prompt (Stellar-specialised, safety rules) → tool-use loop → structured result to UI. Tools are grouped by risk tier (§6). Step A2 produces a validated `Intent` (e.g. `send_payment`) without executing it; the unsigned-XDR chain tools arrive in A5.
 - **Knowledge tools (MCP, read-only):** all *verified* 2026-09-19.
 
 | MCP | Transport / auth | Notes |
@@ -245,7 +247,7 @@ Threats and mitigations:
 | Shell | **Tauri v2** with a *thin Rust core* + TypeScript/React webview. Rationale: native press/release hotkey, key custody and signing outside the webview, Touch ID plugin exists, small footprint. **Not** because "Stellar uses Rust" — contracts are a separate project and app-side Stellar SDKs are JS-first. | ✅ (spike-gated) |
 | Fallback | If the spike fails (hotkey, mic, Touch ID, or macOS permissions in dev builds), switch to **Electron**: the TS brain is reused unchanged. | ✅ |
 | UI | React + TypeScript (Vite) | 🟡 |
-| LLM | Claude API | 🟡 |
+| LLM | OpenCode Zen Go (`deepseek-v4.1-flash`), OpenAI-compatible behind the `AgentLlm` port; swappable via env | ✅ |
 | STT / TTS | see §4.1 | 🔲 / 🟡 |
 | Contracts | Rust + `soroban-sdk`, deployed with Stellar CLI | ✅ |
 | Network | Stellar **testnet** only | ✅ |
@@ -292,7 +294,7 @@ Handbook requires citing skill files by path. Candidates, from `https://skills.s
 | Handbook claims of a "Launchtube" requirement | Not in the handbook; service is retired. Ask organizers if in doubt |
 | No LICENSE in repo | Choose a license before submission (public repo is required) |
 
-Open decisions: STT provider · LLM/API providers beyond Claude · protocol (Soroswap vs DeFindex vs MPP-as-integration) · MPP role (pay-per-command vs template) · which own contract(s): guard / P2P escrow / both · developer-mode implementation (Agent SDK sidecar vs custom tool loop) · guard scope (payments only vs also protocol calls) · whether SEP-10 signing needs Touch ID · coordinator-model rules from `CLAUDE.md` (to be discussed before coding starts).
+Open decisions: STT provider · protocol (Soroswap vs DeFindex vs MPP-as-integration) · MPP role (pay-per-command vs template) · which own contract(s): guard / P2P escrow / both · developer-mode implementation (Agent SDK sidecar vs custom tool loop) · guard scope (payments only vs also protocol calls) · whether SEP-10 signing needs Touch ID · coordinator-model rules from `CLAUDE.md` (to be discussed before coding starts). LLM provider is decided: OpenCode Zen Go, behind a swappable OpenAI-compatible port (§4.2).
 
 ---
 
