@@ -155,17 +155,43 @@ impl FishSpeaker {
 
     /// Performs the live request and returns the provider's raw audio bytes.
     ///
-    /// Split out of [`Self::speak`] so the network step and the playback step can
-    /// be exercised independently — in particular, the `#[ignore]`d live test in
-    /// `tts::tests` asserts on the returned payload (non-empty MPEG) before any
-    /// audio is played. Public only for that sibling test; the app always speaks
-    /// through [`Speaker::speak`].
+    /// Buffers the whole body, so it is **not** the production playback path
+    /// (that is [`Speaker::speak`], which streams). It exists so the `#[ignore]`d
+    /// live test in `tts::tests` can assert on the payload (non-empty MPEG)
+    /// independently of playback; `#[cfg(test)]` keeps it out of the shipping
+    /// binary.
+    #[cfg(test)]
     pub fn synthesize(&self, text: &str) -> Result<Vec<u8>, TtsError> {
         let key = self.api_key.as_deref().ok_or(TtsError::MissingKey)?;
         self.synthesize_with_key(text, key)
     }
 
+    #[cfg(test)]
     fn synthesize_with_key(&self, text: &str, key: &str) -> Result<Vec<u8>, TtsError> {
+        let response = self.request_with_key(text, key)?;
+        let bytes = response
+            .bytes()
+            .map_err(|error| TtsError::Network(error.to_string()))?;
+        if bytes.is_empty() {
+            return Err(TtsError::Malformed(
+                "the service returned a 2xx with no audio".to_string(),
+            ));
+        }
+
+        Ok(bytes.to_vec())
+    }
+
+    /// Performs the live request and returns the still-streaming response.
+    ///
+    /// Shared by [`Self::synthesize`] (buffers for inspection/tests) and
+    /// [`Speaker::speak`] (pipes the body straight into the player), so the wire
+    /// shape and the status handling exist exactly once. The body is only read by
+    /// the caller.
+    fn request_with_key(
+        &self,
+        text: &str,
+        key: &str,
+    ) -> Result<reqwest::blocking::Response, TtsError> {
         let reference_id = self
             .reference_id
             .as_deref()
@@ -191,36 +217,22 @@ impl FishSpeaker {
             });
         }
 
-        let bytes = response
-            .bytes()
-            .map_err(|error| TtsError::Network(error.to_string()))?;
-        if bytes.is_empty() {
-            return Err(TtsError::Malformed(
-                "the service returned a 2xx with no audio".to_string(),
-            ));
-        }
-
-        Ok(bytes.to_vec())
-    }
-
-    /// Writes `bytes` to a temp file, plays them with `afplay`, then removes the
-    /// file. The bytes are an audio container macOS plays directly; `format` is
-    /// the container the request asked for.
-    fn play(&self, bytes: &[u8]) -> Result<(), TtsError> {
-        let path = player::write_temp_audio(bytes, &self.format)?;
-        let played = player::play_file(&path);
-        // Best-effort cleanup: a leftover temp file must never mask a playback
-        // result, and the OS temp dir is pruned by the system anyway.
-        let _ = std::fs::remove_file(&path);
-        played
+        Ok(response)
     }
 }
 
 impl Speaker for FishSpeaker {
+    /// Streams Fish's audio body straight into the player (step A5).
+    ///
+    /// The previous buffered path (`synthesize` into a temp file, then `afplay`)
+    /// meant a ~2.7 s synthesis cost 3–6 s before anything was heard. Piping the
+    /// live response through lets playback begin at roughly the provider's
+    /// time-to-first-byte. `synthesize` is retained for the live test's payload
+    /// assertion; the app always streams.
     fn speak(&self, text: &str) -> Result<(), TtsError> {
-        // Missing config short-circuits before any network work.
-        let bytes = self.synthesize(text)?;
-        self.play(&bytes)
+        let key = self.api_key.as_deref().ok_or(TtsError::MissingKey)?;
+        let response = self.request_with_key(text, key)?;
+        player::play_stream(response, &self.format)
     }
 
     fn name(&self) -> &'static str {

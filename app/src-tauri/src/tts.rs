@@ -519,9 +519,9 @@ mod tests {
     /// ```
     ///
     /// It proves two things in sequence: the HTTP response carries a non-empty
-    /// MPEG payload, and the exact production `speak_and_log` path writes that
-    /// payload to disk, plays it through `afplay`, and prints
-    /// `polaris: tts in <ms> ms via fish`.
+    /// MPEG payload, and the exact production `speak_and_log` path streams that
+    /// payload into the player (ffplay stdin when available, buffered `afplay`
+    /// otherwise) and prints `polaris: tts in <ms> ms via fish`.
     ///
     /// Passing `POLARIS_E2E_TEXT` makes it speak a caller-supplied sentence — the
     /// A4 end-to-end check uses this to speak the confirmation the TypeScript
