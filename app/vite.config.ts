@@ -78,6 +78,15 @@ export default defineConfig(({ mode }) => {
       // pinning "esbuild" would require installing it separately.
       minify: process.env.TAURI_ENV_DEBUG === "true" ? false : true,
       sourcemap: process.env.TAURI_ENV_DEBUG === "true",
+      rollupOptions: {
+        // Two windows, two entries. `index.html` is the notch overlay;
+        // `prompt.html` is step A6's focusable typed-prompt panel. Tauri's
+        // `frontendDist` serves both straight out of `dist/`.
+        input: {
+          main: path.resolve(import.meta.dirname, "index.html"),
+          prompt: path.resolve(import.meta.dirname, "prompt.html"),
+        },
+      },
     },
   };
 });
