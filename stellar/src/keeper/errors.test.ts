@@ -1,11 +1,17 @@
 import assert from "node:assert/strict";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 import {
   BACKOFF,
+  GUARD_ERRORS,
+  TOKEN_ERRORS,
   backoffMs,
   classifyContractText,
   classifyThrown,
   classifyTxResultCode,
+  type ErrorKind,
   type GuardErrorDef,
 } from "./errors.ts";
 
@@ -62,4 +68,76 @@ test("backoff grows exponentially per kind and is capped", () => {
   assert.equal(backoffMs("rule_violated", 3), p.baseMs * 4);
   assert.equal(backoffMs("rule_violated", 50), p.maxMs);
   assert.ok(backoffMs("rpc", 1) < backoffMs("rule_violated", 1), "transient errors retry sooner");
+});
+
+// ── the real polaris_guard error table ──────────────────────────────────────
+
+const simText = (n: number): string => `HostError: Error(Contract, #${n})\n\nEvent log (newest first):\n   0: ...`;
+
+test("every polaris_guard error code is mapped to the expected back-off class", () => {
+  const expected: Record<number, [string, ErrorKind]> = {
+    100: ["NotConfigured", "rule_violated"],
+    101: ["InvalidAmount", "rule_violated"],
+    102: ["InvalidRule", "rule_violated"],
+    103: ["OverPerTxLimit", "rule_violated"],
+    104: ["OverDailyLimit", "rule_violated"],
+    105: ["NeedsOwnerApproval", "rule_violated"],
+    106: ["AssetNotAllowed", "rule_violated"],
+    107: ["NoExecutor", "auth_required"],
+    108: ["NotExecutor", "auth_required"],
+    109: ["ScheduleNotFound", "inactive"],
+    110: ["ScheduleNotDue", "not_due"],
+    111: ["ScheduleInactive", "inactive"],
+    112: ["InvalidSchedule", "inactive"],
+    113: ["NotScheduleOwner", "auth_required"],
+    114: ["TooManySchedules", "rule_violated"],
+    115: ["Overflow", "unknown_contract"],
+    116: ["InsufficientAllowance", "allowance_missing"],
+  };
+  assert.equal(Object.keys(GUARD_ERRORS).length, Object.keys(expected).length);
+  for (const [code, [name, kind]] of Object.entries(expected)) {
+    const e = classifyContractText(simText(Number(code)));
+    assert.equal(e.name, name, `name for #${code}`);
+    assert.equal(e.kind, kind, `kind for #${code}`);
+    assert.equal(e.code, Number(code));
+  }
+});
+
+test("the three codes the keeper meets in practice", () => {
+  assert.equal(classifyContractText(simText(110)).kind, "not_due"); // ScheduleNotDue
+  assert.equal(classifyContractText(simText(116)).kind, "allowance_missing"); // InsufficientAllowance
+  assert.equal(classifyContractText(simText(105)).name, "NeedsOwnerApproval");
+});
+
+test("codes below 100 are token/host errors and are never read as guard policy", () => {
+  // SAC AllowanceError = 9 must not be mistaken for a guard error.
+  const allowance = classifyContractText(simText(9));
+  assert.equal(allowance.name, "SacAllowanceError");
+  assert.equal(allowance.kind, "allowance_missing");
+  assert.equal(classifyContractText(simText(10)).kind, "allowance_missing"); // BalanceError
+  assert.equal(classifyContractText(simText(13)).name, "SacTrustlineMissing");
+  // Unmapped codes on either side degrade to unknown_contract (still backed off).
+  assert.equal(classifyContractText(simText(5)).kind, "unknown_contract");
+  assert.equal(classifyContractText(simText(117)).kind, "unknown_contract");
+  for (const code of Object.keys(TOKEN_ERRORS)) assert.ok(Number(code) < 100);
+  for (const code of Object.keys(GUARD_ERRORS)) assert.ok(Number(code) >= 100);
+});
+
+test("GUARD_ERRORS matches the #[contracterror] enum in the contract source (drift guard)", (t) => {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const src = process.env.GUARD_SRC ?? resolve(here, "../../../contracts/polaris_guard/src/lib.rs");
+  if (!existsSync(src)) return t.skip("contract source not found");
+  const text = readFileSync(src, "utf8");
+  const block = /#\[contracterror\][\s\S]*?pub enum Error\s*\{([\s\S]*?)\n\}/.exec(text)?.[1];
+  if (!block) return t.skip("no #[contracterror] enum in this revision of the contract");
+  const fromSource = new Map<number, string>();
+  for (const m of block.matchAll(/^\s*([A-Za-z0-9]+)\s*=\s*(\d+)\s*,/gm)) {
+    fromSource.set(Number(m[2]), m[1]!);
+  }
+  assert.ok(fromSource.size > 0);
+  assert.deepEqual(
+    [...fromSource].map(([c, n]) => [c, n]).sort(),
+    Object.entries(GUARD_ERRORS).map(([c, d]) => [Number(c), d.name]).sort(),
+    "update GUARD_ERRORS in errors.ts to match the contract's error enum",
+  );
 });

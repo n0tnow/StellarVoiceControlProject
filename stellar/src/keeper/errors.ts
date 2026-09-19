@@ -48,15 +48,61 @@ export interface GuardErrorDef {
 }
 
 /**
- * Guard contract error codes -> names/kinds.
+ * `polaris_guard` error codes -> names/kinds. Mirrors the `#[contracterror]`
+ * enum in `contracts/polaris_guard/src/lib.rs` (codes start at 100 on purpose so
+ * they never collide with the token's 1..13; discriminants are public ABI).
+ * `errors.test.ts` parses the contract source and fails if this table drifts.
  *
- * SYNC POINT with `contracts/polaris_guard` (`#[contracterror]` enum): when the
- * contract's error enum changes, update this table. Unknown codes are still
- * handled (kind `unknown_contract`, backed off), so drift degrades gracefully.
+ * Only some of these can come out of `execute_schedule` (the keeper's only
+ * write); the rest are listed so a code is never mis-labelled if it does show up.
+ * Kinds map onto the keeper's back-off classes:
+ *  - policy the owner can change  -> `rule_violated` (waits for the owner)
+ *  - schedule cannot run any more -> `inactive`
+ *  - keeper called too early      -> `not_due`
+ *  - allowance revoked/short      -> `allowance_missing`
  */
 export const GUARD_ERRORS: Readonly<Record<number, GuardErrorDef>> = {
-  // Populated from contracts/DEPLOYED.md / the contract source (see README).
+  100: { name: "NotConfigured", kind: "rule_violated" }, // owner has no rule published
+  101: { name: "InvalidAmount", kind: "rule_violated" }, // create_schedule/pay_*; stored amount invalid
+  102: { name: "InvalidRule", kind: "rule_violated" }, // set_rule only
+  103: { name: "OverPerTxLimit", kind: "rule_violated" }, // rule tightened below the schedule amount
+  104: { name: "OverDailyLimit", kind: "rule_violated" }, // clears when the UTC day rolls over
+  105: { name: "NeedsOwnerApproval", kind: "rule_violated" }, // pay_executor only; never from execute_schedule
+  106: { name: "AssetNotAllowed", kind: "rule_violated" }, // asset removed from allowed_assets
+  107: { name: "NoExecutor", kind: "auth_required" }, // pay_executor only
+  108: { name: "NotExecutor", kind: "auth_required" }, // pay_executor only
+  109: { name: "ScheduleNotFound", kind: "inactive" },
+  110: { name: "ScheduleNotDue", kind: "not_due" },
+  111: { name: "ScheduleInactive", kind: "inactive" }, // cancelled or exhausted
+  112: { name: "InvalidSchedule", kind: "inactive" }, // create_schedule only
+  113: { name: "NotScheduleOwner", kind: "auth_required" }, // cancel_schedule only
+  114: { name: "TooManySchedules", kind: "rule_violated" }, // create_schedule only
+  115: { name: "Overflow", kind: "unknown_contract" },
+  116: { name: "InsufficientAllowance", kind: "allowance_missing" }, // owner revoked/expired the SAC allowance
 };
+
+/**
+ * Stellar Asset Contract (built-in token) errors, codes 1..13 (docs:
+ * developers.stellar.org/docs/tokens/stellar-asset-contract#contract-errors).
+ * A code below 100 that reaches the keeper came from the token or the host, not
+ * from guard policy; these surface when a `transfer_from` inside the schedule
+ * run fails for a token-level reason.
+ */
+export const TOKEN_ERRORS: Readonly<Record<number, GuardErrorDef>> = {
+  1: { name: "SacInternalError", kind: "unknown_contract" },
+  2: { name: "SacOperationNotSupported", kind: "unknown_contract" },
+  3: { name: "SacAlreadyInitialized", kind: "unknown_contract" },
+  6: { name: "SacAccountMissing", kind: "rule_violated" }, // an account involved does not exist
+  8: { name: "SacNegativeAmount", kind: "rule_violated" },
+  9: { name: "SacAllowanceError", kind: "allowance_missing" }, // allowance too small / bad expiry
+  10: { name: "SacBalanceError", kind: "allowance_missing" }, // owner balance too low
+  11: { name: "SacBalanceDeauthorized", kind: "rule_violated" }, // issuer revoked authorization
+  12: { name: "SacOverflow", kind: "unknown_contract" },
+  13: { name: "SacTrustlineMissing", kind: "rule_violated" }, // payee/owner has no trustline
+};
+
+/** First code in the guard's own range; anything below it belongs to the token/host. */
+export const GUARD_ERROR_BASE = 100;
 
 const CONTRACT_ERROR_RE = /Error\(Contract,\s*#(\d+)\)/;
 
@@ -76,12 +122,13 @@ const NAME_PATTERNS: Array<[RegExp, ErrorKind, string]> = [
 /** Classify a Soroban simulation error string (`sim.error`) or thrown text. */
 export function classifyContractText(
   text: string,
-  table: Readonly<Record<number, GuardErrorDef>> = GUARD_ERRORS,
+  table?: Readonly<Record<number, GuardErrorDef>>,
 ): ClassifiedError {
   const m = CONTRACT_ERROR_RE.exec(text);
   if (m?.[1] !== undefined) {
     const code = Number(m[1]);
-    const def = table[code];
+    // Guard codes are >= 100; below that the error came from the token (SAC) or host.
+    const def = (table ?? (code >= GUARD_ERROR_BASE ? GUARD_ERRORS : TOKEN_ERRORS))[code];
     if (def) return { kind: def.kind, name: def.name, code, message: firstLine(text) };
     return { kind: "unknown_contract", name: `ContractError#${code}`, code, message: firstLine(text) };
   }
