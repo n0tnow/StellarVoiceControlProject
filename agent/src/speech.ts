@@ -71,6 +71,19 @@ export function spokenText(result: SpokenResult): string {
   return result.answer.trim();
 }
 
+/**
+ * Whether a completed turn has anything to say.
+ *
+ * The rule is intentionally independent of `intent`: a conversational turn (no
+ * tool call) is spoken as its answer, exactly like an intent is spoken as its
+ * confirmation. Only a blank answer is silent. The A5 end-to-end driver once
+ * treated "no intent" as "nothing to speak" and dropped real answers; this
+ * predicate is the regression seam the unit test pins.
+ */
+export function isSpeakable(result: SpokenResult): boolean {
+  return spokenText(result).length > 0;
+}
+
 /** Plays one utterance; resolves once the audio has finished. */
 export type SpeakFn = (text: string) => Promise<void>;
 

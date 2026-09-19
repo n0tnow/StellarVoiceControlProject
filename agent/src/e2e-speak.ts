@@ -1,18 +1,24 @@
 /**
- * Opt-in end-to-end check (step A4) — a real intent spoken through the real TTS.
+ * Opt-in end-to-end check (steps A4/A5) — a real turn spoken through the real TTS.
  *
- *   npm run e2e:speak -w @polaris/agent -- "Ahmete 5 USDC gönder"
+ *   npm run e2e:speak -w @polaris/agent -- "Ahmete 5 USDC gönder"   # intent
+ *   npm run e2e:speak -w @polaris/agent -- "hello can you hear me"  # answer
  *
  * It chains the actual halves the app runs, with no stubs:
  *
  *   1. the real agent runtime (OpenCode Zen Go) turns the transcript into an
- *      `Intent`;
- *   2. `spokenText` turns that intent into the confirmation sentence the app
- *      would say (`@polaris/agent` `speech.ts`);
+ *      `Intent`, or into a plain conversational answer;
+ *   2. `spokenText` turns that result into the sentence the app would say — the
+ *      confirmation sentence for an intent, the trimmed answer otherwise
+ *      (`@polaris/agent` `speech.ts`);
  *   3. the Rust live test `manual_live_fish_synthesises_mpeg_and_speaks` speaks
  *      that exact sentence through the real Fish Audio backend and the pinned
- *      `reference_id`, via the production `speak_and_log` path (temp file ->
- *      `afplay`), asserting the payload is non-empty MPEG.
+ *      `reference_id`, via the production streaming path (bytes piped into the
+ *      player), asserting the payload is non-empty MPEG.
+ *
+ * A turn **without an intent is still a spoken turn** — that is the A5 bug this
+ * driver once reintroduced by treating "no intent" as "nothing to say". Only a
+ * genuinely empty sentence (a blank answer) stops the driver.
  *
  * It is deliberately **not** part of `npm test`: it makes a real LLM call and a
  * real Fish Audio call, and audio plays aloud. It needs the gitignored root
@@ -25,7 +31,7 @@ import { fileURLToPath } from "node:url";
 import { createEventBus } from "./events.ts";
 import { runTurn } from "./loop.ts";
 import { createAgentRuntime } from "./runtime.ts";
-import { spokenText } from "./speech.ts";
+import { isSpeakable, spokenText } from "./speech.ts";
 
 const transcript = process.argv.slice(2).join(" ").trim();
 if (!transcript) {
@@ -47,16 +53,23 @@ const started = Date.now();
 const result = await runTurn({ transcript, registry, llm, bus });
 const intentMs = Date.now() - started;
 
-if (!result.intent) {
+// A turn without an intent is NOT a failed turn: the model answered
+// conversationally and that answer is what gets spoken (A5 bug fix). Only a
+// blank answer leaves nothing to say — an internal error never reaches here.
+if (!isSpeakable(result)) {
   console.error(
-    `no intent in ${intentMs} ms — nothing to speak; the model answered ` +
-      `${JSON.stringify(result.answer)}`,
+    `nothing to speak in ${intentMs} ms — the model produced a blank answer ` +
+      `(${JSON.stringify(result.answer)})`,
   );
   process.exit(1);
 }
 
 const sentence = spokenText(result);
-console.log(`intent in ${intentMs} ms: ${JSON.stringify(result.intent)}`);
+if (result.intent) {
+  console.log(`intent in ${intentMs} ms: ${JSON.stringify(result.intent)}`);
+} else {
+  console.log(`no intent in ${intentMs} ms — speaking the conversational answer`);
+}
 console.log(`spoken sentence: ${sentence}`);
 
 // The Rust side owns Fish Audio; the driver only feeds it the finished sentence.

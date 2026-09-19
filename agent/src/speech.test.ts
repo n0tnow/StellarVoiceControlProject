@@ -3,7 +3,7 @@ import { test } from "node:test";
 
 import type { Intent } from "@polaris/interfaces";
 
-import { confirmationSentence, SpeechQueue, spokenText } from "./speech.ts";
+import { confirmationSentence, isSpeakable, SpeechQueue, spokenText } from "./speech.ts";
 
 function intent(overrides: Partial<Intent> = {}): Intent {
   return { kind: "send", asset: "USDC", amount: "5", ...overrides };
@@ -68,6 +68,20 @@ test("a turn without an intent is spoken as its trimmed answer", () => {
     "Bu bir cüzdan işlemi değil. Bir ödeme mi yapmak istiyorsunuz?",
   );
   assert.equal(spokenText({ answer: "   " }), "");
+});
+
+test("regression: a conversational turn is speakable, intent or not", () => {
+  // This is the A5 bug: the end-to-end driver treated "no intent" as "nothing
+  // to say" and silently discarded a real model answer. The driver now decides
+  // with `isSpeakable`; these cases pin that a text-only turn speaks.
+  assert.equal(isSpeakable({ answer: "I can hear you." }), true);
+  assert.equal(
+    isSpeakable({ answer: "no intent here", intent: intent({ recipient: "Ahmet" }) }),
+    true,
+  );
+  // Only an actually empty turn is silent.
+  assert.equal(isSpeakable({ answer: "   " }), false);
+  assert.equal(isSpeakable({ answer: "" }), false);
 });
 
 test("a second utterance waits for the first and never overlaps", async () => {

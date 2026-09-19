@@ -23,6 +23,7 @@ export {
 export { POLARIS_SYSTEM_PROMPT } from "./prompt.ts";
 export {
   confirmationSentence,
+  isSpeakable,
   SpeechQueue,
   spokenText,
   type SpeakFn,
