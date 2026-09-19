@@ -6,6 +6,7 @@ import { StageLabel } from "@/components/StageLabel";
 import { runAgentTurn, type AgentOutcome } from "@/lib/agent";
 import { executeApprovedIntent } from "@/lib/chain";
 import { speakTurnResult } from "@/lib/speech";
+import { TurnFlow } from "@/lib/turnFlow";
 import { reduceTurnSession, type TurnSession } from "@/lib/turnSession";
 import {
   getCaptureStatus,
@@ -85,9 +86,10 @@ export default function App() {
   const [hotkeyTrusted, setHotkeyTrusted] = useState<boolean | null>(null);
   const [permissionHint, setPermissionHint] = useState(false);
   const [session, dispatchTurn] = useReducer(reduceTurnSession, null);
-  // One transcript must produce exactly one agent turn, even though React
-  // StrictMode attaches the event listener twice in development.
-  const agentBusyRef = useRef(false);
+  // Admission/freshness policy for spoken turns: it dedupes a re-emitted
+  // transcript and, the M2 fix, lets a genuine second utterance supersede an
+  // in-flight turn instead of being dropped. Stable across renders.
+  const flowRef = useRef(new TurnFlow());
   // Latest session, readable from async callbacks that were started during a
   // turn. A late failure from a superseded turn must not fail the current one.
   const sessionRef = useRef<TurnSession | null>(session);
@@ -120,9 +122,11 @@ export default function App() {
     let retry: ReturnType<typeof setTimeout> | undefined;
 
     // A final transcript is the input to the agent loop; the turn is already on
-    // "thinking" and stays there through the model call. `agentBusyRef` keeps a
+    // "thinking" and stays there through the model call. `TurnFlow` keeps a
     // StrictMode double-listener (or a re-emitted transcript) from starting two
-    // model calls for one utterance.
+    // model calls for one utterance, and — the M2 fix — admits a genuine second
+    // utterance as a superseding turn instead of dropping it, so the shell is
+    // never left waiting on a transcript that was thrown away.
     //
     // Speaks a successful turn, settling "thinking" if the utterance produced no
     // audio at all. With A9's real-playback "Speaking", a TTS failure emits no
@@ -140,20 +144,21 @@ export default function App() {
     };
 
     const runFromTranscript = (raw: string): void => {
-      const transcript = raw.trim();
-      if (transcript.length === 0 || agentBusyRef.current) return;
-      agentBusyRef.current = true;
+      const admission = flowRef.current.offer(raw);
+      if (admission.kind === "ignore") return;
+      const { ticket } = admission;
+      const current = (): boolean => flowRef.current.isCurrent(ticket);
       // The agent core emits `agent_status: thinking` at the exact moment it
       // takes the transcript; that event — not this call — enters the thinking
       // stage. Nothing here may jump ahead to "speaking": that is raised only by
       // the backend's real playback-start event.
-      void runAgentTurn(transcript, {
+      void runAgentTurn(ticket.transcript, {
         onAgentStage: (stage) => {
-          if (stage === "thinking") dispatchTurn({ type: "transcribed" });
+          if (stage === "thinking" && current()) dispatchTurn({ type: "transcribed" });
         },
       })
         .then((run) => {
-          if (disposed) return;
+          if (disposed || !current()) return;
           if (!run.ok) {
             // Only the short label reaches the notch; the full detail is already
             // on the console and in the Rust log.
@@ -191,9 +196,7 @@ export default function App() {
               dispatchTurn({ type: "failed", label: "Chain error" });
             });
         })
-        .finally(() => {
-          agentBusyRef.current = false;
-        });
+        .finally(() => flowRef.current.settle(ticket));
     };
 
     // Subscribe first, then read the snapshot, so no transition is missed
