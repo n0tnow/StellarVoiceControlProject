@@ -295,3 +295,50 @@
   mic→speech path still needs a human — `backlog/2026-09-19-a4-speak-intent.md`.
 - **Status:** implemented on `feat/a4-speak-intent` (agent 38 tests, TS typecheck +
   build green, Rust 96 passed / 2 ignored, clippy clean).
+
+## 2026-09-19 — A6: typed prompt beside push-to-talk (double-Control tap)
+- **Idea:** Push-to-talk is the only input today. Add a typed path that costs no
+  new chord: **double-tap Control** opens a focusable sheet that hangs under the
+  notch and grows downward, with a speaker switch deciding whether the reply is
+  also spoken.
+- **Decisions:**
+  1. **A separate, pure state machine.** `ctrl_tap.rs` has no AppKit and no
+     window — it takes a `ModifierSample` + timestamp and returns one bit. Timing
+     lives in two documented constants: `TAP_GAP` 400 ms (second tap must
+     *start* within it) and `MAX_TAP_HOLD` 350 ms (above `gesture::ARM_DELAY`, so
+     one Control press can never be both a hold and a tap).
+  2. **Option/Command/Shift contamination, always.** A foreign modifier held at
+     any point — including between the two taps — invalidates the sequence and
+     must be fully released before a new one starts. This is what guarantees
+     Control+Option (VoiceOver's modifier *and* Polaris's push-to-talk) can never
+     be read as a tap. Fn is a known gap: `ModifierSample` does not carry it and
+     extending it would touch `gesture.rs`, outside this step's scope.
+  3. **Reuse the one `flagsChanged` monitor; do not add a second.** The AppKit
+     token *is* the subscription, so `hotkey_flags` now exposes
+     `add_sample_observer` and fans every masked sample out to the push-to-talk
+     driver and to extra observers. The A6 detector forwards into its own thread,
+     keeping the AppKit callback a cheap channel send.
+  4. **A second Tauri window, not a restyle of the overlay.** Label `prompt`,
+     transparent, undecorated, always-on-top, `skipTaskbar`, `visibleOnAllWorkspaces`,
+     but **`focusable: true`** — the overlay is deliberately not focusable, so the
+     text field needs its own window. It carries its own `polaris-prompt` event
+     channel; `PolarisEvent` is not extended (step A5 owns that union).
+  5. **Content drives the native height.** The webview measures its natural-height
+     inner element and calls `prompt_resize`; Rust clamps to `[56, 720]` pt and
+     keeps the top edge flush (`top - height` in AppKit's bottom-left space). CSS
+     animates the sheet 0 → measured, which is what reads as "growing out of the
+     notch". Closing is panel-driven: Rust emits `close`, the panel animates,
+     then calls `prompt_hide` — a native hide would cut the collapse off.
+  6. **No pipeline duplication.** The panel calls the same `runAgentTurn`
+     (`@/lib/agent`) and `speakTurnResult` (`@/lib/speech`) the voice path uses.
+     The speaker switch persists in `localStorage` (`polaris.prompt.speaker`,
+     only `"off"` opts out) and OFF synthesizes nothing at all; the answer always
+     renders first so TTS never delays it.
+- **Verification:** `npm run typecheck`, `npm --prefix app run build` (both
+  entries emitted), `cargo test` (103 passed, 2 ignored), `cargo clippy
+  --all-targets -- -D warnings` — all green. `npm run tauri dev` started clean
+  with no prompt-window errors. The double-tap/type/speak interaction still needs
+  a human with a real keyboard.
+- **Status:** implemented on `feat/a6-text-prompt`; merge coordination with
+  `feat/a5-notch-shell` noted in `backlog/2026-09-19-a6-text-prompt.md` (no
+  shared files; only the window-level constant may deserve a shared helper).
