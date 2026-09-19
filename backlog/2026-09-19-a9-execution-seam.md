@@ -112,25 +112,36 @@ notch line) and a full `detail` (the console/Rust log):
 | `executed` | tool returned unsigned XDR + summary | — |
 | `rejected` | approver said no | `Not approved` |
 | `unsupported` | no tool for the intent kind (today: `raw_tx`) | `Not supported` |
-| `unavailable` | tool threw `NotImplementedError` (today: all of them) | `Chain not wired` |
+| `unavailable` | tool threw `NotImplementedError` (today: `sendPayment`, `swap`, `guardPolicy`) | `Chain not wired` |
 | `failed` | tool threw anything else | `Chain error` |
 
 ### Approval gate seam
 
 `IntentApprover` is the explicit seam, and `executeIntent` calls the tool **only**
 after `approve()` resolves `{ approved: true }` (pinned by a test that asserts
-the call order and that a denied intent never reaches the tool). Touch ID is *not*
-implemented; the shell passes `createAutoApprovalPlaceholder()`, a loud,
-single-object stand-in in `agent/src/execution.ts` that logs that it is a
-placeholder. Replacing that one object is the whole biometric drop-in; nothing in
-the seam or the registry changes shape.
+the call order and that a denied intent never reaches the tool). A throwing
+approver is caught and returned as a labelled `failed` outcome, so the seam never
+throws. Touch ID is *not* implemented.
+
+**A10 correction (M5/M6).** The shell no longer auto-approves by default: it
+selects its approver with `resolveApprover(...)`, which returns a deny-all gate
+unless `POLARIS_ALLOW_AUTO_APPROVE=1` explicitly opts into the loud
+`createAutoApprovalPlaceholder()`. The placeholder is a stand-in for the stubbed
+demo only. It is also an **intent-level** gate: the approver sees only the
+`Intent`, so a Touch ID implementation drops in for "approve/deny before any
+chain work" — but *not* for the card-level approval, which needs the post-tool
+`summary` + `payloadHash` (`PolarisEvent::approval_request`) and therefore a
+second, post-tool phase this seam does not implement.
 
 ### `NotImplementedError` is the expected state today
 
 Detection is structural (`error.name === "NotImplementedError"`), so the agent
 core stays independent of `@polaris/stellar`; Owner B's stub class sets exactly
 that name. The shell shows the short label and lets the existing failure dwell
-settle the notch — never a crash, never a stuck stage.
+settle the notch — never a crash, never a stuck stage. **A10 correction (M8):**
+this applies to `sendPayment`, `swap` and `guardPolicy` only — `depositTry` is a
+real path (unconfigured → `Chain error`; configured → a real unsigned XDR, never
+submitted).
 
 ### Invariant preserved
 
@@ -271,11 +282,12 @@ different short label for an unimplemented path, keep throwing
 `NotImplementedError`; if a tool fails for real, throw anything else and the shell
 shows `Chain error`.
 
-One product note: the placeholder approver in `app/src/lib/chain.ts` currently
-auto-approves so the seam is demonstrable. Before any real value-moving tool
-ships, Owner A must replace `createAutoApprovalPlaceholder()` with the Touch ID
-approver — the seam (`IntentApprover.approve(intent)`) is the only thing it
-implements.
+One product note (A10 correction): `app/src/lib/chain.ts` is **fail-closed by
+default** — it installs a deny-all approver unless `POLARIS_ALLOW_AUTO_APPROVE=1`
+opts into the auto-approving placeholder for the stubbed demo. Before any real
+value-moving tool ships, Owner A must replace that selection with the Touch ID
+approver; the seam (`IntentApprover.approve(intent)`) is the only thing it
+implements, and it is intent-level only (see the approval-gate note above).
 
 ---
 
