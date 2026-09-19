@@ -3,7 +3,7 @@
 - **Date:** 2026-09-19
 - **Worker/Agent:** coordinating agent (the primary model, done without workers per the user's instruction)
 - **Branch/Worktree:** `feat/monorepo-skeleton` @ `.worktrees/skeleton`
-- **PR:** opened against `origin/main` (see the PR link in the branch's PR description)
+- **PR:** https://github.com/n0tnow/StellarVoiceControlProject/pull/4 (`feat/monorepo-skeleton` → `main`)
 
 ## Completed
 
