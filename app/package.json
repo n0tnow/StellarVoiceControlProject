@@ -9,6 +9,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "check": "tsc -p tsconfig.json",
+    "test": "node --test \"src/**/*.test.ts\"",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build"

@@ -200,38 +200,65 @@
   grid-column: 1;
   z-index: 1;
   min-width: 0;
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
+  height: 15px;
   overflow: hidden;
 }
 
+/* The stage label is a two-layer cross-fade: the outgoing label stays on top,
+   fading out while the incoming one fades in, so a stage change never hard-cuts.
+   Both layers are absolutely placed so they overlap inside the fixed ear. */
+.notch-label-stack {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 15px;
+}
+
 .notch-label {
-  margin: 0;
+  position: absolute;
+  inset: 0;
   /* Measured from the design reference: the label is ~24 px tall in a 2x
      screenshot, i.e. ~12 pt, inside a 33 pt shell. */
   font-size: 13px;
-  line-height: 1.15;
+  line-height: 15px;
   font-weight: 650;
   letter-spacing: -0.2px;
   /* Structural guarantee, not just short copy: an over-long label ellipsises
      inside the ear instead of running under the camera housing, where it would
      be invisible. Labels are written short so this never actually triggers. */
-  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.notch-detail {
-  /* Inline with the label, never a second row: the shell height is fixed. */
-  margin: 0;
-  color: var(--color-notch-muted);
-  font-size: 9px;
-  line-height: 1.2;
-  letter-spacing: 0.05px;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.notch-label.is-current {
+  animation: stage-label-in 240ms var(--shell-ease) both;
+}
+
+.notch-label.is-leaving {
+  animation: stage-label-out 240ms var(--shell-ease) both;
+}
+
+@keyframes stage-label-in {
+  from {
+    opacity: 0;
+    transform: translateX(-3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes stage-label-out {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: translateX(3px);
+  }
 }
 
 .notch-indicator {
@@ -281,30 +308,24 @@
 }
 
 /* Step A1: the same bars, slower and shallower, read as "working" rather than
-   "listening". No layout change — the indicator keeps its exact geometry. */
-.state-transcribing .notch-indicator span {
-  animation: listen 1150ms ease-in-out infinite alternate;
-}
-
-.state-transcribing .notch-indicator span:nth-child(2) {
-  animation-delay: -380ms;
-}
-
-.state-transcribing .notch-indicator span:nth-child(3) {
-  animation-delay: -700ms;
-}
-
-/* Step A5: "Speaking" reuses the Thinking animation verbatim — the owner asked
-   for the same visual treatment, not a second style. Kept as a separate selector
-   so the two states share one animation definition and cannot drift. */
+   "listening". No layout change — the indicator keeps its exact geometry.
+   Step A8: thinking, checking and speaking share this one treatment, so the
+   bars never restart or jump as the turn advances between those stages. Kept as
+   a single rule so the three states cannot drift apart. */
+.state-transcribing .notch-indicator span,
+.state-checking .notch-indicator span,
 .state-speaking .notch-indicator span {
   animation: listen 1150ms ease-in-out infinite alternate;
 }
 
+.state-transcribing .notch-indicator span:nth-child(2),
+.state-checking .notch-indicator span:nth-child(2),
 .state-speaking .notch-indicator span:nth-child(2) {
   animation-delay: -380ms;
 }
 
+.state-transcribing .notch-indicator span:nth-child(3),
+.state-checking .notch-indicator span:nth-child(3),
 .state-speaking .notch-indicator span:nth-child(3) {
   animation-delay: -700ms;
 }
@@ -353,95 +374,37 @@
     transition: none;
   }
 
+  .notch-label.is-current,
+  .notch-label.is-leaving {
+    animation: none;
+  }
+
   .state-recording .notch-indicator span,
   .state-transcribing .notch-indicator span,
+  .state-checking .notch-indicator span,
   .state-speaking .notch-indicator span {
     animation: none;
   }
 }
 
 /* ------------------------------------------------------------------ *
- * Agent trace (step A2)
- *
- * The transcript + parsed intent live below the shell, never inside it: the
- * centre column is the camera housing (no pixels) and the ears are too narrow
- * for an answer. Purely a read-out — the window is click-through, so nothing
- * here is interactive.
+ * Step A8: the transcript/intent debug trace that used to sit below the shell
+ * was removed. Its diagnostics live in the console and the Rust terminal now,
+ * never as UI.
  * ------------------------------------------------------------------ */
-
-.agent-trace {
-  position: absolute;
-  top: calc(var(--expanded-height) + 10px);
-  left: 50%;
-  transform: translateX(-50%);
-  max-width: var(--expanded-width);
-  padding: 6px 12px;
-  border: 1px solid var(--color-polaris-line);
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--color-polaris-panel) 92%, transparent);
-  box-shadow: 0 6px 22px #00000066;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  line-height: 1.35;
-  text-align: left;
-  overflow: hidden;
-}
-
-.agent-trace p {
-  margin: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.agent-trace-hear {
-  color: var(--color-polaris-muted);
-}
-
-.agent-trace-intent {
-  color: var(--color-polaris-ok);
-}
-
-.agent-trace-answer {
-  color: var(--color-polaris-text);
-}
-
-.agent-trace-error {
-  color: var(--color-polaris-danger);
-}
-
-.agent-trace-tag {
-  display: inline-block;
-  margin-right: 6px;
-  padding: 0 5px;
-  border-radius: 4px;
-  background: #ffffff14;
-  color: var(--color-polaris-muted);
-  font-size: 9px;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.agent-trace-ms {
-  color: var(--color-polaris-muted);
-}
-
-.agent-trace-model {
-  color: var(--color-polaris-muted);
-  font-size: 9px;
-  opacity: 0.75;
-}
 
 @media (max-width: 480px) {
   .notch-content {
     padding: 0 22px;
   }
 
-  .notch-label {
-    font-size: 17px;
+  .notch-copy,
+  .notch-label-stack {
+    height: 18px;
   }
 
-  .notch-detail {
-    font-size: 9px;
+  .notch-label {
+    font-size: 17px;
+    line-height: 18px;
   }
 }
