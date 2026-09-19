@@ -8,6 +8,7 @@ use tauri::{AppHandle, State};
 
 use crate::capture::Capture;
 use crate::events::{self, PolarisEvent, SpeechState};
+use crate::timing;
 use crate::tts::{self, Speaker};
 use crate::types::CaptureStatus;
 
@@ -44,8 +45,13 @@ pub fn capture_start(app: AppHandle, capture: State<'_, Capture>) -> CaptureStat
 
 /// Stops the current capture and returns its final snapshot. Never sends or
 /// submits anything — `ready` only means the WAV is on disk.
+///
+/// Step A11: the programmatic stop opens the same per-turn timing trace the
+/// hotkey release does, so a UI-driven capture reports the same breakdown.
 #[tauri::command]
 pub fn capture_stop(capture: State<'_, Capture>) -> CaptureStatus {
+    crate::timing::begin_turn();
+    crate::timing::mark("hotkey release");
     capture.stop()
 }
 
@@ -100,8 +106,14 @@ pub async fn speak(
     let backend = Arc::clone(speaker.inner());
     let task_backend = Arc::clone(&backend);
     let started = Instant::now();
+    // Step A11: the TTS half of the turn. `tts request sent` is the moment the
+    // backend is handed the sentence; `playback start` is emitted from the
+    // backend's real playback-start callback (so synthesis time is visible as
+    // the gap between them); the block is closed when playback actually ends.
+    timing::mark("tts request sent");
     let start_app = app.clone();
     let on_playback_start = move || {
+        timing::mark("playback start");
         events::emit(
             &start_app,
             PolarisEvent::SpeechStatus {
@@ -113,6 +125,8 @@ pub async fn speak(
         tts::speak_and_log(task_backend.as_ref(), &text, &on_playback_start)
     })
     .await;
+    timing::mark("playback end");
+    timing::finish_turn();
     // Playback has ended (or never started): release the overlay before doing
     // anything else, so an unexpected error path still clears the state.
     events::emit(

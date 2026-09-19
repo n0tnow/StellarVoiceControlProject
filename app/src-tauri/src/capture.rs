@@ -26,6 +26,7 @@ use std::time::{Duration, Instant};
 use tauri::AppHandle;
 
 use crate::events::{self, PolarisEvent};
+use crate::timing;
 use crate::types::{CaptureRecording, CaptureState, CaptureStatus};
 
 /// How long `stop` waits for the worker to finalize the WAV before returning the
@@ -236,6 +237,8 @@ fn finish_capture(
     shared.finished.notify_all();
 
     if let Some(recording) = &status.recording {
+        // Step A11: the finalized WAV is the second measured phase.
+        timing::mark("wav ready");
         events::emit(
             &app,
             PolarisEvent::AudioCaptured {

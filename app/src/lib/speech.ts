@@ -10,6 +10,7 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 import { SpeechQueue, spokenText, type SpokenResult } from "@polaris/agent";
+import { markTurnPhase } from "@/lib/polaris";
 
 /** Success shape of the Rust `speak` command (`SpeechOutcome`). */
 export interface SpeechOutcome {
@@ -26,6 +27,8 @@ export interface SpeechFailure {
 
 const queue = new SpeechQueue(
   async (text) => {
+    // A11: the sentence the app will say is already built at this point.
+    markTurnPhase("sentence built");
     const outcome = await invoke<SpeechOutcome>("speak", { text });
     console.info(`speech in ${outcome.latencyMs} ms via ${outcome.backend}`);
   },

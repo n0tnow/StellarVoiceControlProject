@@ -16,6 +16,7 @@ mod hotkey;
 mod hotkey_flags;
 mod notch;
 mod stt;
+mod timing;
 mod tts;
 mod types;
 
@@ -42,6 +43,7 @@ pub fn run() {
             commands::capture_status,
             commands::speak,
             agent::agent_chat,
+            timing::polaris_phase,
             notch::notch_geometry,
             hotkey::hotkey_permission,
         ])

@@ -30,6 +30,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 
+use crate::timing;
 use crate::tts::{PlaybackStart, TtsError};
 
 /// Writes `bytes` to a unique temp file whose extension comes from `format`.
@@ -186,6 +187,10 @@ pub fn play_stream<R: Read>(
     reader
         .read_to_end(&mut bytes)
         .map_err(|error| TtsError::Network(error.to_string()))?;
+    // Buffered path: the first audio byte is only available once the whole body
+    // has been read — that gap is exactly the pre-A5 latency the streaming path
+    // removes, and the A11 trace makes it visible when ffplay is missing.
+    timing::mark("tts first audio byte");
     if bytes.is_empty() {
         return Err(TtsError::Malformed(
             "the service returned a 2xx with no audio".to_string(),
@@ -230,12 +235,19 @@ fn finish_ffplay<R: Read>(
         .ok_or_else(|| TtsError::Playback(format!("`{binary}` did not expose stdin")))?;
     let mut buffer = [0u8; 16 * 1024];
     let mut announced = false;
+    let mut first_byte = false;
     loop {
         let read = match reader.read(&mut buffer) {
             Ok(0) => break,
             Ok(n) => n,
             Err(error) => return Err(TtsError::Network(error.to_string())),
         };
+        if !first_byte {
+            // Streaming path: the first chunk that leaves the provider is the
+            // first audio byte the player can decode.
+            first_byte = true;
+            timing::mark("tts first audio byte");
+        }
         if let Err(error) = stdin.write_all(&buffer[..read]) {
             if error.kind() == std::io::ErrorKind::BrokenPipe {
                 break;

@@ -39,6 +39,7 @@ use tauri::AppHandle;
 use crate::capture::Capture;
 use crate::env;
 use crate::events::{self, PolarisEvent};
+use crate::timing;
 use crate::types::CaptureRecording;
 
 /// One recognized utterance. `text` is already trimmed; an all-whitespace
@@ -393,6 +394,10 @@ fn handle(
                     transcription.text
                 );
                 capture.mark_transcribed(app);
+                // Step A11: the transcript is the third measured phase; it is
+                // marked just before the event so the mark and the event are the
+                // same instant the agent will act on.
+                timing::mark("transcript");
                 events::emit(
                     app,
                     PolarisEvent::Transcript {

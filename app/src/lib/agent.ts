@@ -18,6 +18,7 @@ import {
   toAgentError,
 } from "@polaris/agent";
 import type { AgentStage, Intent } from "@polaris/interfaces";
+import { markTurnPhase } from "@/lib/polaris";
 
 /**
  * Logical transport label, only ever used in error copy. The real provider root
@@ -47,6 +48,9 @@ async function tauriAgentFetch(_input: RequestInfo | URL, init?: RequestInit): P
   const headers = (init?.headers ?? {}) as Record<string, string>;
   const sessionId = headers["x-opencode-session"] ?? "";
   const body = typeof init?.body === "string" ? init.body : "";
+  // A11: the request is fully built (system prompt, tools, transcript) at this
+  // instant; Rust records it on the open turn trace before the network call.
+  markTurnPhase("agent request built");
   const response = await invoke<AgentHttpResponse>("agent_chat", { body, sessionId });
   return new Response(response.body, {
     status: response.status,
@@ -118,6 +122,8 @@ export async function runAgentTurn(
   const started = performance.now();
   try {
     const result = await runTurn({ transcript, registry, llm, bus });
+    // A11: the provider response has been parsed into a turn result by now.
+    markTurnPhase("intent parsed");
     const latencyMs = Math.round(performance.now() - started);
     if (result.intent) {
       console.info(`intent in ${latencyMs} ms (${result.intentTool ?? "tool"})`, result.intent);

@@ -28,6 +28,7 @@ use crate::capture::Capture;
 use crate::events::{self, HotkeyState, PolarisEvent};
 use crate::gesture::{Action, Latch, ModifierSample, DRIVER_TICK, WATCHDOG_INTERVAL};
 use crate::hotkey_flags::{self, FlagsMonitor};
+use crate::timing;
 
 /// One input for the driver's state machine.
 enum Input {
@@ -224,6 +225,11 @@ fn apply(app: &AppHandle, actions: Vec<Action>) {
             }
             Action::Stop => {
                 events::emit(app, PolarisEvent::Hotkey { state: HotkeyState::Up });
+                // Step A11: the release is the start of the measured turn.
+                // Opening the trace here (not at capture start) is what makes
+                // the first phase the human-meaningful "hotkey release".
+                timing::begin_turn();
+                timing::mark("hotkey release");
                 // No send, no submit: the engine lands in `ready` with the WAV
                 // on disk and waits for step A1.
                 capture.stop();

@@ -26,6 +26,7 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 
 use crate::env;
+use crate::timing;
 
 /// Provider root; the same variable the TypeScript config reads (`config.ts`).
 pub const AGENT_BASE_URL_ENV: &str = "POLARIS_AGENT_BASE_URL";
@@ -96,13 +97,20 @@ fn request(
     }
 
     let started = Instant::now();
+    // Step A11: the provider phases of the turn. `request sent` is the hand-off
+    // to the network; `first byte` is when the response headers arrive; `full
+    // response` is after the body has been read. The gap between the last two is
+    // the provider's body-transfer time, which matters for a slow model.
+    timing::mark("provider request sent");
     let response = builder
         .send()
         .map_err(|error| format!("could not reach the model provider: {error}"))?;
+    timing::mark("provider first byte");
     let status = response.status().as_u16();
     let body = response
         .text()
         .map_err(|error| format!("could not read the provider response: {error}"))?;
+    timing::mark("provider full response");
     println!(
         "polaris: agent → provider HTTP {status} in {} ms",
         started.elapsed().as_millis()

@@ -53,6 +53,19 @@ export async function getNotchGeometry(): Promise<NotchGeometry> {
   return invoke<NotchGeometry>("notch_geometry");
 }
 
+/**
+ * Reports one agent-loop phase to the Rust per-turn timing trace (step A11).
+ *
+ * The webview console is invisible to the owner, so the phases that only exist
+ * in TypeScript (request built, intent parsed, sentence built) are forwarded to
+ * Rust, which owns the trace and prints the single per-turn block. Fire and
+ * forget on purpose: a missing or failing command must never add latency to, or
+ * break, a real turn.
+ */
+export function markTurnPhase(name: string): void {
+  void invoke("polaris_phase", { name }).catch(() => {});
+}
+
 /** Subscribes to the typed event stream. Events with an unknown shape are ignored. */
 export async function listenPolarisEvents(
   handler: (event: PolarisEvent) => void,
