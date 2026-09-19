@@ -86,6 +86,11 @@ export default function App() {
   const [permissionHint, setPermissionHint] = useState(false);
   const [agentRun, setAgentRun] = useState<AgentRun | null>(null);
   const [agentStage, setAgentStage] = useState<AgentStage | null>(null);
+  // Step A6: a failed agent turn surfaces its short label in the notch for a
+  // dwell and then settles, exactly like a step-A1 capture failure. The full
+  // detail still goes to the console and stays on the trace's tooltip.
+  const [agentError, setAgentError] = useState<{ label: string; detail: string } | null>(null);
+  const [agentErrorCollapsed, setAgentErrorCollapsed] = useState(false);
   // Step A5: true while the Rust `speak` command reports audio in flight. Driven
   // by `speech_status` events, which the command emits at the start of playback
   // and again — success or failure — once it has finished.
@@ -111,6 +116,19 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [agentRun]);
 
+  // A failed agent turn shows its short label for the same dwell a step-A1
+  // failure gets, then collapses back to the resting pill. The failure itself is
+  // never dismissed from the console/trace — only the notch label settles.
+  useEffect(() => {
+    if (agentError === null) {
+      setAgentErrorCollapsed(false);
+      return;
+    }
+    setAgentErrorCollapsed(false);
+    const timer = setTimeout(() => setAgentErrorCollapsed(true), STT_ERROR_DWELL_MS);
+    return () => clearTimeout(timer);
+  }, [agentError]);
+
   useEffect(() => {
     let disposed = false;
     let unlisten: UnlistenFn | undefined;
@@ -125,6 +143,7 @@ export default function App() {
       if (transcript.length === 0 || agentBusyRef.current) return;
       agentBusyRef.current = true;
       setAgentRun(null);
+      setAgentError(null);
       void runAgentTurn(transcript)
         .then((run) => {
           if (disposed) return;
@@ -132,6 +151,7 @@ export default function App() {
           // immediately and the audio arrives when Fish/local is ready, so a
           // slow TTS backend never delays the transcript or the intent.
           setAgentRun(run);
+          setAgentError(run.ok ? null : { label: run.failure.label, detail: run.failure.detail });
           if (run.ok) speakTurnResult(run.outcome);
         })
         .finally(() => {
@@ -148,8 +168,12 @@ export default function App() {
           if (event.type === "capture_status") {
             receivedStatus = true;
             // A new take always supersedes any speech that was still in flight
-            // (the user cannot meaningfully record and be spoken to at once).
-            if (event.status.state === "recording") setSpeaking(false);
+            // (the user cannot meaningfully record and be spoken to at once),
+            // and it clears a previous agent failure from the notch.
+            if (event.status.state === "recording") {
+              setSpeaking(false);
+              setAgentError(null);
+            }
             setStatus(event.status);
           } else if (event.type === "hotkey_permission") {
             setHotkeyTrusted(event.trusted);
@@ -253,14 +277,21 @@ export default function App() {
   // applies once capture has returned to idle; a live recording/ready/error
   // state always takes precedence, and a failed utterance still emits `idle`, so
   // the shell can never be stuck here.
+  // Step A6: a failed agent turn is a shell state too. It only replaces the idle
+  // pill once capture has settled, and it collapses after its dwell like A1.
+  const agentFailureVisual =
+    agentError !== null && state === "idle" && connected && !showPermissionHint && !agentErrorCollapsed;
   const speakingVisual = speaking && state === "idle" && connected && !showPermissionHint;
   const visual: CaptureState | "speaking" = speakingVisual
     ? "speaking"
-    : dismissible && collapsed
-      ? "idle"
-      : state;
+    : agentFailureVisual
+      ? "error"
+      : dismissible && collapsed
+        ? "idle"
+        : state;
   const expanded = visual !== "idle" || !connected || showPermissionHint;
-  const error = connectionError ?? status.error;
+  const error =
+    connectionError ?? status.error ?? (agentFailureVisual ? agentError?.detail ?? null : null);
   const durationMs = status.recording?.durationMs ?? 0;
 
   // The label is the ONLY thing drawn in the left ear, so it has to stay short:
@@ -279,9 +310,12 @@ export default function App() {
             ? // A step-A1 failure carries its own short label; a microphone or
               // connection failure keeps the generic one.
               (status.label ?? "Mic error")
-            : visual === "speaking"
-              ? "Speaking"
-              : "Connecting";
+            : agentFailureVisual
+              ? // Step A6: the agent's short label, exactly like A1's STT label.
+                (agentError?.label ?? "Agent error")
+              : visual === "speaking"
+                ? "Speaking"
+                : "Connecting";
   const detail = showPermissionHint
     ? "System Settings › Privacy & Security › Accessibility"
     : connectionError
@@ -294,9 +328,11 @@ export default function App() {
             ? "Release to finish"
             : state === "transcribing"
               ? "Transcribing…"
-              : visual === "speaking"
-                ? "Polaris is talking"
-                : "Starting up…";
+              : agentFailureVisual
+                ? "⌃⌥ to retry"
+                : visual === "speaking"
+                  ? "Polaris is talking"
+                  : "Starting up…";
 
   const style = {
     "--idle-width": `${geometry.idleWidth}px`,
