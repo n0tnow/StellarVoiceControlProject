@@ -22,3 +22,10 @@
 ## Remaining / human-verify
 - Live embedded-wallet payment, Touch ID, and a real SEP-10 challenge need a human on a Mac (not verified here).
 - A later task may rename the `bridge` module (kept for in-flight branches).
+
+## MERGE-FINAL — w11a + w11b onto integration/wallet-login (committed, not pushed)
+Merged `feat/w11a-executor-rust`, `feat/w11b-autopay-ui`, `chore/remove-freighter-bridge` into `integration/wallet-login` (commits `20f54b3`, `16c5744`, `f24ff69`).
+Resolved `lib.rs` to the union of survivors exactly once: `bank::*` + `wallet::executor::*` + `approval::{begin,authorize}_batch`; no `bridge_*`/`anchor_signing_health`/`system_launcher`, no duplicate; `approval.rs` doc merged (batch + "signer"); `RulesPage.tsx` kept W11b editable form; `package.json` kept `e2e:autopay`, dropped `bridge:fixture`; Cargo.lock dropped `tiny_http`/`subtle`/transitives, kept `stellar-xdr`.
+Verify: check clean; app **416/0**, agent **213/0**, stellar **1044/0** (12 files); `build` OK, no wallets-kit chunk; cargo **364/0/5-ignored** + clippy `--all-targets -D warnings` clean; `git grep bridge_sign|stellar-wallets-kit|tiny_http` empty in code/config/lockfiles (only historical `backlog/`/`sprints.md`); `npm run e2e:autopay` → **e2e:autopay OK** (live testnet).
+Path read once: locked→unlock; send below limit → `executor_sign_pay` (no card); above/any doubt → card + Touch ID → `wallet_sign`; guard rule setup → one batch card + one Touch ID → `wallet_sign` per step. Invariants intact: fail-closed approver, `WalletOnly` unreachable from webview (`begin_wallet_only` `pub(crate)`), seq-0-only `wallet_sign_challenge`, seeds stay in Rust, `take_authorized` the only XDR exit; `POLARIS_ALLOW_AUTO_APPROVE` absent/disabled.
+Not verified (human): live Touch ID/executor on a real Mac.
