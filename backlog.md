@@ -93,3 +93,5 @@
 ## Suggested Next Step
 - ...
 ```
+
+| 2026-09-20 | Dark Polaris product landing page; demo video integration pending | landing worker | review | `backlog/dark-landing.md` | P2 |

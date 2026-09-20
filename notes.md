@@ -926,3 +926,8 @@
 - **Icon is generated, not a mystery binary:** `app/scripts/generate-icon.mjs` imports the seed and locked palette from `faceState.ts`, composes a 1024×1024 SVG on black, rasterises with `sips`, and runs `npx tauri icon`. Re-run: `cd app && node scripts/generate-icon.mjs`.
 - **Numbers:** `check.sh` all passed; `npm test -w @polaris/app` 378/378; `npm run build -w @polaris/app` built; `cargo test` (Tauri shell) 320 passed. Visual result still unverified by the agent.
 - **Status:** decided (owner must eyeball the nav-column face, the no-click tracking and the icon on a real Mac)
+
+## 2026-09-20 — Dark Polaris introduction page
+- **Idea:** Adapt the supplied light editorial reference into a simple dark single-page product introduction, with generous spacing, an oversized headline and overlapping colorful product illustrations.
+- **Decision:** Keep the page isolated in `landing/` as static HTML/CSS; desktop runtime and wallet functionality remain separate. Clearly identify concept illustrations and Stellar testnet status.
+- **Status:** Implemented; the user will supply a demo video later. The demo placeholder and integration instructions are ready.
