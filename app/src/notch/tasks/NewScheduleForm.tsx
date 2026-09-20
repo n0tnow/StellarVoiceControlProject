@@ -35,6 +35,9 @@ export function NewScheduleForm({ disabled, timeZone, onCreate }: NewScheduleFor
   const [every, setEvery] = useState<ScheduleEvery>("week");
   const [firstRun, setFirstRun] = useState(() => defaultFirstRun());
   const [error, setError] = useState<string | null>(null);
+  // The two fields a person needs are To and Amount; the recurrence is folded
+  // away so the form never shows more than two inputs at once.
+  const [advanced, setAdvanced] = useState(false);
 
   useEffect(() => {
     const onChange = (): void => void reload();
@@ -93,34 +96,45 @@ export function NewScheduleForm({ disabled, timeZone, onCreate }: NewScheduleFor
         </label>
       </div>
 
-      <div style={{ display: "flex", gap: 8 }}>
-        <label className="task-new" style={{ flex: 1 }}>
-          <span className="rule-condition">Every</span>
-          <select
-            className="task-new-input"
-            value={every}
-            disabled={disabled}
-            onChange={(event) => setEvery(event.target.value as ScheduleEvery)}
-          >
-            <option value="once">One time</option>
-            <option value="day">Day</option>
-            <option value="week">Week</option>
-          </select>
-        </label>
-        <label className="task-new" style={{ flex: 1 }}>
-          <span className="rule-condition">First run</span>
-          <input
-            type="datetime-local"
-            className="task-new-input"
-            value={firstRun}
-            disabled={disabled}
-            onChange={(event) => setFirstRun(event.target.value)}
-          />
-        </label>
-      </div>
+      {advanced ? (
+        <div style={{ display: "flex", gap: 8 }}>
+          <label className="task-new" style={{ flex: 1 }}>
+            <span className="rule-condition">Every</span>
+            <select
+              className="task-new-input"
+              value={every}
+              disabled={disabled}
+              onChange={(event) => setEvery(event.target.value as ScheduleEvery)}
+            >
+              <option value="once">One time</option>
+              <option value="day">Day</option>
+              <option value="week">Week</option>
+            </select>
+          </label>
+          <label className="task-new" style={{ flex: 1 }}>
+            <span className="rule-condition">First run</span>
+            <input
+              type="datetime-local"
+              className="task-new-input"
+              value={firstRun}
+              disabled={disabled}
+              onChange={(event) => setFirstRun(event.target.value)}
+            />
+          </label>
+        </div>
+      ) : null}
 
       {preview.ok ? <p className="rule-condition">{preview.schedule.readBack}</p> : null}
       {error !== null ? <p className="rule-condition">{error}</p> : null}
+
+      <button
+        type="button"
+        className="text-[11px] text-notch-muted underline"
+        aria-expanded={advanced}
+        onClick={() => setAdvanced((value) => !value)}
+      >
+        {advanced ? "Hide advanced" : "Advanced"}
+      </button>
 
       <div className="rule-approval">
         <Button size="sm" disabled={disabled} onClick={submit}>

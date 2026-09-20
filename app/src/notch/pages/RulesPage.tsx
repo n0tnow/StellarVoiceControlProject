@@ -9,6 +9,7 @@
  */
 import { RulesEditor } from "@/notch/rules/RulesEditor";
 
+import "./tasks-rules.css";
 import { LoginGate } from "../wallet/LoginGate";
 import { useWalletLocked } from "../wallet/useWalletSession";
 
@@ -16,7 +17,7 @@ export function RulesPage() {
   const locked = useWalletLocked();
   if (locked) return <LoginGate />;
   return (
-    <div className="page-stack">
+    <div className="page-stack nr-page">
       <RulesEditor />
     </div>
   );

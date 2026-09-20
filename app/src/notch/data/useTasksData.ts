@@ -11,8 +11,14 @@
  * unsigned `@/lib/schedulesLive` call and pushes it through the shared
  * `@/lib/useTxRun` pipeline (approval card → Touch ID → wallet signing →
  * submit). Nothing else on the page moves value.
+ *
+ * Performance: the last successful read is kept in a module-level cache
+ * (`tasksCache`) and concurrent mounts share one in-flight load
+ * (`tasksInFlight`). A remount therefore paints the previous rows immediately
+ * and revalidates in the background — it never blocks the first frame on the
+ * chain read, and never fires a second identical read.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { isTauri } from "@tauri-apps/api/core";
 
 import type { Intent } from "@polaris/interfaces";
@@ -112,6 +118,40 @@ interface TasksLoad {
   error: string | null;
 }
 
+/** The last successful `loadTasks` answer, shared across mounts of the page. */
+let tasksCache: TasksLoad | null = null;
+
+/** The read in flight, so two mounts (or a remount) never issue it twice. */
+let tasksInFlight: Promise<TasksLoad> | null = null;
+
+/** Which body the page renders, derived from the load state. Pure. */
+export type TasksViewState = "skeleton" | "error" | "empty" | "rows";
+
+/**
+ * The page's body is never blank: while the first read is in flight it shows a
+ * skeleton, a failed read shows the error, and a successful empty read shows
+ * the empty state. Cached rows always win, so a background refresh never
+ * collapses the list back to a skeleton.
+ */
+export function tasksViewState(input: {
+  loading: boolean;
+  error: string | null;
+  count: number;
+}): TasksViewState {
+  if (input.count > 0) return "rows";
+  if (input.loading) return "skeleton";
+  if (input.error !== null) return "error";
+  return "empty";
+}
+
+/** Dedupes concurrent reads: every caller awaits the same in-flight promise. */
+function fetchTasks(timeZone: string): Promise<TasksLoad> {
+  tasksInFlight ??= loadTasks(timeZone).finally(() => {
+    tasksInFlight = null;
+  });
+  return tasksInFlight;
+}
+
 /**
  * Loads the list: the labelled demo outside Tauri, real `listUpcoming` inside
  * Tauri. Never throws — a read failure (or a missing owner) is returned as the
@@ -146,6 +186,8 @@ async function loadTasks(timeZone: string): Promise<TasksLoad> {
 export interface TasksData {
   rows: TaskRow[];
   loading: boolean;
+  /** True while a background revalidation runs over already-shown rows. */
+  refreshing: boolean;
   /** Human read error from the last load, or `null`. */
   error: string | null;
   /** True when the rows are the demo fallback, not real chain data. */
@@ -166,11 +208,14 @@ export interface TasksData {
  * chain access is in `@/lib/schedulesLive`; this hook only holds React state.
  */
 export function useTasksData(): TasksData {
-  const timeZone = deviceTimeZone();
-  const [rows, setRows] = useState<TaskRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [demo, setDemo] = useState(false);
+  // The IANA zone cannot change while the panel is open, so resolve it once.
+  const timeZone = useMemo(() => deviceTimeZone(), []);
+  const cached = tasksCache;
+  const [rows, setRows] = useState<TaskRow[]>(cached?.rows ?? []);
+  const [loading, setLoading] = useState(cached === null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(cached?.error ?? null);
+  const [demo, setDemo] = useState(cached?.demo ?? false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
   const tx = useTxRun();
@@ -178,13 +223,18 @@ export function useTasksData(): TasksData {
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
-    loadTasks(timeZone).then((load) => {
+    // Cached rows paint immediately; only the very first read blocks on the
+    // chain. A revalidation after that is a quiet background refresh.
+    if (tasksCache === null) setLoading(true);
+    else setRefreshing(true);
+    fetchTasks(timeZone).then((load) => {
+      tasksCache = load;
       if (cancelled) return;
       setRows(load.rows);
       setDemo(load.demo);
       setError(load.error);
       setLoading(false);
+      setRefreshing(false);
     });
     return () => {
       cancelled = true;
@@ -246,5 +296,5 @@ export function useTasksData(): TasksData {
     [run, refresh],
   );
 
-  return { rows, loading, error, demo, timeZone, refresh, cancel, create, actionError, tx };
+  return { rows, loading, refreshing, error, demo, timeZone, refresh, cancel, create, actionError, tx };
 }
