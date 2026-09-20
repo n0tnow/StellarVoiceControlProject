@@ -10,8 +10,15 @@ import { shortKey } from "./explain.ts";
 import { sanitizeAnchorText } from "./text.ts";
 import type { AnchorContext, AnchorToml, AuthToken, Signer } from "./types.ts";
 
-/** Real anchors use 5-15 minutes; anything much longer is not a normal challenge. */
-export const MAX_CHALLENGE_WINDOW_SECONDS = 15 * 60;
+/**
+ * Upper bound on how long a challenge may stay valid, measured as the challenge's
+ * own declared window (`maxTime - minTime`, NOT `maxTime - now`). SDF's reference
+ * builder uses 5 minutes and both anchors we talk to issue 15-minute windows, so a
+ * real challenge is always far below this. We still allow up to 24 h so an anchor
+ * with longer-lived, but finite, challenges keeps working; an unbounded
+ * `maxTime = 0` (TimeoutInfinite) is refused separately below.
+ */
+export const MAX_CHALLENGE_WINDOW_SECONDS = 24 * 60 * 60;
 
 export class ChallengeError extends Error {
   constructor(message: string) {
@@ -74,7 +81,12 @@ export function validateChallenge(input: {
   if (!tb || maxTime === 0) throw new ChallengeError("challenge has no expiry time");
   if (nowSec > maxTime) throw new ChallengeError("challenge has expired");
   if (minTime > nowSec + 60) throw new ChallengeError("challenge is not valid yet");
-  if (maxTime - nowSec > MAX_CHALLENGE_WINDOW_SECONDS) {
+  // Measure the challenge's OWN declared window, not the remaining time from `now`:
+  // both anchors issue `minTime = now + 1` with a 900 s `maxTime`, so `maxTime - now`
+  // is 901 s and would falsely trip an exact 900 s bound. When `minTime` is unset
+  // (0) the declared start is unknown, so fall back to `now` as a conservative start.
+  const windowStart = minTime > 0 ? minTime : nowSec;
+  if (maxTime - windowStart > MAX_CHALLENGE_WINDOW_SECONDS) {
     throw new ChallengeError("challenge stays valid for an unreasonably long time");
   }
   // SEP-10 v3: the web_auth_domain operation must be present, not merely "valid if present".
@@ -117,7 +129,7 @@ export function decodeJwt(jwt: string): { sub?: string; exp?: number; iss?: stri
   const part = jwt.split(".")[1];
   if (!part) throw new ChallengeError("anchor returned a malformed token");
   try {
-    return JSON.parse(Buffer.from(part, "base64url").toString("utf8")) as { sub?: string; exp?: number; iss?: string };
+    return JSON.parse(Buffer.from(part.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8")) as { sub?: string; exp?: number; iss?: string };
   } catch {
     throw new ChallengeError("anchor returned a malformed token");
   }

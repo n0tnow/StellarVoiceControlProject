@@ -32,7 +32,7 @@ function executed(overrides: Partial<ExecutionOutcome> = {}): ExecutionOutcome {
   };
 }
 
-/** A deps set with a scripted bridge outcome and a spy on the submit/emit calls. */
+/** A deps set with a scripted signing outcome and a spy on the submit/emit calls. */
 function deps(overrides: Partial<SigningDeps> & { bridge?: BridgeOutcome } = {}) {
   const calls = { submit: [] as string[], emitted: [] as { hash: string; url: string }[] };
   const invoke: InvokeFn = async <T>(_command: string, _args?: Record<string, unknown>) =>
@@ -110,7 +110,7 @@ test("integrity: a signature that did not verify is a labelled failure", async (
   assert.equal(outcome.label, "Signature check failed");
 });
 
-test("timeout: the bridge timing out is a labelled failure", async () => {
+test("timeout: the wallet timing out is a labelled failure", async () => {
   const { deps: d } = deps({ bridge: { ok: false, code: "timeout", message: "no signature" } });
   const outcome = await signAndSubmit(executed(), d);
   assert.equal(outcome.label, "Wallet timed out");
@@ -153,7 +153,7 @@ test("a generic submission failure is labelled but never throws", async () => {
   assert.equal(outcome.txHash, undefined);
 });
 
-test("a rejected bridge_sign command is a labelled failure", async () => {
+test("a rejected wallet_sign command is a labelled failure", async () => {
   const { deps: d } = deps({
     invoke: async () => {
       throw new Error("gate unreachable");
@@ -211,7 +211,7 @@ test("isBridgeSigned rejects a malformed success payload (MINOR-1)", () => {
   assert.equal(isBridgeSigned({ ok: true, signedXdr: SIGNED, signerAddress: "G", txHash: TX_HASH }), true);
 });
 
-test("a malformed bridge success is a labelled failure, never a throw", async () => {
+test("a malformed signing success is a labelled failure, never a throw", async () => {
   const { deps: d, calls } = deps({
     bridge: { ok: true, signerAddress: "G" } as unknown as BridgeOutcome,
   });

@@ -25,6 +25,15 @@ export interface AnchorScenario {
   sepScope: "SEP-6 only";
   /** Steps this scenario is allowed to exercise, in order. */
   allowed: string[];
+  /** Off-chain currency this scenario quotes in SEP-38 (e.g. "TRY", "USD"). */
+  fiat?: string;
+  /** On-chain asset code this scenario moves by default (e.g. "USDC", "SRT"). */
+  assetCode?: string;
+  /**
+   * SEP-38 delivery method for this scenario's quotes. Omitted when the anchor
+   * accepts a quote without one (the SDF test anchor quotes with no method).
+   */
+  sep38DeliveryMethod?: string;
   notes: string;
 }
 
@@ -32,6 +41,38 @@ export interface AnchorScenario {
 export const TR_MOCK_HOME_DOMAIN = "tr-mock-anchor.fly.dev";
 /** The one host that is the labelled NON-TR fallback (SDF test anchor). */
 export const SDF_TEST_ANCHOR_HOME_DOMAIN = "testanchor.stellar.org";
+
+/**
+ * TEST DATA — testnet SDF test anchor only. Clearly-fake SEP-12 customer used
+ * ONLY for the Stellar SDF test anchor (`testanchor.stellar.org`), which is a
+ * reference server explicitly built for synthetic test data. The base fields are
+ * for account KYC; the rest are the per-transaction identity/bank fields that
+ * anchor asks for on a specific deposit/withdraw order. These values are
+ * deliberately obvious fakes (see docs/anchor-sdf-flow.md) and must never be
+ * replaced by real personal data, read from the user's files, or reused for any
+ * other anchor or domain.
+ */
+export const SDF_DEMO_CUSTOMER: Readonly<Record<string, string>> = {
+  first_name: "Demo",
+  last_name: "User",
+  email_address: "demo@polaris.invalid",
+  address: "1 Test Street, Testville",
+  birth_date: "1990-01-01",
+  id_type: "national_id",
+  id_country_code: "US",
+  id_issue_date: "2015-01-01",
+  id_expiration_date: "2035-01-01",
+  id_number: "TEST-0000001",
+  bank_account_number: "000123456789",
+  bank_account_type: "checking",
+  bank_number: "000111222",
+  bank_branch_number: "001",
+};
+
+/** Demo SEP-12 fields for a home domain; empty for any host that is not the SDF test anchor. */
+export function demoCustomerFields(homeDomain: string): Record<string, string> {
+  return homeDomain === SDF_TEST_ANCHOR_HOME_DOMAIN ? { ...SDF_DEMO_CUSTOMER } : {};
+}
 
 const BLOCKED_TLDS = ["localhost", "local", "internal", "intranet", "lan", "home", "corp", "private", "arpa", "onion", "invalid"];
 /** Plain lowercase DNS labels only: no uppercase, no unicode homoglyphs. */
@@ -47,16 +88,22 @@ const KNOWN: Record<string, Omit<AnchorScenario, "allowed"> & { allowed: readonl
     label: "TR path — SEP-6 only (SEP-24 prohibited in Turkey)",
     sepScope: "SEP-6 only",
     allowed: ["sep1.discovery", "sep10.login", "sep6.info", "sep12.customer", "sep38.quote", "sep6.deposit", "sep6.withdraw"],
+    fiat: "TRY",
+    assetCode: "USDC",
+    sep38DeliveryMethod: "bank_account",
     notes:
       "The Turkish path uses the programmatic SEP-6 flow only. SEP-24's hosted/interactive flow is prohibited under MASAK rules and is never read, configured or demoed here.",
   },
   [SDF_TEST_ANCHOR_HOME_DOMAIN]: {
     id: "sdf-test",
-    label: "NON-TR test scenario (SDF test anchor) — discovery + SEP-10 login + SEP-6 info only; deposit stops at SEP-12 KYC",
+    label:
+      "NON-TR test scenario (Stellar SDF test anchor) — full SEP-6 deposit/withdraw loop with clearly-fake SEP-12 demo KYC (USD/SRT)",
     sepScope: "SEP-6 only",
-    allowed: ["sep1.discovery", "sep10.login", "sep6.info"],
+    allowed: ["sep1.discovery", "sep10.login", "sep6.info", "sep12.customer", "sep38.quote", "sep6.deposit", "sep6.withdraw"],
+    fiat: "USD",
+    assetCode: "SRT",
     notes:
-      "NON-TR comparison only, never presented as the Turkish path. A deposit here stops at SEP-12 KYC: the anchor requires first_name, last_name and email_address. This check never attempts a deposit or withdraw.",
+      "NON-TR comparison only, never presented as the Turkish path. SEP-12 sends ONLY clearly-fake TEST data: the base demo customer (first_name, last_name, email_address) plus the anchor's requested per-transaction identity/bank fields; any field we do not know still stops with KycRequiredError. Quotes are USD (the anchor does not quote TRY) and the default asset is SRT (its demo asset, deposit type bank_account).",
   },
 };
 

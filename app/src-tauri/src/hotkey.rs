@@ -209,10 +209,34 @@ fn driver_loop(app: AppHandle, receiver: Receiver<Input>, trusted: Arc<AtomicBoo
     }
 }
 
+/// The actions that survive while the app is rehearsing onboarding: none.
+///
+/// Extracted from [`apply`] so the "given rehearsing, which actions survive"
+/// decision is a pure, unit-testable seam rather than being buried in a
+/// function that needs an [`AppHandle`]. While the onboarding window is up the
+/// first run must have no real side effects (see
+/// [`crate::onboarding::is_rehearsing`]), so both `Start` and `Stop` are
+/// dropped before they can emit an event or touch the capture engine.
+fn surviving_actions(actions: Vec<Action>, rehearsing: bool) -> Vec<Action> {
+    if rehearsing {
+        Vec::new()
+    } else {
+        actions
+    }
+}
+
 /// Applies latch transitions to the capture engine and mirrors them on the
 /// event stream. `start` is idempotent in the engine; the latch only emits an
 /// action on a real transition, so Down/Up stay balanced.
 fn apply(app: &AppHandle, actions: Vec<Action>) {
+    if actions.is_empty() {
+        return;
+    }
+    // Rehearsal: do nothing at all for a `Start` or a `Stop`, so no event is
+    // emitted and the capture engine, timing trace and downstream pipeline
+    // never see a rehearsal gesture. The early return above keeps this window
+    // query off the driver's idle ticks.
+    let actions = surviving_actions(actions, crate::onboarding::is_rehearsing(app));
     if actions.is_empty() {
         return;
     }
@@ -246,5 +270,25 @@ mod tests {
     fn fallback_shortcut_is_control_option_space() {
         let expected = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::Space);
         assert_eq!(shortcut(), expected);
+    }
+
+    #[test]
+    fn rehearsal_drops_every_action() {
+        assert!(surviving_actions(Vec::new(), true).is_empty());
+        assert!(surviving_actions(vec![Action::Start], true).is_empty());
+        assert!(surviving_actions(vec![Action::Stop], true).is_empty());
+        assert!(surviving_actions(vec![Action::Start, Action::Stop], true).is_empty());
+    }
+
+    #[test]
+    fn normal_mode_keeps_every_action() {
+        assert_eq!(
+            surviving_actions(vec![Action::Start], false),
+            vec![Action::Start]
+        );
+        assert_eq!(
+            surviving_actions(vec![Action::Start, Action::Stop], false),
+            vec![Action::Start, Action::Stop]
+        );
     }
 }

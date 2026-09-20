@@ -1,9 +1,8 @@
+import "@/polyfills";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
 import App from "@/App";
-import { PanelRoot } from "@/panels/PanelRoot";
-import { parsePanelRoute } from "@/panels/panelRoutes";
 import { webLog } from "@/lib/weblog";
 import "@/index.css";
 
@@ -37,12 +36,9 @@ window.addEventListener("unhandledrejection", (event) => {
   webLog("error", `unhandled rejection: ${describe(event.reason)}`, true);
 });
 
-// Every window loads this same bundle; Rust selects the window with the URL hash
-// (`app/src-tauri/src/panels.rs`). No hash is the notch overlay, unchanged.
-const route = parsePanelRoute(window.location.hash);
-
+// The notch overlay is the only window; there is no hash routing.
 createRoot(container).render(
   <StrictMode>
-    {route.kind === "panel" ? <PanelRoot panel={route.panel} /> : <App />}
+    <App />
   </StrictMode>,
 );

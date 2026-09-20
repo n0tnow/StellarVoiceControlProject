@@ -28,6 +28,8 @@ export const ASSET_DECIMALS = suggest.DEFAULT_ASSET_DECIMALS;
 /** The Horizon payment shape, narrowed to the fields this module reads. */
 export interface HorizonPaymentRecord {
   id: string;
+  /** Horizon's stable paging token, used as the `cursor` for the next page. */
+  paging_token?: string;
   type?: string;
   transaction_hash?: string;
   created_at?: string;
@@ -57,9 +59,13 @@ export type AccountFetchResult =
   | { status: "not_found" }
   | { status: "offline"; message: string };
 
-/** The payments endpoint's outcome. `not_found` is an unfunded account (404). */
+/**
+ * The payments endpoint's outcome. `not_found` is an unfunded account (404).
+ * `nextCursor` (optional, for callers that paginate) is the paging token of the
+ * last record, or `null` on the last page.
+ */
 export type PaymentsFetchResult =
-  | { status: "ok"; payments: HorizonPaymentRecord[] }
+  | { status: "ok"; payments: HorizonPaymentRecord[]; nextCursor?: string | null }
   | { status: "not_found" }
   | { status: "offline"; message: string };
 
@@ -173,14 +179,17 @@ export async function fetchOwnerAccount(
 export async function fetchOwnerPayments(
   horizonUrl: string,
   ownerAddress: string,
-  deps: { fetchImpl?: FetchLike; limit?: number } = {},
+  deps: { fetchImpl?: FetchLike; limit?: number; cursor?: string } = {},
 ): Promise<PaymentsFetchResult> {
   const fetchImpl = deps.fetchImpl ?? (globalThis.fetch as FetchLike | undefined);
   if (!fetchImpl) return { status: "offline", message: "no fetch implementation is available" };
   const limit = Math.min(200, Math.max(1, Math.floor(deps.limit ?? 10)));
+  // A cursor pages backwards from a known record; the first page omits it so the
+  // request stays identical to the pre-pagination call.
+  const cursor = deps.cursor && deps.cursor.length > 0 ? `&cursor=${encodeURIComponent(deps.cursor)}` : "";
   const url =
     `${horizonUrl.replace(/\/$/, "")}/accounts/${ownerAddress}/payments` +
-    `?order=desc&limit=${limit}&include_failed=false`;
+    `?order=desc&limit=${limit}&include_failed=false${cursor}`;
   try {
     const response = await fetchImpl(url, { headers: { accept: "application/json" } });
     if (response.status === 404) return { status: "not_found" };
@@ -188,7 +197,13 @@ export async function fetchOwnerPayments(
     const body = (await response.json()) as {
       _embedded?: { records?: HorizonPaymentRecord[] };
     };
-    return { status: "ok", payments: body._embedded?.records ?? [] };
+    const payments = body._embedded?.records ?? [];
+    // A short page means Horizon has nothing older; a full one offers its tail
+    // as the cursor. Missing tokens fall back to the last record's id.
+    const tail = payments[payments.length - 1];
+    const nextCursor =
+      payments.length >= limit && tail ? (tail.paging_token ?? tail.id ?? null) : null;
+    return { status: "ok", payments, nextCursor };
   } catch (error) {
     return { status: "offline", message: errorLine(error) };
   }

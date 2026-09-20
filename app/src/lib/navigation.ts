@@ -2,61 +2,49 @@
  * Voice navigation on the shell side (NAV).
  *
  * The agent's `navigate` tool produces a read-only `NavigationRequest`; this
- * module maps its target to a surface and owns the one impure action (opening a
- * panel window). Notch targets (History / Tasks / Rules / Wallet) are handled
- * by `ShellSurface`, which owns the notch's page controller; `applyNavigation`
- * only opens the separate panel windows. It is Tauri-free so the mapping is
- * unit-tested (`navigation.test.ts`), and the `open_panel` call is imported
- * lazily so importing this module never pulls in the Tauri API.
+ * module maps its target to the notch page that now owns it. Every target lives
+ * as a page inside the notch — the old separate panel windows are gone — so
+ * `ShellSurface`, which owns the notch's page controller, applies the mapping,
+ * and `applyNavigation` opens nothing.
+ *
+ * It is Tauri-free so the mapping is unit-tested (`navigation.test.ts`).
  */
 import type { NavigationRequest, NavigationTarget } from "@polaris/interfaces";
 
 import type { NotchPage } from "@/notch/notchPage";
-import type { PanelName } from "@/panels/panelRoutes";
 
-/** Targets that live as a page inside Fatih's expandable notch. */
+/**
+ * Every target's notch page. Several former panels were folded into the page
+ * that already covered their subject (Schedules/Suggestions → Tasks, Security →
+ * Rules, Anchor/P2P → Trade, Privacy/Debug → Settings).
+ */
 const NOTCH_PAGES: Readonly<Partial<Record<NavigationTarget, NotchPage>>> = {
   wallet: "wallet",
-  rules: "rules",
-  tasks: "tasks",
   history: "history",
-};
-
-/** Targets that live as their own panel window. Names match the Rust allow-list. */
-const PANELS: Readonly<Partial<Record<NavigationTarget, PanelName>>> = {
-  security: "security",
-  schedules: "schedules",
-  suggestions: "suggestions",
-  anchor: "anchor",
-  p2p: "p2p",
-  privacy: "privacy",
+  tasks: "tasks",
+  schedules: "tasks",
+  suggestions: "tasks",
+  rules: "rules",
+  security: "rules",
+  anchor: "trade",
+  p2p: "trade",
   settings: "settings",
-  debug: "debug",
+  privacy: "settings",
+  debug: "settings",
 };
 
-/** The notch page for a target, or `null` when it is not a notch surface. */
+/**
+ * The notch page for a target. Every target has one except `close`, which
+ * collapses the panel instead (handled by `ShellSurface`); `null` means "not a
+ * page".
+ */
 export function notchPageFor(target: NavigationTarget): NotchPage | null {
   return NOTCH_PAGES[target] ?? null;
 }
 
-/** The panel window for a target, or `null` when it is not a panel surface. */
-export function panelFor(target: NavigationTarget): PanelName | null {
-  return PANELS[target] ?? null;
-}
-
 /**
- * Performs the shell actions a navigation request needs that are not the
- * notch's page controller. A notch page is a no-op here (the notch owns it); a
- * panel target opens its window and a failure is logged, never thrown — a
- * navigation must not fail a turn.
+ * The shell seam `App` calls after a turn. Every navigation target is a notch
+ * page now (`ShellSurface` selects it), so there is no window to open and this
+ * is intentionally a no-op. Kept so the call site and the seam stay in place.
  */
-export async function applyNavigation(request: NavigationRequest): Promise<void> {
-  const panel = panelFor(request.target);
-  if (!panel) return;
-  try {
-    const { openPanel } = await import("@/lib/panels");
-    await openPanel(panel);
-  } catch (error) {
-    console.warn(`open_panel(${panel}) failed`, error);
-  }
-}
+export async function applyNavigation(_request: NavigationRequest): Promise<void> {}

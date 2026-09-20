@@ -410,3 +410,11 @@ Verified 2026-09-20 against `CBMXLTXS76…`: offer `1` went `Open` -> `Accepted`
 `OfferSettled` events). Balances: seller `2000.0001000` -> `1900.0001000`, escrow
 `100` -> `0`, buyer `0` -> `100` W8USD. **Not exercised on-chain:** reclaim/cancel,
 multi-offer paging, and the 7-day TTL cap (covered by the 20 host tests).
+
+### Known limitations from the independent escrow review
+
+[`docs/reviews/w8a-p2p-escrow-review.md`](../docs/reviews/w8a-p2p-escrow-review.md) — APPROVE WITH CORRECTIONS; no BLOCKER/MAJOR. Caveats to state, not hide:
+- **R-1/R-2 — archival/restore of untouched offers.** After ~120 d idle the `NextOfferId`/`Offer` entry can archive; `create_offer` may reuse an id and `get_offer`/`reclaim` return `OfferNotFound` until restored with rent (Protocol-23 auto-restore **unverified**).
+- **R-3 — token error codes.** Token failures surface as SAC codes (e.g. `#10`), not the escrow's `200+` block; clients range-route and enforce SEP-41 themselves.
+- **R-4 — no arbiter.** The seller alone decides fiat arrived; after `pay_deadline` the seller may `reclaim` even if the buyer paid, and any address can `accept` and lock the seller's funds for up to `PAY_WINDOW` (1800 s). The order-book UI **must** surface this.
+- **R-5 — id-space cost.** `create`+`cancel` raises the client sweep cost `ceil(next/20)`; same accepted tradeoff as guard F-02.

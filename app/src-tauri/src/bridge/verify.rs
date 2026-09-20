@@ -1,6 +1,6 @@
 //! Parse-free verification of a returned Stellar transaction envelope (W4b/W5a).
 //!
-//! The bridge does not trust the browser page's own verification (that is only
+//! The app does not trust the signer's own verification (that is only
 //! defence in depth): Rust re-checks the envelope independently before an
 //! outcome is reported as `ok`. No XDR crate is needed because a v1
 //! `TransactionEnvelope` is
@@ -297,8 +297,8 @@ pub fn parse_envelope(full: &[u8]) -> Result<ParsedEnvelope<'_>, VerifyError> {
 }
 
 /// Parses an **unsigned** v1 transaction envelope: the general parser plus the
-/// requirement that the signature list is empty. This is what the normal
-/// `bridge_sign` flow releases from the gate.
+/// requirement that the signature list is empty. This is what the `wallet_sign`
+/// flow releases from the gate.
 pub fn parse_unsigned(full: &[u8]) -> Result<UnsignedEnvelope<'_>, VerifyError> {
     let parsed = parse_envelope(full)?;
     if !parsed.signatures.is_empty() {
@@ -479,7 +479,7 @@ pub fn verify_challenge(
 #[cfg(test)]
 pub(crate) mod tests_support {
     use super::*;
-    use ed25519_dalek::{Signer, SigningKey};
+    use ed25519_dalek::SigningKey;
 
     /// The real unsigned testnet payment used across the bridge tests.
     pub const FIXTURE_XDR: &str = "AAAAAgAAAAATbtf1udEZpCZtcTNdPhLGz6CIeDA93WpU1JU+IcOmAQAAAGQAAAAAAAAAAQAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAQAAAAB12BBgnCJAQgcNtjAZbs7JSMucpHJJ3WuJHvwK+gBE6AAAAAAAAAAAAJiWgAAAAAAAAAAA";
@@ -487,38 +487,8 @@ pub(crate) mod tests_support {
     #[allow(dead_code)] // Used by the module's own tests and the JS vector.
     pub const FIXTURE_HASH: &str =
         "28db72cef390f4490ce4b4d05ae67c90aefa10d9e11437e14476830f68bfde46";
-    /// The fixture's source key (`GAJW…`) as raw bytes.
-    pub const OWNER_KEY: [u8; 32] = [
-        0x13, 0x6e, 0xd7, 0xf5, 0xb9, 0xd1, 0x19, 0xa4, 0x26, 0x6d, 0x71, 0x33, 0x5d, 0x3e,
-        0x12, 0xc6, 0xcf, 0xa0, 0x88, 0x78, 0x30, 0x3d, 0xdd, 0x6a, 0x54, 0xd4, 0x95, 0x3e,
-        0x21, 0xc3, 0xa6, 0x01,
-    ];
     /// The test network passphrase.
     pub const PASSPHRASE: &str = "Test SDF Network ; September 2015";
-
-    /// Signs `unsigned_base64` with the key derived from `seed`, producing an
-    /// envelope with exactly one `DecoratedSignature`.
-    pub fn sign_with(unsigned_base64: &str, seed: [u8; 32]) -> String {
-        let key = SigningKey::from_bytes(&seed);
-        let full = decode_envelope(unsigned_base64).unwrap();
-        let parsed = parse_unsigned(&full).unwrap();
-        let hash = tx_hash(parsed.body, PASSPHRASE);
-        let signature = key.sign(&hash);
-        let hint = &key.verifying_key().to_bytes()[28..32];
-        let mut out = Vec::with_capacity(full.len() + 76);
-        out.extend_from_slice(&full[..full.len() - 4]);
-        out.extend_from_slice(&SIGNATURE_COUNT_ONE);
-        out.extend_from_slice(hint);
-        out.extend_from_slice(&SIGNATURE_LEN);
-        out.extend_from_slice(&signature.to_bytes());
-        BASE64.encode(out)
-    }
-
-    /// Signs the module's fixture with `seed`.
-    pub fn sign_fixture(seed: [u8; 32]) -> String {
-        sign_with(FIXTURE_XDR, seed)
-    }
-
     /// Rewrites the fixture's source key (offset 8) and sequence (offset 44) and
     /// re-encodes it, so a test can own the envelope with any keypair.
     pub fn fixture_with_source(source: [u8; 32], sequence: i64) -> String {

@@ -142,6 +142,7 @@ describe("anchor:check live mode", () => {
     expect(statusOf(tr.steps, "SEP-1 discovery")).toBe("PASS");
     expect(statusOf(tr.steps, "SEP-10 login")).toBe("PASS");
     const sdf = report.results.find((r) => r.homeDomain === SDF)!;
+    expect(sdf.finalLine).toContain("clearly-fake TEST data");
     expect(sdf.finalLine).toContain("first_name, last_name, email_address");
     const text = lines.join("\n");
     expect(text).toContain("Anchor check (LIVE)");
@@ -169,9 +170,9 @@ describe("anchor:check live mode", () => {
     expect(report.ok).toBe(false);
     const sdf = report.results[0]!;
     expect(statusOf(sdf.steps, "SEP-1 discovery")).toBe("FAIL");
-    expect(sdf.finalLine).toContain("Deposit is not attempted");
+    expect(sdf.finalLine).toContain("per-transaction identity fields");
     expect(sdf.finalLine).toContain("first_name, last_name, email_address");
-    expect(lines.join("\n")).toContain("Deposit is not attempted");
+    expect(lines.join("\n")).toContain("per-transaction identity fields");
   });
 
   it("N1: never leaks the JWT — raw signature sentinel and decoded payload marker absent from stdout, errors and JSON", async () => {

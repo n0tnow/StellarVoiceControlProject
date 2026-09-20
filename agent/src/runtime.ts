@@ -18,8 +18,11 @@ import { AnthropicLlm } from "./llm/anthropic.ts";
 import { OpenAiCompatibleLlm } from "./llm/openai.ts";
 import { depositTool, withdrawTool } from "./tools/anchor.ts";
 import { getBalanceTool } from "./tools/balance.ts";
+import { deleteContactTool, listContactsTool, saveContactTool } from "./tools/contact.ts";
 import { navigateTool } from "./tools/navigate.ts";
 import { sendPaymentTool } from "./tools/payment.ts";
+import { setApprovalRuleTool } from "./tools/rule.ts";
+import { buyAssetTool, sellAssetTool } from "./tools/sell.ts";
 import { cancelScheduleTool, schedulePaymentTool } from "./tools/schedule.ts";
 import { p2pAcceptTool, p2pConfirmTool, p2pOfferTool } from "./tools/p2p.ts";
 import { createToolRegistry, type ToolRegistry } from "./tools/registry.ts";
@@ -36,6 +39,8 @@ import { createToolRegistry, type ToolRegistry } from "./tools/registry.ts";
  * `get_balance` (T1) is the one read-only tool: it returns balances, never an
  * `Intent`, and the loop speaks its `toSpeech` sentence. `navigate` (NAV) is the
  * other read-only tool: it returns a `NavigationRequest`, never an `Intent`.
+ * W15f adds the contact tools (`save_contact`, `list_contacts`,
+ * `delete_contact`): read-only, no approval, no intent.
  */
 export function createDefaultRegistry(): ToolRegistry {
   return createToolRegistry()
@@ -48,7 +53,18 @@ export function createDefaultRegistry(): ToolRegistry {
     .register(cancelScheduleTool)
     .register(p2pOfferTool)
     .register(p2pAcceptTool)
-    .register(p2pConfirmTool);
+    .register(p2pConfirmTool)
+    // voice-dialog: rules by voice and the sell/buy routing layer. `set_approval_rule`
+    // only proposes a `guard_policy` rule; `sell_asset`/`buy_asset` map onto the
+    // existing withdraw/p2p_offer/deposit/p2p_accept executors.
+    .register(setApprovalRuleTool)
+    .register(sellAssetTool)
+    .register(buyAssetTool)
+    // W15f: the address book by voice or typed prompt. All read-only (no
+    // approval, no intent); the shell injects `ToolContext.contacts`.
+    .register(saveContactTool)
+    .register(listContactsTool)
+    .register(deleteContactTool);
 }
 
 export interface AgentRuntime {

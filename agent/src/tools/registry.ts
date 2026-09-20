@@ -1,5 +1,6 @@
 import type { Intent, NavigationRequest } from "@polaris/interfaces";
 import type { BalanceReader } from "./balance.ts";
+import type { ContactStore } from "./contact.ts";
 
 /**
  * Everything a tool is allowed to touch. Kept deliberately small in the skeleton;
@@ -32,6 +33,13 @@ export interface ToolContext {
    * read anything and says so instead of guessing.
    */
   readBalances?: BalanceReader;
+  /**
+   * The saved recipients, for `save_contact`/`list_contacts`/`delete_contact`
+   * (W15f). Injected because the agent core never touches the Rust store; the
+   * app binds it to the `contacts_*` commands. Absent means the tools say they
+   * cannot read or write the book instead of guessing.
+   */
+  contacts?: ContactStore;
 }
 
 /**
@@ -73,6 +81,13 @@ export interface AgentTool<Input = unknown, Output = unknown> {
    * chain.
    */
   toNavigation?(output: Output): NavigationRequest | undefined;
+  /**
+   * Optional read-only branch of an **approval-gated** tool (voice-dialog): for
+   * an input that should open a screen instead of building an intent (e.g. buying
+   * peer-to-peer before an offer id is known). Checked before `toIntent`; the
+   * intent is not built when a navigation is returned.
+   */
+  toNavigationFor?(input: Input, ctx: ToolContext): NavigationRequest | undefined;
 }
 
 /** Chain tools take an `Intent` (see docs/interfaces.md §2). */

@@ -106,6 +106,41 @@ const OWNER_MISSING = "POLARIS_OWNER_ADDRESS is not set";
 let configured = false;
 let configuring: Promise<void> | undefined;
 
+/**
+ * The live alias book the payment tool resolves recipients against (shared by
+ * reference with the configured deps), so a typed address can be added to it.
+ */
+let paymentBook: Record<string, { address: string; network: "testnet" }> | undefined;
+
+// A contact saved (or removed) after start must be payable without a restart:
+// forget the memoized config so the next turn rebuilds the alias book from the
+// current contacts.
+if (typeof window !== "undefined") {
+  window.addEventListener("polaris:contacts-changed", () => {
+    configured = false;
+    configuring = undefined;
+  });
+}
+
+/**
+ * Lets a person pay an address they typed themselves: registers it in the alias
+ * book under a short deterministic name and returns that name for the intent.
+ * The voice agent never uses this — its recipients must still be saved aliases,
+ * so a hallucinated address cannot be paid. The approval card always shows the
+ * full address, and the owner path still needs Touch ID.
+ */
+export async function recipientForTypedAddress(address: string): Promise<string> {
+  await ensurePaymentsConfigured();
+  const { parseAliasBook } = await import("@polaris/stellar");
+  const trimmed = address.trim();
+  const name = `to-${trimmed.slice(-24).toLowerCase()}`;
+  const { book } = parseAliasBook({ [name]: { address: trimmed, network: "testnet" } });
+  const entry = book[name];
+  if (!entry || !paymentBook) throw new Error("could not use that address");
+  paymentBook[name] = entry;
+  return name;
+}
+
 /** The env `alias -> address` map as alias-book entries (testnet only). */
 function envAliasEntries(
   aliases: Record<string, string>,
@@ -139,6 +174,7 @@ async function ensurePaymentsConfigured(): Promise<void> {
       ...committedAliases,
       ...envAliasEntries(config.aliases),
     });
+    paymentBook = book;
     configurePayments(
       defaultPaymentDeps({
         ownerAddress: config.ownerAddress,
@@ -152,7 +188,12 @@ async function ensurePaymentsConfigured(): Promise<void> {
     // wallet-only Rust command and everything else to the Touch ID pipeline.
     const { anchor } = await import("@polaris/stellar");
     const { createAnchorSigner } = await import("@/lib/anchor");
-    anchor.configureAnchor({ signer: createAnchorSigner() });
+    // BANK-SIM: the anchor scenario is selectable via POLARIS_ANCHOR_HOME_DOMAIN
+    // (read in Rust; default the SDF test anchor). Keeps the voice and panel
+    // flows on the same home domain.
+    const { getBankAnchorConfig } = await import("@/lib/bank");
+    const anchorConfig = await getBankAnchorConfig();
+    anchor.configureAnchor({ signer: createAnchorSigner(), homeDomain: anchorConfig.homeDomain });
     configured = true;
   })();
   try {
@@ -198,6 +239,27 @@ export async function executeApprovedIntent(
   intent: Intent,
   signingDeps?: Partial<SigningDeps>,
 ): Promise<SubmittedOutcome> {
+  // W11b: a spoken spending rule now opens the batch approval card and, on ONE
+  // Touch ID, applies the ordered owner transactions (`approve` → `set_rule` →
+  // `set_executor`, executor last). The Security panel's own `guard_policy`
+  // intents carry no `rule`, so they keep their existing path.
+  if (intent.kind === "guard_policy" && intent.rule) {
+    const { runGuardPolicySetup } = await import("@/lib/autopayWiring");
+    const outcome = await runGuardPolicySetup(intent);
+    logFailure(outcome);
+    return outcome;
+  }
+  // W11b: when auto-pay is armed, a small payment to a saved contact is settled
+  // by the executor key with no card (fail closed: any doubt returns `null` and
+  // the owner path below runs, so we never silently pay outside the mandate).
+  if (intent.kind === "send") {
+    const { tryAutoPaySend } = await import("@/lib/autopayWiring");
+    const auto = await tryAutoPaySend(intent);
+    if (auto) {
+      logFailure(auto);
+      return auto;
+    }
+  }
   const deps: SigningDeps = {
     ...defaultSigningDeps,
     ...signingDeps,
@@ -224,10 +286,12 @@ export async function executeApprovedIntent(
   // W5b/M1: deposit/withdraw are multi-step anchor flows, not one tool XDR.
   // Drive the same `AnchorSession` the panel uses, so the SEP-10 challenge is
   // signed wallet-only and every value-moving step goes through the Touch ID
-  // pipeline. This also keeps a sequence-0 challenge out of `bridge_sign`.
+  // pipeline. This also keeps a sequence-0 challenge out of `wallet_sign`.
   if (intent.kind === "deposit" || intent.kind === "withdraw") {
-    const { runAnchorIntent } = await import("@/lib/anchor");
-    return runAnchorIntent(intent);
+    // BANK-SIM: deposit/withdraw now drive the demo bank ↔ anchor automation,
+    // which includes the on-chain steps (through the same Touch ID pipeline).
+    const { runBankIntent } = await import("@/lib/bankAnchor");
+    return runBankIntent(intent);
   }
   const chainTools = {
     send: sendPayment,

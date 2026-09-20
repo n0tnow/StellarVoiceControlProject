@@ -3,8 +3,6 @@ import { test } from "node:test";
 
 import {
   approvalSelftestResult,
-  bridgeSelftestResult,
-  buildSelfTestXdr,
   mapHealthToResult,
   summarizeNetwork,
   type NetworkFacts,
@@ -69,10 +67,11 @@ test("network fail: a malformed owner address is caught", () => {
   assert.match(result.detail, /valid G/);
 });
 
-test("network fail: an unresolvable recipient alias names the alias", () => {
-  const result = summarizeNetwork(facts({ recipientResolved: false }));
-  assert.equal(result.status, "fail");
-  assert.match(result.detail, /acc2/);
+test("network ok: an empty alias book is not a failure (typed addresses are payable)", () => {
+  const result = summarizeNetwork(
+    facts({ aliasBookResolved: false, recipientResolved: false }),
+  );
+  assert.equal(result.status, "ok");
 });
 
 test("network fail: Horizon unreachable and account missing are distinct messages", () => {
@@ -105,52 +104,4 @@ test("a cancelled Touch ID self-test is a warn, not a fail", () => {
   assert.equal(approvalSelftestResult(health("warn", "cancelled")).status, "warn");
   assert.equal(approvalSelftestResult(health("ok")).status, "ok");
   assert.equal(approvalSelftestResult(health("fail", "hardware")).status, "fail");
-});
-
-test("bridge self-test ok names the throwaway hash and states nothing was submitted", () => {
-  const result = bridgeSelftestResult({ ok: true, txHash: "abc" });
-  assert.equal(result.status, "ok");
-  assert.match(result.detail, /abc/);
-  assert.match(result.detail, /nothing was submitted/);
-});
-
-test("each bridge failure code maps to a human label", () => {
-  const codes = [
-    "rejected",
-    "address_mismatch",
-    "network_mismatch",
-    "wallet_unavailable",
-    "not_authorized",
-    "integrity",
-    "timeout",
-    "error",
-  ];
-  for (const code of codes) {
-    const result = bridgeSelftestResult({ ok: false, code, message: "why" });
-    assert.equal(result.status, "fail");
-    assert.ok(result.detail.length > 0);
-    assert.match(result.detail, /why/);
-  }
-});
-
-test("buildSelfTestXdr produces a sequence-0 native payment from the owner to itself", async () => {
-  const { TransactionBuilder, Transaction, Asset } = await import("@stellar/stellar-sdk");
-  const { TESTNET } = await import("@polaris/stellar");
-
-  const xdr = await buildSelfTestXdr(OWNER);
-  const tx = TransactionBuilder.fromXDR(xdr, TESTNET.networkPassphrase);
-  assert.ok(tx instanceof Transaction);
-  assert.equal(tx.source, OWNER);
-  assert.equal(tx.sequence, "0");
-  assert.equal(tx.operations.length, 1);
-  const op = tx.operations[0];
-  assert.equal(op?.type, "payment");
-  if (op?.type === "payment") {
-    assert.equal(op.destination, OWNER);
-    assert.equal(op.amount, "1.0000000");
-    assert.ok(op.asset.equals(Asset.native()));
-  }
-  // An unsigned envelope: no signatures, so it is only safe to hand to the
-  // bridge self-test, never to submit.
-  assert.equal(tx.signatures.length, 0);
 });

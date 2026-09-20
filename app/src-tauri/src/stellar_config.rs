@@ -29,6 +29,9 @@ pub const DEFAULT_RPC_URL: &str = "https://soroban-testnet.stellar.org";
 pub const DEFAULT_HORIZON_URL: &str = "https://horizon-testnet.stellar.org";
 pub const DEFAULT_NETWORK_PASSPHRASE: &str = "Test SDF Network ; September 2015";
 
+/// The embedded in-app wallet is the only signer (step W10).
+pub const SIGNER_EMBEDDED: &str = "embedded";
+
 /// The non-secret chain configuration the webview is allowed to see.
 /// Mirrors `StellarConfig` in `@polaris/interfaces` (field names byte-identical).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -38,8 +41,12 @@ pub struct StellarConfig {
     pub rpc_url: String,
     pub horizon_url: String,
     pub network_passphrase: String,
-    /// The sender (owner) wallet, or `None` when unset/invalid.
+    /// The sender (owner) wallet, or `None` when unset/invalid. When an embedded
+    /// wallet is active this is that wallet's address, overriding
+    /// `POLARIS_OWNER_ADDRESS`.
     pub owner_address: Option<String>,
+    /// Which signer the shell uses: always `embedded`.
+    pub signer: String,
     /// Alias -> `G...` address, from `POLARIS_ALIASES` only (the committed
     /// `aliases.json` is merged on the TypeScript side, where it already lives).
     pub aliases: BTreeMap<String, String>,
@@ -93,8 +100,7 @@ fn crc16_xmodem(data: &[u8]) -> u16 {
 /// single-character typo that keeps the charset, deferring the failure to a
 /// Horizon `loadAccount`; the checksum catches it here (fail-closed).
 ///
-/// `pub(crate)` because the bridge (W4b) uses the same validation for the owner
-/// address in its health check.
+/// `pub(crate)` because the wallet reuses the same validation.
 pub(crate) fn is_public_key(value: &str) -> bool {
     if value.len() != 56 {
         return false;
@@ -112,8 +118,9 @@ pub(crate) fn is_public_key(value: &str) -> bool {
 }
 
 /// The alias-name charset from `stellar/src/payments/aliases.ts` (C3):
-/// `[a-z][a-z0-9_-]{0,31}`.
-fn is_alias_name(name: &str) -> bool {
+/// `[a-z][a-z0-9_-]{0,31}`. `pub(crate)` so the contacts store reuses the same
+/// charset instead of duplicating it (W10b).
+pub(crate) fn is_alias_name(name: &str) -> bool {
     if name.is_empty() || name.len() > 32 {
         return false;
     }
@@ -154,10 +161,74 @@ pub fn parse_aliases(raw: &str) -> BTreeMap<String, String> {
     aliases
 }
 
+/// `POLARIS_ASSET_DECIMALS`: a `hex64=decimals,...` allow-list mapping an asset
+/// SAC contract hash to its decimals. The executor signer scales its whole-unit
+/// amount cap by the matched asset's decimals and refuses an asset it does not
+/// find here, so the cap is never silently calibrated for the wrong scale.
+pub const ENV_ASSET_DECIMALS: &str = "POLARIS_ASSET_DECIMALS";
+/// The largest accepted `decimals` (mirrors the SAC limit).
+const ASSET_DECIMALS_MAX: u32 = 18;
+
+/// Parses `POLARIS_ASSET_DECIMALS`, dropping malformed entries. A dropped entry
+/// means "unknown asset" to the signer, which is a fail-closed refusal.
+pub fn parse_asset_decimals(raw: &str) -> BTreeMap<String, u32> {
+    let mut assets = BTreeMap::new();
+    for pair in raw.split(',') {
+        let pair = pair.trim();
+        if pair.is_empty() {
+            continue;
+        }
+        let Some((hash, decimals)) = pair.split_once('=') else {
+            eprintln!("polaris: ignoring a malformed POLARIS_ASSET_DECIMALS entry");
+            continue;
+        };
+        let (hash, decimals) = (hash.trim(), decimals.trim());
+        if hash.len() != 64 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            eprintln!("polaris: ignoring a POLARIS_ASSET_DECIMALS entry whose key is not a 32-byte hex hash");
+            continue;
+        }
+        let Ok(decimals) = decimals.parse::<u32>() else {
+            eprintln!("polaris: ignoring a POLARIS_ASSET_DECIMALS entry with invalid decimals");
+            continue;
+        };
+        if decimals > ASSET_DECIMALS_MAX {
+            eprintln!("polaris: ignoring a POLARIS_ASSET_DECIMALS entry with too many decimals");
+            continue;
+        }
+        assets.insert(hash.to_ascii_lowercase(), decimals);
+    }
+    assets
+}
+
+/// The testnet native-XLM SAC contract hash: always 7 decimals, so it is known
+/// without configuration and autopay in XLM works on a fresh install.
+const NATIVE_XLM_SAC_HASH: &str = "d7928b72c2703ccfeaf7eb9ff4ef4d504a55a8b979fc9b450ea2c842b4d1ce61";
+
+/// The asset-decimal allow-list: native XLM plus whatever `POLARIS_ASSET_DECIMALS`
+/// adds (the env value may override the built-in entry).
+pub fn asset_decimals() -> BTreeMap<String, u32> {
+    let mut assets = BTreeMap::from([(NATIVE_XLM_SAC_HASH.to_owned(), 7)]);
+    if let Some(raw) = crate::env::var(ENV_ASSET_DECIMALS) {
+        assets.extend(parse_asset_decimals(&raw));
+    }
+    assets
+}
+
 /// Builds the config from an injected environment lookup, so the allow-list and
 /// validation are testable without touching the real process environment.
-fn from_lookup(lookup: impl Fn(&str) -> Option<String>) -> StellarConfig {
-    let owner = lookup("POLARIS_OWNER_ADDRESS").filter(|value| is_public_key(value));
+///
+/// `wallet_address` is the active embedded-wallet address, if any. When present
+/// it becomes `ownerAddress`, overriding `POLARIS_OWNER_ADDRESS`.
+fn from_lookup(
+    lookup: impl Fn(&str) -> Option<String>,
+    wallet_address: Option<String>,
+) -> StellarConfig {
+    let env_owner = lookup("POLARIS_OWNER_ADDRESS").filter(|value| is_public_key(value));
+    // The embedded wallet is the signer and the owner when it exists; otherwise
+    // the env owner is used.
+    let owner = wallet_address
+        .filter(|value| is_public_key(value))
+        .or(env_owner);
     StellarConfig {
         network: lookup("STELLAR_NETWORK").unwrap_or_else(|| DEFAULT_NETWORK.to_string()),
         rpc_url: lookup("STELLAR_RPC_URL").unwrap_or_else(|| DEFAULT_RPC_URL.to_string()),
@@ -166,6 +237,7 @@ fn from_lookup(lookup: impl Fn(&str) -> Option<String>) -> StellarConfig {
         network_passphrase: lookup("STELLAR_NETWORK_PASSPHRASE")
             .unwrap_or_else(|| DEFAULT_NETWORK_PASSPHRASE.to_string()),
         owner_address: owner,
+        signer: SIGNER_EMBEDDED.to_string(),
         aliases: lookup("POLARIS_ALIASES")
             .map(|raw| parse_aliases(&raw))
             .unwrap_or_default(),
@@ -177,13 +249,60 @@ fn from_lookup(lookup: impl Fn(&str) -> Option<String>) -> StellarConfig {
 /// Reads the configuration from the process environment (`.env` already loaded
 /// by `env.rs`). Only the allow-listed variables above are consulted.
 pub fn read() -> StellarConfig {
-    from_lookup(crate::env::var)
+    from_lookup(crate::env::var, None)
 }
 
-/// The webview's entry point: non-secret chain configuration for the shell.
+/// Like [`read`], but the active embedded-wallet address overrides the env owner.
+pub fn read_with_wallet(active: Option<String>) -> StellarConfig {
+    from_lookup(crate::env::var, active)
+}
+
+/// Applies the W13a session rule: while the wallet session is locked, the owner
+/// address is withheld even when `POLARIS_OWNER_ADDRESS` is set, so every chain
+/// tool refuses to build a transaction until the user logs in. Non-secret, but
+/// the address is the sending identity and is only meaningful once unlocked.
+pub fn with_locked_owner(mut config: StellarConfig, unlocked: bool) -> StellarConfig {
+    if !unlocked {
+        config.owner_address = None;
+    }
+    config
+}
+
+/// Overlays the saved contacts under the env aliases (W10b). Precedence is
+/// **committed `aliases.json` < contacts < `POLARIS_ALIASES`**: the committed
+/// book is merged on the TypeScript side, contacts fill it here, and an env pair
+/// wins last. A malformed contact (bad nickname or address) is dropped, so a
+/// bad entry is "not resolvable" (fail-closed), never a wrong destination.
+pub fn aliases_with_contacts(
+    env_aliases: BTreeMap<String, String>,
+    contacts: &[crate::contacts::Contact],
+) -> BTreeMap<String, String> {
+    let mut merged: BTreeMap<String, String> = contacts
+        .iter()
+        .filter(|contact| is_alias_name(&contact.nickname) && is_public_key(&contact.address))
+        .map(|contact| (contact.nickname.clone(), contact.address.clone()))
+        .collect();
+    merged.extend(env_aliases);
+    merged
+}
+
+/// The webview's entry point: non-secret chain configuration for the shell. The
+/// embedded wallet's active address (when one exists) is the owner, and the
+/// saved contacts (W10b) are merged under the env aliases so the voice lane can
+/// resolve a freshly added "rumuz" on the next turn.
 #[tauri::command]
-pub fn stellar_config() -> StellarConfig {
-    read()
+pub fn stellar_config(
+    app: tauri::AppHandle,
+    wallet: tauri::State<'_, std::sync::Arc<crate::wallet::WalletService>>,
+    session: tauri::State<'_, std::sync::Arc<crate::wallet::session::SessionStore>>,
+) -> StellarConfig {
+    let mut config = with_locked_owner(
+        read_with_wallet(wallet.active_address()),
+        session.is_unlocked(),
+    );
+    let contacts = crate::contacts::load_for_app(&app);
+    config.aliases = aliases_with_contacts(std::mem::take(&mut config.aliases), &contacts);
+    config
 }
 
 #[cfg(test)]
@@ -199,7 +318,15 @@ mod tests {
             .iter()
             .map(|(key, value)| (key.to_string(), value.to_string()))
             .collect();
-        from_lookup(|name| map.get(name).cloned())
+        from_lookup(|name| map.get(name).cloned(), None)
+    }
+
+    fn from_pairs_with_wallet(pairs: &[(&str, &str)], wallet: Option<&str>) -> StellarConfig {
+        let map: HashMap<String, String> = pairs
+            .iter()
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect();
+        from_lookup(|name| map.get(name).cloned(), wallet.map(str::to_string))
     }
 
     #[test]
@@ -210,6 +337,7 @@ mod tests {
         assert_eq!(config.horizon_url, "https://horizon-testnet.stellar.org");
         assert_eq!(config.network_passphrase, "Test SDF Network ; September 2015");
         assert_eq!(config.owner_address, None);
+        assert_eq!(config.signer, "embedded");
         assert!(config.aliases.is_empty());
         assert_eq!(config.guard_contract_id, None);
         assert_eq!(config.p2p_contract_id, None);
@@ -260,7 +388,7 @@ mod tests {
             .map(String::as_str)
             .collect();
         keys.sort_unstable();
-        // The exact wire key set: eight allow-listed fields, nothing else.
+        // The exact wire key set: nine allow-listed fields, nothing else.
         assert_eq!(
             keys,
             [
@@ -272,11 +400,27 @@ mod tests {
                 "ownerAddress",
                 "p2pContractId",
                 "rpcUrl",
+                "signer",
             ]
         );
         let json = serde_json::to_string(&config).unwrap();
         assert!(!json.contains("secret"));
         assert!(json.contains(OWNER));
+    }
+
+    #[test]
+    fn an_embedded_wallet_address_overrides_the_env_owner() {
+        let config = from_pairs_with_wallet(
+            &[("POLARIS_OWNER_ADDRESS", ACC2)],
+            Some(OWNER),
+        );
+        assert_eq!(config.owner_address.as_deref(), Some(OWNER));
+        assert_eq!(config.signer, "embedded");
+        // With no wallet, the env owner is used and the signer stays embedded.
+        let with_env = from_pairs_with_wallet(&[("POLARIS_OWNER_ADDRESS", ACC2)], None);
+        assert_eq!(with_env.signer, "embedded");
+        assert_eq!(with_env.owner_address.as_deref(), Some(ACC2));
+        assert_eq!(from_pairs_with_wallet(&[], None).signer, "embedded");
     }
 
     #[test]
@@ -313,6 +457,42 @@ mod tests {
     }
 
     #[test]
+    fn asset_decimals_parse_hex_keys_and_drop_malformed_entries() {
+        let good = "0909090909090909090909090909090909090909090909090909090909090909";
+        let raw = format!(
+            "{good}=7,{good}=abc,{good}=19,NOTHEX=7,{good}",
+        );
+        let decimals = parse_asset_decimals(&raw);
+        assert_eq!(decimals.len(), 1);
+        assert_eq!(decimals.get(good), Some(&7));
+        // Uppercase hex is normalised to lowercase, matching the decoded hash.
+        let upper = format!("{}={}", good.to_uppercase(), 7);
+        assert_eq!(parse_asset_decimals(&upper).get(good), Some(&7));
+        assert!(parse_asset_decimals("").is_empty());
+    }
+
+    #[test]
+    fn contacts_merge_below_env_aliases_and_drop_malformed_entries() {
+        use crate::contacts::Contact;
+        let env = parse_aliases(&format!("acc2={ACC2},ada={OWNER}"));
+        let contacts = vec![
+            Contact { nickname: "ali".into(), address: ACC2.into() },
+            // Env wins over a contact with the same nickname.
+            Contact { nickname: "ada".into(), address: ACC2.into() },
+            // Dropped, not written into the alias table.
+            Contact { nickname: "bad name".into(), address: ACC2.into() },
+            Contact { nickname: "typo".into(), address: "Gbad".into() },
+        ];
+        let merged = aliases_with_contacts(env, &contacts);
+        assert_eq!(merged.get("ali").map(String::as_str), Some(ACC2));
+        assert_eq!(merged.get("acc2").map(String::as_str), Some(ACC2));
+        // `ada` keeps the env address, not the contact's.
+        assert_eq!(merged.get("ada").map(String::as_str), Some(OWNER));
+        assert!(!merged.contains_key("bad name"));
+        assert!(!merged.contains_key("typo"));
+    }
+
+    #[test]
     fn serializes_to_the_ts_camel_case_shape() {
         let config = from_pairs(&[
             ("POLARIS_OWNER_ADDRESS", OWNER),
@@ -326,6 +506,25 @@ mod tests {
         assert!(json.contains(r#""aliases":{"acc2":"GB25"#));
         assert!(json.contains(r#""guardContractId":null"#));
         assert!(json.contains(r#""p2pContractId":null"#));
+    }
+
+    #[test]
+    fn a_locked_session_withholds_the_owner_address() {
+        let with_env = from_pairs_with_wallet(&[("POLARIS_OWNER_ADDRESS", OWNER)], None);
+        assert_eq!(with_env.owner_address.as_deref(), Some(OWNER));
+        // Locked: even an env-provided owner is withheld (fail-closed).
+        assert_eq!(with_locked_owner(with_env.clone(), false).owner_address, None);
+        // Unlocked: unchanged.
+        assert_eq!(
+            with_locked_owner(with_env, true).owner_address.as_deref(),
+            Some(OWNER)
+        );
+        // A locked session with a wallet-derived owner is withheld too.
+        let with_wallet = from_pairs_with_wallet(&[], Some(OWNER));
+        assert_eq!(
+            with_locked_owner(with_wallet, false).owner_address,
+            None
+        );
     }
 
     #[test]

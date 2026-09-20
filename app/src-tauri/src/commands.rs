@@ -186,7 +186,7 @@ mod tests {
     #[test]
     fn app_info_serializes_camel_case() {
         let info = AppInfo {
-            name: "Polaris".into(),
+            name: "Autonomy".into(),
             version: "0.1.0".into(),
             network: NETWORK.into(),
             tauri_version: "2.x".into(),

@@ -692,7 +692,7 @@ mod tests {
         let noop = || {};
         speak_and_log(
             backend.as_ref(),
-            "Polaris hazır. Yerel ses çalışıyor.",
+            "Autonomy hazır. Yerel ses çalışıyor.",
             None,
             &noop,
         )
@@ -742,7 +742,7 @@ mod tests {
         // passes the real intent confirmation in `POLARIS_E2E_TEXT`; without it
         // the fixed sentence below is used, so the test still runs standalone.
         let sentence = crate::env::var("POLARIS_E2E_TEXT")
-            .unwrap_or_else(|| "Merhaba, this is Polaris. Onaylıyor musun?".to_string());
+            .unwrap_or_else(|| "Merhaba, this is Autonomy. Onaylıyor musun?".to_string());
         println!(
             "polaris: live Fish voice reference_id={} sentence={sentence:?}",
             speaker.voice_id().unwrap_or("?")

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { AliasEntryView, HorizonPaymentRecord } from "../../lib/history.ts";
+import { mapAccountDetail } from "../../lib/walletAssets.ts";
 import { deriveWalletPageView } from "./useWalletData.ts";
 
 const OWNER = "GARXWVNCJ22U2OR23LAB5Z5RWI2XFIJZA2R3TRPFUKKY65JQZZOEWWCO";
@@ -140,6 +141,28 @@ test("the session's tx_submitted event is surfaced as the latest transaction", (
     },
   });
   assert.equal(view.latestTransaction?.hash, hash);
+});
+
+test("the dashboard activity keeps up to ten rows and carries the account detail", () => {
+  const payments = Array.from({ length: 12 }, (_, index) =>
+    payment({
+      id: `p${index}`,
+      created_at: `2026-09-${String(20 - index).padStart(2, "0")}T10:00:00Z`,
+    }),
+  );
+  const view = deriveWalletPageView({
+    ...readyInput(payments),
+    networkPassphrase: "Test SDF Network ; September 2015",
+    accountDetail: mapAccountDetail({
+      sequence: "42",
+      subentry_count: 1,
+      balances: [{ asset_type: "native", balance: "10.0000000" }],
+    }),
+  });
+  assert.equal(view.transactions.length, 5);
+  assert.equal(view.activity.length, 10);
+  assert.equal(view.accountDetail?.subentryCount, 1);
+  assert.match(view.networkPassphrase, /Test SDF Network/);
 });
 
 test("balances still load when the payments read is offline", () => {

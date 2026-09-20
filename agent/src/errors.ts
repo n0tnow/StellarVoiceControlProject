@@ -8,6 +8,8 @@
  * excerpt, DNS error). Nothing here ever contains an API key — the key is only
  * ever read by the HTTP client, never interpolated into a message.
  */
+import type { PendingClarificationDraft } from "./dialog.ts";
+
 export type AgentErrorKind =
   /** Missing/invalid local configuration (base URL, model). */
   | "config"
@@ -40,13 +42,20 @@ export class AgentError extends Error {
   readonly label: string;
   /** Full, terminal-safe explanation. */
   readonly detail: string;
+  /**
+   * For an `input` error only (voice-dialog): the slot the tool could not fill.
+   * The loop turns it into a short question and remembers it in the dialogue, so
+   * the next utterance can complete the request.
+   */
+  readonly pending?: PendingClarificationDraft;
 
-  constructor(kind: AgentErrorKind, detail: string) {
+  constructor(kind: AgentErrorKind, detail: string, pending?: PendingClarificationDraft) {
     super(detail);
     this.name = "AgentError";
     this.kind = kind;
     this.label = AGENT_ERROR_LABELS[kind];
     this.detail = detail;
+    if (pending) this.pending = pending;
   }
 }
 

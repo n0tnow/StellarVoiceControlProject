@@ -177,8 +177,12 @@ export interface WithdrawMemo {
 
 export interface WithdrawInstructions {
   id: string;
-  /** Plain `G...` Stellar account to pay (muxed `M...` is rejected). */
-  accountId: string;
+  /**
+   * Plain `G...` Stellar account to pay (muxed `M...` is rejected). Absent when
+   * the anchor DEFERS the payout account until per-transaction KYC is complete;
+   * the session then reads it from the transaction before paying.
+   */
+  accountId?: string;
   memo?: WithdrawMemo;
   minAmount?: number;
   maxAmount?: number;

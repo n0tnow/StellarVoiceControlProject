@@ -4,7 +4,7 @@
  * The full SPP loop is proven on testnet (spike `spike/spp`) with Nethermind's
  * deployed contracts, but the client is the **Rust SDK** and every `transact`
  * needs a Soroban auth-entry signature in addition to the envelope signature.
- * Polaris' Freighter bridge only signs an envelope (`bridge_sign`), so nothing
+ * Polaris' wallet only signs an envelope (`wallet_sign`), so nothing
  * in this module moves value or signs anything: it renders the deployed contract
  * addresses, the privacy explainer and the spike's verifiable transactions, and
  * checks that the testnet RPC is reachable.

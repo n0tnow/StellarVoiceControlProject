@@ -5,7 +5,7 @@
 //! which STT backend, TTS backend and agent provider the environment selected,
 //! plus a boolean per required key. A key, a key prefix or a source line must
 //! never cross the Tauri boundary or reach `detail` — the webview is the least
-//! trusted part of the app (`docs/ui-panels.md` §6).
+//! trusted part of the app (`docs/notch-ui.md`).
 //!
 //! The mapping from these facts to `ok`/`warn`/`fail` lives in the frontend
 //! (`app/src/debug/checks/voice.ts`), so a copy change does not need a rebuild of

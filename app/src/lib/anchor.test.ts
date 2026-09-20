@@ -67,7 +67,7 @@ function anchorResult(xdr: string): ChainToolResult {
   return { unsignedXdr: xdr, summary: { title: "anchor tx", lines: [], estimatedFee: "0.1 XLM" } };
 }
 
-/** Real-pipeline test seams: an auto-approving gate and a bridge that returns `signedXdr`. */
+/** Real-pipeline test seams: an auto-approving gate and a signer that returns `signedXdr`. */
 function pipeline(signedXdr: string, overrides: Partial<AnchorPipelineDeps> = {}): AnchorPipelineDeps {
   return {
     approver: {
@@ -137,11 +137,11 @@ test("a wallet refusal on the challenge is a labelled error, never an unsigned e
   );
 });
 
-test("a missing bridge_sign_challenge command surfaces as AnchorSigningUnavailableError", async () => {
+test("a missing wallet_sign_challenge command surfaces as AnchorSigningUnavailableError", async () => {
   const signer = createAnchorSigner({
     owner: async () => OWNER,
     signChallenge: async () => {
-      throw new AnchorSigningUnavailableError("bridge_sign_challenge is not present on this build yet");
+      throw new AnchorSigningUnavailableError("wallet_sign_challenge is not present on this build yet");
     },
     signViaPipeline: async () => assert.fail("the pipeline must not run"),
   });
@@ -152,10 +152,10 @@ test("a missing bridge_sign_challenge command surfaces as AnchorSigningUnavailab
 });
 
 test("isMissingCommandError only matches the missing-command shape", () => {
-  assert.equal(isMissingCommandError("Command bridge_sign_challenge not found"), true);
-  assert.equal(isMissingCommandError(new Error("unknown command bridge_sign_challenge")), true);
-  assert.equal(isMissingCommandError(new Error("no such command bridge_sign_challenge")), true);
-  assert.equal(isMissingCommandError(new Error("bridge_sign_challenge: key not found")), false);
+  assert.equal(isMissingCommandError("Command wallet_sign_challenge not found"), true);
+  assert.equal(isMissingCommandError(new Error("unknown command wallet_sign_challenge")), true);
+  assert.equal(isMissingCommandError(new Error("no such command wallet_sign_challenge")), true);
+  assert.equal(isMissingCommandError(new Error("wallet_sign_challenge: key not found")), false);
   assert.equal(isMissingCommandError(new Error("network request failed")), false);
 });
 
@@ -292,7 +292,7 @@ test("runAnchorIntent maps a missing login command to a labelled failure", async
     {
       session: flowSession(calls, {
         async login() {
-          throw new AnchorSigningUnavailableError("bridge_sign_challenge is not present on this build yet");
+          throw new AnchorSigningUnavailableError("wallet_sign_challenge is not present on this build yet");
         },
       }),
     },

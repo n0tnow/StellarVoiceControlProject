@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { TurnFlow } from "./turnFlow.ts";
+import type { Intent } from "@polaris/interfaces";
+
+import {
+  CONNECT_WALLET_SENTENCE,
+  TurnFlow,
+  decideWalletGate,
+  isValueMovingIntent,
+} from "./turnFlow.ts";
 
 test("a blank transcript never starts a turn", () => {
   const flow = new TurnFlow();
@@ -67,4 +74,33 @@ test("the same words spoken again after the turn settles start a fresh turn", ()
   if (repeat.kind !== "start") return;
   assert.equal(flow.isCurrent(first.ticket), false);
   assert.equal(flow.isCurrent(repeat.ticket), true);
+});
+
+function intent(over: Partial<Intent> = {}): Intent {
+  return { kind: "send", asset: "XLM", amount: "5", ...over };
+}
+
+test("the onboarding gate blocks a value-moving intent with no active wallet", () => {
+  const decision = decideWalletGate(intent(), false);
+  assert.equal(decision.block, true);
+  assert.equal(decision.sentence, CONNECT_WALLET_SENTENCE);
+  assert.equal(decision.page, "wallet");
+});
+
+test("the onboarding gate lets a value-moving intent through once a wallet is active", () => {
+  assert.equal(decideWalletGate(intent(), true).block, false);
+});
+
+test("the onboarding gate never blocks a non-value-moving intent", () => {
+  assert.equal(isValueMovingIntent(intent({ kind: "guard_policy" })), false);
+  const decision = decideWalletGate(intent({ kind: "guard_policy" }), false);
+  assert.equal(decision.block, false);
+  assert.equal(decision.page, null);
+});
+
+test("escrow and schedule intents count as value-moving", () => {
+  for (const kind of ["schedule_payment", "p2p_offer", "p2p_accept", "deposit"] as const) {
+    assert.equal(isValueMovingIntent(intent({ kind })), true, kind);
+    assert.equal(decideWalletGate(intent({ kind }), false).block, true, kind);
+  }
 });
