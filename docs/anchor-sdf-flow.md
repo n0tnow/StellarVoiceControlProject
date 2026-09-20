@@ -1,5 +1,7 @@
 # SDF test anchor (`testanchor.stellar.org`) — verified flow
 
+> **Default anchor (2026-09-20):** Trade now prefers the TR mock anchor (`tr-mock-anchor.fly.dev`, TRY ↔ USDC — no SRT needed). This SDF flow is the automatic fallback when the TR anchor fails its up-front health check.
+
 Verified live 2026-09-20, **both directions**, with in-memory throwaway testnet keys (no owner
 key, no secret printed). Endpoints: `/auth`, `/sep6`, `/sep12`, `/sep38`; signing key `GCHL…33PR`.
 It also publishes `TRANSFER_SERVER_SEP0024`, which this project never uses.

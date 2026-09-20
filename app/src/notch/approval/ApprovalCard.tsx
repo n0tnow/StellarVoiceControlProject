@@ -31,8 +31,8 @@ function recipientLabel(intent: ApprovalSnapshot["intent"]): string | null {
 function Row({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex gap-3">
-      <dt className="w-14 shrink-0 text-polaris-muted">{label}</dt>
-      <dd className="selectable break-all font-mono text-polaris-text">{value}</dd>
+      <dt className="w-14 shrink-0 text-[10px] uppercase tracking-wide text-notch-muted">{label}</dt>
+      <dd className="selectable break-all font-mono text-[11.5px] text-notch-text">{value}</dd>
     </div>
   );
 }
@@ -98,20 +98,20 @@ export function ApprovalCard({
     <div
       role="group"
       aria-label="Transaction approval"
-      className="space-y-3 rounded-xl border border-polaris-line bg-polaris-panel p-4 shadow-2xl"
+      className="rule-card space-y-3"
     >
       {deciding && remainingMs !== null ? (
-        <div className="h-1 overflow-hidden rounded-full bg-white/10" aria-hidden="true">
-          <div
-            className="h-full bg-polaris-accent transition-[width] duration-1000 ease-linear"
+        <div className="wallet-budget-bar" aria-hidden="true">
+          <span
+            className="transition-[width] duration-1000 ease-linear"
             style={{ width: `${pct}%` }}
           />
         </div>
       ) : null}
 
       <div>
-        <p className="text-base font-semibold leading-tight">{summary.title}</p>
-        <p className="mt-0.5 text-[11px] text-polaris-muted">{MODE_LABEL[snapshot.mode]}</p>
+        <p className="text-sm font-semibold leading-tight">{summary.title}</p>
+        <p className="mt-0.5 text-[11px] text-notch-muted">{MODE_LABEL[snapshot.mode]}</p>
       </div>
 
       <dl className="space-y-1.5 text-sm">
@@ -121,19 +121,19 @@ export function ApprovalCard({
       </dl>
 
       {showDetails ? (
-        <div className="space-y-2 rounded-md border border-polaris-line bg-black/20 p-2">
+        <div className="space-y-2 rounded-lg bg-black/40 p-2">
           {intent.recipient !== undefined && intent.recipient.length > 0 ? (
             <div>
-              <p className="text-[10px] uppercase tracking-wide text-polaris-muted">
+              <p className="text-[10px] uppercase tracking-wide text-notch-muted">
                 Full address
               </p>
-              <p className="selectable break-all font-mono text-[11px] text-polaris-text">
+              <p className="selectable break-all font-mono text-[11px] text-notch-text">
                 {intent.recipient}
               </p>
             </div>
           ) : null}
           <div>
-            <p className="text-[10px] uppercase tracking-wide text-polaris-muted">Payload hash</p>
+            <p className="text-[10px] uppercase tracking-wide text-notch-muted">Payload hash</p>
             <HashFingerprint hash={snapshot.payloadHash} />
           </div>
         </div>
@@ -142,20 +142,20 @@ export function ApprovalCard({
       <button
         type="button"
         onClick={() => setShowDetails((open) => !open)}
-        className="text-[11px] text-polaris-muted transition-colors hover:text-polaris-text"
+        className="text-[11px] text-notch-muted transition-colors hover:text-notch-text"
       >
         {showDetails ? "Hide details" : "Details"}
       </button>
 
       {hint !== null ? (
-        <p className="rounded-md border border-polaris-line bg-black/20 px-2 py-1 text-[11px] text-polaris-muted">
+        <p className="rounded-lg bg-black/40 px-2 py-1 text-[11px] text-notch-muted">
           {hint}
         </p>
       ) : null}
 
       <div className="flex gap-2">
         <Button
-          variant="default"
+          variant="notch"
           size="md"
           className="flex-1"
           disabled={!canApprove}
@@ -165,7 +165,7 @@ export function ApprovalCard({
           {stage === "authorizing" ? "Waiting for Touch ID…" : "Approve with Touch ID"}
         </Button>
         <div ref={denyRef} className="flex-1">
-          <Button variant="outline" size="md" className="w-full" disabled={!deciding} onClick={onDeny}>
+          <Button variant="notchOutline" size="md" className="w-full" disabled={!deciding} onClick={onDeny}>
             Deny
           </Button>
         </div>

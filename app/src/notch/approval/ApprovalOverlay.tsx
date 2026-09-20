@@ -44,7 +44,7 @@ export function ApprovalOverlay({ approval }: { approval: PendingApproval }) {
   const snapshot = state.snapshot;
 
   return (
-    <div className="absolute inset-0 z-20 flex overflow-y-auto bg-black/60 px-4 py-3 backdrop-blur-sm">
+    <div className="approval-overlay polaris-scroll">
       <div className="m-auto w-full max-w-md">
         {message !== null ? (
           <ResultView message={message} tone={resultTone(state)} txHash={txHash} />

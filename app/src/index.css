@@ -437,12 +437,21 @@
    the interactive state, so the nav and the page controls are clickable even
    though the window starts click-through. */
 .notch-panel {
+  /* The nav column's width, shared with `.notch-panel-inner`'s grid and with
+     `.approval-overlay`'s left edge so the two can never drift apart. */
+  --panel-nav-width: 128px;
   position: absolute;
   top: var(--cutout-height);
   left: 0;
   right: 0;
   bottom: 0;
   border-radius: 0 0 var(--shell-bottom-radius) var(--shell-bottom-radius);
+  /* Clip every child (the page body and the approval overlay) to the shell's
+     rounded bottom corners. Without this, an `absolute inset-0` overlay paints
+     a square rectangle over the corner cut-outs and the whole notch reads as a
+     hard-edged box for as long as the overlay is up (BUG: approval state lost
+     the notch's rounded corners). */
+  overflow: hidden;
   opacity: 0;
   transition: opacity var(--shell-motion) var(--shell-ease);
   pointer-events: none;
@@ -457,7 +466,7 @@
    radius carry the surface — no inner card, same rule as the prompt. */
 .notch-panel-inner {
   display: grid;
-  grid-template-columns: 128px 1fr;
+  grid-template-columns: var(--panel-nav-width) 1fr;
   height: 100%;
   color: var(--color-notch-text);
   font-size: 13px;
@@ -521,6 +530,26 @@
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: 12px 16px 14px;
+}
+
+/* The approval surface (single and batch) takes over the page column only: the
+   nav — and its Close entry — stays visible, and the shell's own black carries
+   the surface, so a pending approval reads like any other notch page. It starts
+   where the nav column ends and shares `.panel-body`'s padding; the panel's
+   `overflow: hidden` clips it to the shell's rounded bottom corners. There is
+   deliberately no backdrop blur: the page behind is covered, not smeared. */
+.approval-overlay {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: var(--panel-nav-width);
+  z-index: 20;
+  display: flex;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 12px 16px 14px;
+  background: #000;
 }
 
 /* Shared page primitives. */
@@ -919,8 +948,24 @@
   align-items: center;
   gap: 8px;
   padding: 7px 10px;
+  border: 0;
   border-radius: 10px;
   background: #ffffff08;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+/* Selectable rows (the locked-wallet picker) reuse the nav's active surface
+   instead of a saturated accent outline, so a chosen account reads like a
+   chosen page rather than a warning. */
+button.wallet-key {
+  cursor: pointer;
+}
+
+button.wallet-key:hover,
+.wallet-key.is-selected {
+  background: #ffffff14;
 }
 
 .wallet-key-label {

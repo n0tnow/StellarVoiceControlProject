@@ -12,7 +12,7 @@ import { Button } from "@/components/ui/button";
 import type { WalletEntry } from "@/lib/wallet";
 import { shortAddress } from "@/lib/address";
 
-import { CARD, ERROR, HINT } from "./styles";
+import { ERROR } from "./styles";
 
 export interface UnlockScreenProps {
   entries: readonly WalletEntry[];
@@ -28,13 +28,15 @@ export function UnlockScreen({ entries, activeAddress, busy, error, onUnlock }: 
   const multiple = entries.length > 1;
 
   return (
-    <section className={CARD}>
-      <h2 className="flex items-center gap-2 text-sm font-semibold">
-        <Wallet aria-hidden="true" className="h-4 w-4 text-[var(--color-notch-accent)]" />
-        Log in to Autonomy
-      </h2>
-      <p className={HINT}>
-        Your wallet is locked. Unlock it with Touch ID to see balances and to sign.
+    <section className="rule-card space-y-2">
+      <div className="rule-head">
+        <Wallet className="rule-icon" aria-hidden="true" />
+        <span className="rule-name">Log in to Autonomy</span>
+      </div>
+      <p className="rule-body">
+        <span className="rule-condition">
+          Your wallet is locked. Unlock it with Touch ID to see balances and to sign.
+        </span>
       </p>
 
       {multiple ? (
@@ -43,9 +45,7 @@ export function UnlockScreen({ entries, activeAddress, busy, error, onUnlock }: 
             <li key={entry.address}>
               <button
                 type="button"
-                className={`wallet-key w-full text-left${
-                  selected === entry.address ? " ring-1 ring-[var(--color-notch-accent)]" : ""
-                }`}
+                className={`wallet-key w-full${selected === entry.address ? " is-selected" : ""}`}
                 aria-pressed={selected === entry.address}
                 onClick={() => setSelected(entry.address)}
               >
@@ -57,15 +57,18 @@ export function UnlockScreen({ entries, activeAddress, busy, error, onUnlock }: 
           ))}
         </ul>
       ) : entries.length === 1 ? (
-        <p className={HINT}>
-          Wallet: <span className="text-[var(--color-notch-text)]">{entries[0]?.label || "Account"}</span>{" "}
-          <code className="selectable">{shortAddress(entries[0]?.address ?? "")}</code>
+        <p className="rule-body">
+          <span className="rule-condition">
+            Wallet: <span className="text-notch-text">{entries[0]?.label || "Account"}</span>{" "}
+            <code className="selectable font-mono">{shortAddress(entries[0]?.address ?? "")}</code>
+          </span>
         </p>
       ) : null}
 
       {error !== null ? <p className={ERROR}>{error}</p> : null}
 
       <Button
+        variant="notch"
         size="sm"
         disabled={busy}
         onClick={() => onUnlock(selected ?? undefined)}
