@@ -24,12 +24,13 @@
  * It replaced the three indicator dots outright: the face is the stage signal
  * now, and the strip does not say the same thing twice.
  */
-import { useCallback, useEffect, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 
 import type { NavigationRequest, ShellGeometry } from "@polaris/interfaces";
 
 import { StageLabel } from "@/components/StageLabel";
 import { notchPageFor } from "@/lib/navigation";
+import { playSfx } from "@/lib/sfx";
 import { BlobatarFace } from "./BlobatarFace";
 import { facePlacementFor, shouldRenderFace } from "./faceState";
 import { MoreMenu } from "./MoreMenu";
@@ -95,6 +96,24 @@ export function ShellSurface({
   }, [dismiss]);
   const pageController = useNotchPage(closePanel);
   const { setNotchPage } = pageController;
+
+  // A cue on the shell's own open/close, not on every state change: `open`
+  // when it commits into an interactive surface (`panel`/`prompt`), `close`
+  // when it returns to `collapsed`. The `collapsed <-> compact` voice-strip
+  // transition is deliberately silent — it fires on every push-to-talk press
+  // and release while a turn's TTS may already be speaking, and a click cue
+  // racing the voice audio would read as a glitch, not a confirmation.
+  const previousApplied = useRef(applied);
+  useEffect(() => {
+    const previous = previousApplied.current;
+    previousApplied.current = applied;
+    if (previous === applied) return;
+    if (applied === "panel" || applied === "prompt") {
+      playSfx("open");
+    } else if (applied === "collapsed") {
+      playSfx("close");
+    }
+  }, [applied]);
 
   // Apply a voice navigation request. Notch targets select their page and pin
   // the panel; panel-window targets are opened by App's `applyNavigation`, so
