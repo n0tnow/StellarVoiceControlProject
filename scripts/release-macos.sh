@@ -159,6 +159,20 @@ STAGING="$(mktemp -d)"
 trap 'rm -rf "$STAGING"' EXIT
 ditto "$APP_PATH" "$STAGING/$APP_NAME.app"
 ln -s /Applications "$STAGING/Applications"
+
+# A dmg built by an earlier run is often still mounted — testing a release
+# means double-clicking it. hdiutil then refuses to overwrite its backing file
+# with a bare "Resource busy", so detach it first.
+if [[ -e "$DMG_PATH" ]]; then
+  dmg_abs="$(cd "$(dirname "$DMG_PATH")" && pwd)/$(basename "$DMG_PATH")"
+  hdiutil info | awk -v p="$dmg_abs" '
+    $1 == "image-path" { cur = ($3 == p) }
+    cur && $1 ~ /^\/dev\/disk/ { print $1 }
+  ' | while read -r dev; do
+    echo "  detaching stale mount of this dmg: $dev"
+    hdiutil detach "$dev" -force >/dev/null 2>&1 || true
+  done
+fi
 rm -f "$DMG_PATH"
 caffeinate -i hdiutil create -volname "$APP_NAME $VERSION" -srcfolder "$STAGING" \
   -ov -format UDZO "$DMG_PATH" >/dev/null
