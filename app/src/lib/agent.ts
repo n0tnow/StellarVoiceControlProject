@@ -16,6 +16,7 @@ import {
   buildSystemPrompt,
   createDefaultRegistry,
   createEventBus,
+  DialogMemory,
   OpenAiCompatibleLlm,
   runTurn,
   toAgentError,
@@ -115,6 +116,17 @@ export type AgentRun =
 
 const registry = createDefaultRegistry();
 const bus = createEventBus();
+/**
+ * Conversation memory (voice-dialog), kept per shell instance: the last few
+ * exchanges plus one pending clarification, so a follow-up ("to whom?" -> "acc2")
+ * completes the earlier request. In memory only, never persisted, no secrets.
+ */
+const dialog = new DialogMemory();
+
+/** Drops the conversation memory (e.g. when the shell session resets). */
+export function resetAgentDialog(): void {
+  dialog.reset();
+}
 // The same `AgentLlm` port, two wire formats. The Rust `agent_chat` transport
 // is told which provider it is carrying (`AGENT_PROVIDER`) so it can add the
 // matching headers — `Authorization` + `x-opencode-session`, or `x-api-key` +
@@ -281,6 +293,7 @@ export async function runAgentTurn(
       llm: new AccountRefLlm(llm, accounts.aliases),
       bus,
       system,
+      dialog,
       toolContext: {
         aliases: { ...accounts.aliases },
         ...(readBalances ? { readBalances } : {}),

@@ -20,6 +20,8 @@ import { depositTool, withdrawTool } from "./tools/anchor.ts";
 import { getBalanceTool } from "./tools/balance.ts";
 import { navigateTool } from "./tools/navigate.ts";
 import { sendPaymentTool } from "./tools/payment.ts";
+import { setApprovalRuleTool } from "./tools/rule.ts";
+import { buyAssetTool, sellAssetTool } from "./tools/sell.ts";
 import { cancelScheduleTool, schedulePaymentTool } from "./tools/schedule.ts";
 import { p2pAcceptTool, p2pConfirmTool, p2pOfferTool } from "./tools/p2p.ts";
 import { createToolRegistry, type ToolRegistry } from "./tools/registry.ts";
@@ -48,7 +50,13 @@ export function createDefaultRegistry(): ToolRegistry {
     .register(cancelScheduleTool)
     .register(p2pOfferTool)
     .register(p2pAcceptTool)
-    .register(p2pConfirmTool);
+    .register(p2pConfirmTool)
+    // voice-dialog: rules by voice and the sell/buy routing layer. `set_approval_rule`
+    // only proposes a `guard_policy` rule; `sell_asset`/`buy_asset` map onto the
+    // existing withdraw/p2p_offer/deposit/p2p_accept executors.
+    .register(setApprovalRuleTool)
+    .register(sellAssetTool)
+    .register(buyAssetTool);
 }
 
 export interface AgentRuntime {

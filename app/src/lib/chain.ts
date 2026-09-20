@@ -198,6 +198,21 @@ export async function executeApprovedIntent(
   intent: Intent,
   signingDeps?: Partial<SigningDeps>,
 ): Promise<SubmittedOutcome> {
+  // voice-dialog: a spending rule spoken by voice is a proposal only in this
+  // build. It never reaches the chain (or needs the owner env): the shell shows
+  // the intent and this labelled outcome says plainly that autonomous rules are
+  // not enabled yet. The Security panel's own guard_policy intents carry no
+  // `rule`, so they keep their existing path.
+  if (intent.kind === "guard_policy" && intent.rule) {
+    const notEnabled: SubmittedOutcome = {
+      status: "unavailable",
+      intent,
+      label: "Autonomous rules aren't enabled in this build yet.",
+      detail: "Voice-proposed spending rules are proposals only; configure them in the Security panel.",
+    };
+    logFailure(notEnabled);
+    return notEnabled;
+  }
   const deps: SigningDeps = {
     ...defaultSigningDeps,
     ...signingDeps,
