@@ -290,6 +290,13 @@ export type PolarisEvent =
       approved: boolean;
     }
   | { type: "tx_submitted"; hash: string; explorerUrl: string }
+  /**
+   * Wallet session transitions (step W13a). Emitted on the shared event channel
+   * whenever login/logout/auto-lock changes the session; the payload is the
+   * same `WalletSession` shape the `wallet_session` command returns, plus the
+   * `type` tag.
+   */
+  | ({ type: "wallet_session_changed" } & WalletSession)
   | { type: "error"; message: string };
 
 /**
@@ -393,7 +400,30 @@ export type WalletErrorKind =
   | "notFound"
   | "cancelled"
   | "keychain"
-  | "unauthorized";
+  | "unauthorized"
+  // Step W13a: the session is locked, so no secret-touching action is allowed.
+  | "locked";
+
+/* ------------------------------------------------------------------ *
+ * 7c. Wallet session (step W13a: login / logout / auto-lock)
+ * ------------------------------------------------------------------ */
+
+/** `none` = no wallet stored; `locked` = wallets exist, nobody logged in. */
+export type WalletSessionState = "none" | "locked" | "unlocked";
+
+/**
+ * The wallet session snapshot returned by `wallet_session` and carried on the
+ * `wallet_session_changed` event. `active` is `null` unless unlocked.
+ */
+export interface WalletSession {
+  state: WalletSessionState;
+  active: { address: string; label: string } | null;
+  count: number;
+  /** Wall-clock ms when the session was unlocked, or `null`. */
+  unlockedAt: number | null;
+  /** Idle auto-lock timeout in minutes; `0` means "never". */
+  autoLockMinutes: number;
+}
 
 /** The typed rejection shape of the wallet commands. */
 export interface WalletCommandError {
@@ -470,7 +500,9 @@ export type ApprovalErrorKind =
   | "unavailable"
   | "timeout"
   | "expired"
-  | "notPending";
+  | "notPending"
+  // Step W13a: the wallet session is locked, so the approval path is refused.
+  | "locked";
 
 /**
  * The typed rejection shape of the approval commands. `approval_authorize` and

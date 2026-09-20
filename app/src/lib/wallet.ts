@@ -21,13 +21,15 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type {
-  WalletAccount,
-  WalletAddressOutcome,
-  WalletCommandError,
-  WalletCreateOutcome,
-  WalletErrorKind,
-  WalletStatus,
+import {
+  POLARIS_EVENT_NAME,
+  type WalletAccount,
+  type WalletAddressOutcome,
+  type WalletCommandError,
+  type WalletCreateOutcome,
+  type WalletErrorKind,
+  type WalletSession,
+  type WalletStatus,
 } from "@polaris/interfaces";
 
 import type { InvokeFn } from "./approval.ts";
@@ -39,6 +41,8 @@ export type {
   WalletCommandError,
   WalletCreateOutcome,
   WalletErrorKind,
+  WalletSession,
+  WalletSessionState,
   WalletStatus,
 } from "@polaris/interfaces";
 export {
@@ -146,6 +150,51 @@ export async function onWalletChanged(
   handler: (status: WalletStatus) => void,
 ): Promise<UnlistenFn> {
   return listen<WalletStatus>(WALLET_CHANGED_EVENT, (event) => handler(event.payload));
+}
+
+/* ------------------------------------------------------------------ *
+ * Wallet session (step W13a: login / logout / auto-lock)
+ * ------------------------------------------------------------------ */
+
+/** `wallet_session`: the current login state. Never prompts. */
+export function walletSession(deps: WalletDeps = defaultDeps): Promise<WalletSession> {
+  return deps.invoke<WalletSession>("wallet_session");
+}
+
+/** `wallet_unlock`: Touch-ID-gated login. Picks `address` or the last active. */
+export function walletUnlock(
+  options: { address?: string } = {},
+  deps: WalletDeps = defaultDeps,
+): Promise<WalletSession> {
+  return deps.invoke<WalletSession>("wallet_unlock", { address: options.address });
+}
+
+/** `wallet_lock`: logout (no prompt). Also rejects the previous session's approval. */
+export function walletLock(deps: WalletDeps = defaultDeps): Promise<WalletSession> {
+  return deps.invoke<WalletSession>("wallet_lock");
+}
+
+/** `wallet_set_auto_lock`: persist the idle timeout in minutes (`0` = never). */
+export function walletSetAutoLock(
+  minutes: number,
+  deps: WalletDeps = defaultDeps,
+): Promise<WalletSession> {
+  return deps.invoke<WalletSession>("wallet_set_auto_lock", { minutes });
+}
+
+/**
+ * Subscribes to `wallet_session_changed`, which Rust emits on login, logout and
+ * auto-lock. The payload is the `WalletSession` snapshot.
+ */
+export async function onWalletSessionChanged(
+  handler: (session: WalletSession) => void,
+): Promise<UnlistenFn> {
+  return listen<unknown>(POLARIS_EVENT_NAME, (event) => {
+    const payload = event.payload as { type?: unknown } | null;
+    if (payload && payload.type === "wallet_session_changed") {
+      handler(payload as unknown as WalletSession);
+    }
+  });
 }
 
 /** True when a rejection is the wallet commands' typed `{ kind, message }` shape. */

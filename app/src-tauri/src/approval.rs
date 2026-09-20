@@ -46,6 +46,7 @@ use crate::biometric::{AuthError, Authenticator};
 use crate::events::{self, AgentStage, PolarisEvent};
 use crate::health::now_ms;
 use crate::types::{Intent, TxSummary};
+use crate::wallet::session::SessionStore;
 
 /// How long a request stays actionable. At most one Touch ID prompt (60 s) plus
 /// a moment to hand the payload to the bridge fits inside this.
@@ -60,6 +61,8 @@ pub const MAX_XDR_BYTES: usize = 16 * 1024;
 pub const SUPERSEDED_REASON: &str = "superseded";
 /// The reason recorded when the user (or the panel) denies a request.
 pub const DENIED_REASON: &str = "denied by user";
+/// The reason recorded when a lock invalidates the previous session's request.
+pub const LOCKED_REASON: &str = "wallet locked";
 
 /// Lowercase hex SHA-256 of the UTF-8 bytes of the base64 XDR string. This is
 /// the binding the whole gate rests on: base64 XDR strings are hashed as their
@@ -739,6 +742,26 @@ impl ApprovalStore {
             signer_hint,
         })
     }
+
+    /// Invalidates the current request when the wallet session locks (W13a): a
+    /// `Pending` or `Authorized` approval belongs to the session that created it,
+    /// so it may not survive a logout. Returns the denied payload hash so the
+    /// caller can emit the matching `approval_result`; `None` when there was
+    /// nothing live.
+    pub(crate) fn invalidate_for_lock(&self) -> Option<String> {
+        let mut inner = self.lock();
+        let entry = inner.current.as_mut()?;
+        if !matches!(
+            entry.state,
+            ApprovalState::Pending | ApprovalState::Authorized
+        ) {
+            return None;
+        }
+        entry.state = ApprovalState::Denied;
+        entry.in_flight = false;
+        entry.reason = Some(LOCKED_REASON.to_string());
+        Some(entry.request.payload_hash.clone())
+    }
 }
 
 /// The signature hint (last four bytes) of an unsigned v1 transaction envelope's
@@ -787,6 +810,9 @@ pub enum ApprovalErrorKind {
     Expired,
     /// The request is unknown or no longer in the state the call needs.
     NotPending,
+    /// The wallet session is locked (step W13a), so no approval may be started or
+    /// authorized until the user logs in.
+    Locked,
 }
 
 impl ApprovalCommandError {
@@ -877,8 +903,15 @@ impl From<AuthorizeFailure> for ApprovalCommandError {
 pub fn approval_begin(
     app: AppHandle,
     store: State<'_, ApprovalStore>,
+    session: State<'_, std::sync::Arc<SessionStore>>,
     request: ApprovalRequest,
 ) -> Result<String, ApprovalCommandError> {
+    if !session.is_unlocked() {
+        return Err(ApprovalCommandError::new(
+            ApprovalErrorKind::Locked,
+            "the wallet is locked; log in before approving a transaction",
+        ));
+    }
     let outcome = store.begin(request)?;
     if let Some(superseded) = &outcome.superseded {
         events::emit(
@@ -914,9 +947,16 @@ pub fn approval_begin(
 pub async fn approval_authorize(
     app: AppHandle,
     store: State<'_, ApprovalStore>,
+    session: State<'_, std::sync::Arc<SessionStore>>,
     authenticator: State<'_, Arc<dyn Authenticator>>,
     id: String,
 ) -> Result<ApprovalSnapshot, ApprovalCommandError> {
+    if !session.is_unlocked() {
+        return Err(ApprovalCommandError::new(
+            ApprovalErrorKind::Locked,
+            "the wallet is locked; log in before authorizing",
+        ));
+    }
     let snapshot_store = store.inner().clone();
     let task_store = snapshot_store.clone();
     let authenticator = Arc::clone(authenticator.inner());
