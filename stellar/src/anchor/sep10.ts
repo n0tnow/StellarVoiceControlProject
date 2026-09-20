@@ -129,7 +129,7 @@ export function decodeJwt(jwt: string): { sub?: string; exp?: number; iss?: stri
   const part = jwt.split(".")[1];
   if (!part) throw new ChallengeError("anchor returned a malformed token");
   try {
-    return JSON.parse(Buffer.from(part, "base64url").toString("utf8")) as { sub?: string; exp?: number; iss?: string };
+    return JSON.parse(Buffer.from(part.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8")) as { sub?: string; exp?: number; iss?: string };
   } catch {
     throw new ChallengeError("anchor returned a malformed token");
   }
