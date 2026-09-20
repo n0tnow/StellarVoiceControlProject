@@ -98,11 +98,13 @@ export function ShellSurface({
   const { setNotchPage } = pageController;
 
   // A cue on the shell's own open/close, not on every state change: `open`
-  // when it commits into an interactive surface (`panel`/`prompt`), `close`
-  // when it returns to `collapsed`. The `collapsed <-> compact` voice-strip
-  // transition is deliberately silent — it fires on every push-to-talk press
-  // and release while a turn's TTS may already be speaking, and a click cue
-  // racing the voice audio would read as a glitch, not a confirmation.
+  // when it commits into an interactive surface (`panel`/`prompt`), and
+  // `close` only when an interactive surface collapses back to `collapsed`
+  // (`previous` was `panel`/`prompt`). The `collapsed <-> compact` voice-strip
+  // transition is deliberately silent *in both directions* — it fires on every
+  // push-to-talk press and release while a turn's TTS may already be speaking,
+  // and a click cue racing the voice audio would read as a glitch, not a
+  // confirmation.
   const previousApplied = useRef(applied);
   useEffect(() => {
     const previous = previousApplied.current;
@@ -110,7 +112,7 @@ export function ShellSurface({
     if (previous === applied) return;
     if (applied === "panel" || applied === "prompt") {
       playSfx("open");
-    } else if (applied === "collapsed") {
+    } else if (applied === "collapsed" && (previous === "panel" || previous === "prompt")) {
       playSfx("close");
     }
   }, [applied]);
