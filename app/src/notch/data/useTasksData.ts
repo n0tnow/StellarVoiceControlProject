@@ -12,13 +12,15 @@
  * `@/lib/useTxRun` pipeline (approval card → Touch ID → wallet signing →
  * submit). Nothing else on the page moves value.
  *
- * Performance: the last successful read is kept in a module-level cache
- * (`tasksCache`) and concurrent mounts share one in-flight load
- * (`tasksInFlight`). A remount therefore paints the previous rows immediately
- * and revalidates in the background — it never blocks the first frame on the
- * chain read, and never fires a second identical read.
+ * Performance: the last successful read is kept in an **owner-scoped** cache
+ * (`tasksCache`, keyed by `ownerAddress|networkPassphrase`) and concurrent
+ * mounts share one in-flight load. A remount therefore paints the previous
+ * rows immediately and revalidates in the background — it never blocks the
+ * first frame on the chain read, and never fires a second identical read. The
+ * key means a snapshot is never seeded or served after the active wallet
+ * account changes; the cache is cleared on that edge and the effect refetches.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { isTauri } from "@tauri-apps/api/core";
 
 import type { Intent } from "@polaris/interfaces";
@@ -28,6 +30,9 @@ import { buildScheduleForm, deviceTimeZone, toScheduleRows, type ScheduleForm } 
 import { MOCK_SCHEDULED_TASKS, formatNextRun, type ScheduledTask } from "../../lib/mockData.ts";
 import { useTxRun, type UseTxRun } from "../../lib/useTxRun.ts";
 import type { TxRunOutcome } from "../../lib/txPipeline.ts";
+import { walletSessionStore } from "../../lib/walletSessionLive.ts";
+
+import { createSnapshotCache, type SnapshotLoad } from "./snapshotCache.ts";
 
 /** One row the Tasks page renders (the hook boundary adapts every source). */
 export interface TaskRow {
@@ -118,11 +123,46 @@ interface TasksLoad {
   error: string | null;
 }
 
-/** The last successful `loadTasks` answer, shared across mounts of the page. */
-let tasksCache: TasksLoad | null = null;
+/* ------------------------------------------------------------------ *
+ * Owner-scoped snapshot cache
+ * ------------------------------------------------------------------ */
 
-/** The read in flight, so two mounts (or a remount) never issue it twice. */
-let tasksInFlight: Promise<TasksLoad> | null = null;
+/** The cache key for the browser preview (no owner). */
+const PREVIEW_KEY = "preview";
+
+/** Separator between the owner and the network in a scope key. */
+const KEY_SEPARATOR = "|";
+
+/** The scope key a snapshot is read for: `ownerAddress|networkPassphrase`. */
+function scopeKey(owner: string, network: string): string {
+  return `${owner}${KEY_SEPARATOR}${network}`;
+}
+
+/** The owner half of a scope key. */
+function scopeOwner(key: string): string {
+  const end = key.indexOf(KEY_SEPARATOR);
+  return end === -1 ? key : key.slice(0, end);
+}
+
+/** The active wallet account, or `null` when locked/absent or in the preview. */
+function useActiveOwner(): string | null {
+  const read = (): string | null => walletSessionStore.getSnapshot().session?.active?.address ?? null;
+  return useSyncExternalStore(walletSessionStore.subscribe, read, read);
+}
+
+/** The last successful read, shared across mounts of the page. */
+const tasksCache = createSnapshotCache<TasksLoad>(loadTasks);
+
+/**
+ * The cached snapshot's key, but only when it belongs to `owner`; `null`
+ * otherwise. A network change also changes the key, so it can never seed.
+ */
+function seedKeyFor(owner: string | null): string | null {
+  const stored = tasksCache.cachedKey();
+  if (stored === null) return null;
+  if (owner === null) return stored === PREVIEW_KEY ? PREVIEW_KEY : null;
+  return scopeOwner(stored) === owner ? stored : null;
+}
 
 /** Which body the page renders, derived from the load state. Pure. */
 export type TasksViewState = "skeleton" | "error" | "empty" | "rows";
@@ -144,41 +184,37 @@ export function tasksViewState(input: {
   return "empty";
 }
 
-/** Dedupes concurrent reads: every caller awaits the same in-flight promise. */
-function fetchTasks(timeZone: string): Promise<TasksLoad> {
-  tasksInFlight ??= loadTasks(timeZone).finally(() => {
-    tasksInFlight = null;
-  });
-  return tasksInFlight;
-}
-
 /**
  * Loads the list: the labelled demo outside Tauri, real `listUpcoming` inside
- * Tauri. Never throws — a read failure (or a missing owner) is returned as the
- * `error` so the page can show it with a Retry; mock rows never appear once a
- * real runtime is available.
+ * Tauri. Never throws — a read failure (or a missing owner) comes back as
+ * `{ ok: false }` so the cache can keep the last good snapshot; mock rows never
+ * appear once a real runtime is available.
  */
-async function loadTasks(timeZone: string): Promise<TasksLoad> {
+async function loadTasks(_key: string): Promise<SnapshotLoad<TasksLoad>> {
   if (!isTauri()) {
-    return { rows: rowsFromMock(MOCK_SCHEDULED_TASKS), demo: true, error: null };
+    return {
+      ok: true,
+      key: PREVIEW_KEY,
+      value: { rows: rowsFromMock(MOCK_SCHEDULED_TASKS), demo: true, error: null },
+    };
   }
 
-  let ownerAddress: string | null = null;
   try {
     const { getStellarConfig } = await import("@/lib/stellarConfig");
-    ownerAddress = (await getStellarConfig()).ownerAddress;
-  } catch (failure) {
-    return { rows: [], demo: false, error: messageOf(failure) };
-  }
-  if (tasksSource({ inTauri: true, ownerAddress }) === "unconfigured") {
-    return { rows: [], demo: false, error: "POLARIS_OWNER_ADDRESS is not set" };
-  }
-
-  try {
+    const config = await getStellarConfig();
+    if (tasksSource({ inTauri: true, ownerAddress: config.ownerAddress }) === "unconfigured") {
+      return { ok: false, error: "POLARIS_OWNER_ADDRESS is not set" };
+    }
+    const owner = config.ownerAddress as string;
+    const key = scopeKey(owner, config.networkPassphrase);
     const { loadUpcoming } = await import("@/lib/schedulesLive");
-    return { rows: rowsFromUpcoming(await loadUpcoming(timeZone)), demo: false, error: null };
+    return {
+      ok: true,
+      key,
+      value: { rows: rowsFromUpcoming(await loadUpcoming(deviceTimeZone())), demo: false, error: null },
+    };
   } catch (failure) {
-    return { rows: [], demo: false, error: messageOf(failure) };
+    return { ok: false, error: messageOf(failure) };
   }
 }
 
@@ -190,6 +226,8 @@ export interface TasksData {
   refreshing: boolean;
   /** Human read error from the last load, or `null`. */
   error: string | null;
+  /** A failed background revalidation's message, while the last good rows stay. */
+  refreshError: string | null;
   /** True when the rows are the demo fallback, not real chain data. */
   demo: boolean;
   timeZone: string;
@@ -210,36 +248,82 @@ export interface TasksData {
 export function useTasksData(): TasksData {
   // The IANA zone cannot change while the panel is open, so resolve it once.
   const timeZone = useMemo(() => deviceTimeZone(), []);
-  const cached = tasksCache;
-  const [rows, setRows] = useState<TaskRow[]>(cached?.rows ?? []);
-  const [loading, setLoading] = useState(cached === null);
+  const owner = useActiveOwner();
+  const seed = tasksCache.peek(seedKeyFor(owner));
+  const [rows, setRows] = useState<TaskRow[]>(seed?.rows ?? []);
+  /** The owner the current rows were read for; gates the first frame after a switch. */
+  const [rowsOwner, setRowsOwner] = useState<string | null>(owner);
+  const [loading, setLoading] = useState(seed === null);
   const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState<string | null>(cached?.error ?? null);
-  const [demo, setDemo] = useState(cached?.demo ?? false);
+  const [error, setError] = useState<string | null>(seed?.error ?? null);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
+  const [demo, setDemo] = useState(seed?.demo ?? false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
   const tx = useTxRun();
   const run = tx.run;
+  const firstRun = useRef(true);
+  const previousOwner = useRef<string | null | undefined>(undefined);
 
   useEffect(() => {
     let cancelled = false;
-    // Cached rows paint immediately; only the very first read blocks on the
-    // chain. A revalidation after that is a quiet background refresh.
-    if (tasksCache === null) setLoading(true);
-    else setRefreshing(true);
-    fetchTasks(timeZone).then((load) => {
-      tasksCache = load;
+    const first = firstRun.current;
+    firstRun.current = false;
+    const ownerChanged = !first && previousOwner.current !== owner;
+    previousOwner.current = owner;
+    if (ownerChanged) {
+      // The active account changed: no snapshot from the previous owner may be
+      // seeded or served again.
+      tasksCache.clear();
+      setRefreshError(null);
+    }
+
+    const seedKey = seedKeyFor(owner);
+    const cached = tasksCache.peek(seedKey);
+    if (ownerChanged) {
+      setRows(cached?.rows ?? []);
+      setRowsOwner(owner);
+      setDemo(cached?.demo ?? false);
+      setError(cached?.error ?? null);
+      setLoading(cached === null);
+      setRefreshing(false);
+    } else if (cached === null) {
+      // Cached rows paint immediately; only the very first read blocks on the
+      // chain. A revalidation after that is a quiet background refresh.
+      setLoading(true);
+    } else {
+      setRefreshing(true);
+    }
+
+    const requestedKey = seedKey ?? (owner === null ? PREVIEW_KEY : `${owner}${KEY_SEPARATOR}`);
+    tasksCache.load(requestedKey, { force: !first }).then((read) => {
       if (cancelled) return;
-      setRows(load.rows);
-      setDemo(load.demo);
-      setError(load.error);
+      setRowsOwner(owner);
+      if (read.value === null) {
+        // A failed first read is an honest error, never stale mock data.
+        setRows([]);
+        setDemo(false);
+        setError(read.error);
+        setRefreshError(null);
+      } else if (read.stale) {
+        // A failed revalidation keeps the last good rows and only hints.
+        setRows(read.value.rows);
+        setDemo(read.value.demo);
+        setError(read.value.error);
+        setRefreshError(read.error);
+      } else {
+        setRows(read.value.rows);
+        setDemo(read.value.demo);
+        setError(read.value.error);
+        setRefreshError(null);
+      }
       setLoading(false);
       setRefreshing(false);
     });
     return () => {
       cancelled = true;
     };
-  }, [timeZone, nonce]);
+  }, [timeZone, nonce, owner]);
 
   const refresh = useCallback(() => setNonce((value) => value + 1), []);
 
@@ -296,5 +380,19 @@ export function useTasksData(): TasksData {
     [run, refresh],
   );
 
-  return { rows, loading, refreshing, error, demo, timeZone, refresh, cancel, create, actionError, tx };
+  return {
+    // Gate the first frame after an account switch: never paint another owner's rows.
+    rows: rowsOwner === owner ? rows : [],
+    loading,
+    refreshing,
+    error,
+    refreshError,
+    demo,
+    timeZone,
+    refresh,
+    cancel,
+    create,
+    actionError,
+    tx,
+  };
 }

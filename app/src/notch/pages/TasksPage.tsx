@@ -11,7 +11,7 @@
  * at once and revalidates quietly; the first open shows a skeleton, never a
  * blank panel.
  */
-import { memo, useState } from "react";
+import { memo, useCallback, useState } from "react";
 import {
   CalendarClock,
   CheckCircle2,
@@ -118,20 +118,36 @@ export function TasksPage() {
 }
 
 function TasksBody() {
-  const { rows, loading, refreshing, error, demo, timeZone, refresh, cancel, create, actionError, tx } =
-    useTasksData();
+  const {
+    rows,
+    loading,
+    refreshing,
+    error,
+    refreshError,
+    demo,
+    timeZone,
+    refresh,
+    cancel,
+    create,
+    actionError,
+    tx,
+  } = useTasksData();
   const [showNew, setShowNew] = useState(false);
   const [busyId, setBusyId] = useState<number | null>(null);
   const running = tx.state === "running";
   const last = tx.outcomes[tx.outcomes.length - 1];
   const view = tasksViewState({ loading, error, count: rows.length });
 
-  const onCancel = async (row: TaskRow): Promise<void> => {
-    if (row.scheduleId === null || running) return;
-    setBusyId(row.scheduleId);
-    await cancel(row);
-    setBusyId(null);
-  };
+  // Stable identity so `MemoTaskRow` really memoizes across unrelated renders.
+  const onCancel = useCallback(
+    async (row: TaskRow): Promise<void> => {
+      if (row.scheduleId === null || running) return;
+      setBusyId(row.scheduleId);
+      await cancel(row);
+      setBusyId(null);
+    },
+    [cancel, running],
+  );
 
   const onCreate = (schedule: SimpleSchedule): void => {
     setShowNew(false);
@@ -178,6 +194,14 @@ function TasksBody() {
             <RefreshCw aria-hidden="true" />
           </button>
         </p>
+      ) : refreshError !== null ? (
+        <p className="nr-notice is-hint" title={refreshError}>
+          <CircleAlert aria-hidden="true" />
+          Couldn&apos;t refresh.{" "}
+          <button type="button" className="page-icon-button" aria-label="Retry refresh" onClick={refresh}>
+            <RefreshCw aria-hidden="true" />
+          </button>
+        </p>
       ) : null}
 
       {running && tx.progress ? (
@@ -214,7 +238,7 @@ function TasksBody() {
               row={row}
               busy={busyId === row.scheduleId}
               disabled={running}
-              onCancel={(target) => void onCancel(target)}
+              onCancel={onCancel}
             />
           ))}
         </ul>

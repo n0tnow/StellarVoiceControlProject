@@ -70,6 +70,8 @@ export function RulesEditor() {
     executorFunded,
     autoPaySupported,
     busy,
+    refreshing,
+    refreshError,
     message,
     resultHash,
   } = editor;
@@ -106,12 +108,22 @@ export function RulesEditor() {
           className="page-icon-button"
           aria-label="Refresh rules"
           title="Refresh"
-          disabled={state === "loading" || busy}
+          disabled={state === "loading" || busy || refreshing}
           onClick={editor.refresh}
         >
-          <RefreshCw aria-hidden="true" />
+          <RefreshCw className={refreshing ? "page-status is-pending" : undefined} aria-hidden="true" />
         </button>
       </header>
+
+      {refreshError !== null ? (
+        <p className="nr-notice is-hint" title={refreshError}>
+          <CircleAlert aria-hidden="true" />
+          Couldn&apos;t refresh.{" "}
+          <button type="button" className="page-icon-button" aria-label="Retry refresh" onClick={editor.refresh}>
+            <RefreshCw aria-hidden="true" />
+          </button>
+        </p>
+      ) : null}
 
       {state === "loading" ? (
         <RulesSkeleton />
@@ -126,8 +138,10 @@ export function RulesEditor() {
           <ul className="page-list">
             <li className="rule-card">
               <div className="rule-head">
-                <span className={`nr-dot is-${armed ? "active" : "off"}`} aria-hidden="true" />
-                <span className="rule-name">{armed ? "Automatic payments" : "Always ask"}</span>
+                <span className="rule-name">Automatic payments</span>
+                <span className={`nr-pill ${armed ? "is-on" : "is-off"}`}>
+                  {armed ? "On" : "Always ask"}
+                </span>
               </div>
               <p className="rule-body">
                 <span className="rule-condition">{ruleSummary(security, symbol)}</span>
@@ -187,7 +201,7 @@ export function RulesEditor() {
 
             <button
               type="button"
-              className="rule-add"
+              className={`rule-disclosure${advanced ? " is-open" : ""}`}
               aria-expanded={advanced}
               onClick={() => setAdvanced((value) => !value)}
             >
@@ -198,7 +212,7 @@ export function RulesEditor() {
             {armed ? (
               <button
                 type="button"
-                className="rule-add"
+                className="rule-danger"
                 disabled={disabled}
                 onClick={() => void editor.disable()}
               >
