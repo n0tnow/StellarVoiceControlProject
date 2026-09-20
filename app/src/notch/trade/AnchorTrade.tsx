@@ -11,6 +11,7 @@ import { Check, CircleAlert, LoaderCircle, Minus } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import type { BankStepStatus } from "@/lib/bankFlow";
+import { ExplorerLink } from "@/notch/ExplorerLink";
 
 import { phaseStatus, tradeBalanceLine, tradePhases, validateTradeAmount, type TradeDirection } from "./tradeModel";
 import { useAnchorTrade } from "./useAnchorTrade";
@@ -92,7 +93,15 @@ export function AnchorTrade({ direction }: { direction: TradeDirection }) {
       </ul>
 
       {flow.result?.status === "completed" ? (
-        <p className="text-[11px] text-polaris-ok">{flow.result.detail}</p>
+        <p className="text-[11px] text-polaris-ok">
+          {flow.result.detail}
+          {flow.result.txHash ? (
+            <>
+              {" "}
+              <ExplorerLink target={flow.result.txHash} kind="tx" />
+            </>
+          ) : null}
+        </p>
       ) : null}
 
       {flow.error ? (

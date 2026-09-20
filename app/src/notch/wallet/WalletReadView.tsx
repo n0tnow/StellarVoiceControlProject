@@ -10,6 +10,7 @@ import { useState } from "react";
 import { ArrowDownLeft, ArrowUpRight, Check, Copy, ExternalLink, RefreshCw } from "lucide-react";
 import { formatTimestamp, truncateKey } from "@/lib/mockData";
 import { useWalletData } from "@/notch/data/useWalletData";
+import { ExplorerLink } from "@/notch/ExplorerLink";
 import committedAliases from "../../../../stellar/config/aliases.json";
 
 /** How long the copy button shows its confirmation before reverting. */
@@ -94,17 +95,7 @@ export function WalletReadView({ ownerAddressOverride }: WalletReadViewProps = {
           >
             {copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
           </button>
-          {wallet.explorerUrl ? (
-            <a
-              className="page-icon-button"
-              href={wallet.explorerUrl}
-              target="_blank"
-              rel="noreferrer"
-              aria-label="Open account in explorer"
-            >
-              <ExternalLink aria-hidden="true" />
-            </a>
-          ) : null}
+          {wallet.explorerUrl ? <ExplorerLink target={ownerAddress} kind="account" iconOnly /> : null}
         </div>
       ) : null}
 
@@ -114,15 +105,7 @@ export function WalletReadView({ ownerAddressOverride }: WalletReadViewProps = {
           <code className="wallet-key-value selectable" title={latest.hash}>
             {truncateKey(latest.hash, 8, 8)}
           </code>
-          <a
-            className="page-icon-button"
-            href={latest.explorerUrl}
-            target="_blank"
-            rel="noreferrer"
-            aria-label="Open latest transaction in explorer"
-          >
-            <ExternalLink aria-hidden="true" />
-          </a>
+          <ExplorerLink target={latest.hash} kind="tx" iconOnly />
         </div>
       ) : null}
 
@@ -168,18 +151,10 @@ export function WalletReadView({ ownerAddressOverride }: WalletReadViewProps = {
                   <span className="wallet-tx-summary">{tx.summary}</span>
                   <span className="wallet-tx-time">{formatTimestamp(tx.timestamp)}</span>
                 </span>
-                {tx.explorerUrl ? (
-                  <a
-                    className="wallet-tx-amount"
-                    href={tx.explorerUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    {tx.amount}
-                  </a>
-                ) : (
-                  <span className={`wallet-tx-amount is-${tx.status}`}>{tx.amount}</span>
-                )}
+                <span className={`wallet-tx-amount is-${tx.status}`}>{tx.amount}</span>
+                {tx.txHash !== null ? (
+                  <ExplorerLink target={tx.txHash} kind="tx" iconOnly />
+                ) : null}
               </li>
             ))}
           </ul>

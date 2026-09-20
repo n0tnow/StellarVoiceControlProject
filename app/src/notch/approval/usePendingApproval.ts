@@ -11,7 +11,7 @@
  * did. It never sees an XDR and never decides anything: a result is whatever the
  * gate reports.
  */
-import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import type { PolarisEvent } from "@polaris/interfaces";
 
 import {
@@ -38,6 +38,8 @@ export interface PendingApproval {
   readonly visible: boolean;
   readonly canApprove: boolean;
   readonly remainingMs: number | null;
+  /** The tx hash of the most recent `tx_submitted`, for the result link. */
+  readonly txHash: string | null;
   readonly onApprove: () => void;
   readonly onDeny: () => void;
 }
@@ -45,6 +47,9 @@ export interface PendingApproval {
 export function usePendingApproval(): PendingApproval {
   const commands = useMemo<ApprovalCommands>(() => createApprovalCommands(), []);
   const [state, dispatch] = useReducer(reduceOverlay, undefined, initialOverlayState);
+  // The submitted tx hash arrives on its own event, a moment after the approval
+  // is authorised; the result view links to it when it is there.
+  const [txHash, setTxHash] = useState<string | null>(null);
   // Readable from the async callbacks below without re-subscribing them.
   const stateRef = useRef(state);
   stateRef.current = state;
@@ -65,12 +70,16 @@ export function usePendingApproval(): PendingApproval {
   const onEvent = useCallback(
     (event: PolarisEvent) => {
       if (event.type === "approval_request") {
+        // A fresh request starts clean: the previous result's hash is not its own.
+        setTxHash(null);
         refresh();
       } else if (event.type === "approval_result") {
         // Apply the result for the request we are showing, then re-read to
         // reconcile against the store (a batch reconciles here only).
         dispatch({ type: "result", payloadHash: event.payloadHash, approved: event.approved });
         refresh();
+      } else if (event.type === "tx_submitted") {
+        setTxHash(event.hash);
       }
     },
     [refresh],
@@ -88,7 +97,10 @@ export function usePendingApproval(): PendingApproval {
   // in the meantime changes the stage and cancels this timer.
   useEffect(() => {
     if (!isResultStage(state.stage)) return;
-    const timer = setTimeout(() => dispatch({ type: "dismiss" }), RESULT_DWELL_MS);
+    const timer = setTimeout(() => {
+      dispatch({ type: "dismiss" });
+      setTxHash(null);
+    }, RESULT_DWELL_MS);
     return () => clearTimeout(timer);
   }, [state.stage]);
 
@@ -136,6 +148,7 @@ export function usePendingApproval(): PendingApproval {
     visible: isVisible(state),
     canApprove: canApprove(state),
     remainingMs: remainingMs(state),
+    txHash,
     onApprove,
     onDeny,
   };

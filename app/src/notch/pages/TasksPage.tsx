@@ -11,6 +11,7 @@ import { useState } from "react";
 import { CalendarClock, LoaderCircle, Plus, RefreshCw, Trash2 } from "lucide-react";
 
 import { useTasksData, type TaskRow } from "@/notch/data/useTasksData";
+import { ExplorerLink } from "@/notch/ExplorerLink";
 import { NewScheduleForm } from "@/notch/tasks/NewScheduleForm";
 import type { SimpleSchedule } from "@/notch/tasks/newSchedule";
 
@@ -123,7 +124,9 @@ function TasksBody() {
       ) : actionError !== null ? (
         <p className="task-schedule">{actionError}</p>
       ) : last && last.status === "submitted" ? (
-        <p className="task-schedule">Done — the list was refreshed.</p>
+        <p className="task-schedule">
+          Done — the list was refreshed. <ExplorerLink target={last.txHash} kind="tx" />
+        </p>
       ) : null}
 
       {demo ? null : showNew ? (

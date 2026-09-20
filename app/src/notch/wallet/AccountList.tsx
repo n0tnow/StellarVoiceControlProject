@@ -7,12 +7,12 @@
  * stays free of engine calls.
  */
 import { useState } from "react";
-import { Check, Copy, ExternalLink, Pencil, Trash2 } from "lucide-react";
+import { Check, Copy, Pencil, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { DEFAULT_EXPLORER_BASE, explorerAccountUrl } from "@/lib/history";
 import type { WalletEntry } from "@/lib/wallet";
 import { shortAddress } from "@/lib/address";
+import { ExplorerLink } from "@/notch/ExplorerLink";
 
 import { StoreNotice } from "./StoreNotice";
 import { ACTIONS, ERROR, FIELD } from "./styles";
@@ -70,15 +70,7 @@ export function AccountList({
               >
                 {copied === entry.address ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
               </button>
-              <a
-                className="page-icon-button"
-                href={explorerAccountUrl(DEFAULT_EXPLORER_BASE, entry.address)}
-                target="_blank"
-                rel="noreferrer"
-                aria-label="Open account in explorer"
-              >
-                <ExternalLink aria-hidden="true" />
-              </a>
+              <ExplorerLink target={entry.address} kind="account" iconOnly />
 
               {editing === entry.address ? (
                 <span className={ACTIONS}>
