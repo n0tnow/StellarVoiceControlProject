@@ -11,7 +11,7 @@ import { Check, Pencil, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import type { WalletEntry } from "@/lib/wallet";
-import { shortAddress } from "@/panels/wallet/walletModel";
+import { shortAddress } from "@/lib/address";
 
 import { StoreNotice } from "./StoreNotice";
 import { ACTIONS, CARD, ERROR, FIELD, HINT } from "./styles";

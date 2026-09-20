@@ -2,11 +2,12 @@
 
 > **Testnet only.** Every step is implemented in this repo; `[verify live]` marks what
 > still needs a human on a real Mac (mic, STT, Touch ID, real windows, live anchor).
-> The **notch is the only surface**: the menu-bar tray is gone, and the "⋯" menu opens
-> the panel windows and Quit. Addresses: owner **acc1**
+> The **notch is the only surface**: the menu-bar tray is gone and there are no
+> popup windows; every screen (History, Tasks, Rules, Wallet, Trade, Settings) is a
+> page inside the notch. Addresses: owner **acc1**
 > `GAJW5V7VXHIRTJBGNVYTGXJ6CLDM7IEIPAYD3XLKKTKJKPRBYOTAC25A`, recipient **acc2**
 > `GB25QEDATQREAQQHBW3DAGLOZ3EURS44URZETXLLREPPYCX2ABCORNLV`.
-> Panels: `docs/ui-panels.md`. Wallet design: `docs/wallet-track.md`.
+> Notch UI: `docs/notch-ui.md`. Wallet design: `docs/wallet-track.md`.
 
 ## Pre-flight (5 min before)
 - [ ] `make setup` — npm install + `.env` from `.env.example` + icons.

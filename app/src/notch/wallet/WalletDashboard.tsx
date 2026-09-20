@@ -15,7 +15,7 @@ import { Button } from "@/components/ui/button";
 import type { WalletEntry } from "@/lib/wallet";
 import { deriveAssetRows, requestFriendbotFund } from "@/lib/walletAssets";
 import { useWalletData } from "@/notch/data/useWalletData";
-import { shortAddress } from "@/panels/wallet/walletModel";
+import { shortAddress } from "@/lib/address";
 import committedAliases from "../../../../stellar/config/aliases.json";
 
 import { AccountsSection, type AddAccountMode } from "./AccountsSection";

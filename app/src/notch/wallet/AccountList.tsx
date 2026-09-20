@@ -12,7 +12,7 @@ import { Check, Copy, ExternalLink, Pencil, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DEFAULT_EXPLORER_BASE, explorerAccountUrl } from "@/lib/history";
 import type { WalletEntry } from "@/lib/wallet";
-import { shortAddress } from "@/panels/wallet/walletModel";
+import { shortAddress } from "@/lib/address";
 
 import { StoreNotice } from "./StoreNotice";
 import { ACTIONS, ERROR, FIELD } from "./styles";

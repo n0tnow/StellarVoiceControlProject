@@ -32,7 +32,7 @@ money; scope and non-goals are in `docs/architecture.md` §1.
 interfaces/   @polaris/interfaces — the ONLY typed seam between owners (source-only pkg)
 agent/        @polaris/agent      — agent loop, tool registry, event bus        (Owner A)
 app/          @polaris/app        — Tauri v2 desktop shell: Rust core + React UI
-  src/            React 19 + Vite 8 + Tailwind 4 — notch overlay, pages, panels
+  src/            React 19 + Vite 8 + Tailwind 4 — notch overlay and pages
   src-tauri/      Rust: notch/AppKit, Control+Option hold, mic→WAV, Touch ID, embedded wallet, typed event stream
 stellar/      @polaris/stellar    — anchor client (SEP-1/10/12/38/6) + keeper      (Owner B)
 contracts/    Soroban Cargo workspace: polaris_guard (spending rules + scheduler)  (Owner B)
@@ -130,12 +130,13 @@ npm run anchor:e2e -w @polaris/stellar -- --amount-try 50 --withdraw-usdc 1
 Details, verified live anchor behaviour, safety hardening and the mock-vs-mainnet table:
 `stellar/src/anchor/README.md`.
 
-### App, panels and Debug panel
+### App and Diagnostics
 
-The **click-through notch is the only surface**: there is no menu-bar tray. The "⋯" menu
-opens the panel windows (Wallet, Security, Schedules, Suggestions, Anchor, P2P, Privacy,
-Settings, Debug) and Quit. The Debug panel runs per-feature checks (`FeatureChecks`). See
-`docs/ui-panels.md`; the wallet, session and autonomy design is `docs/wallet-track.md`.
+The **click-through notch is the only surface**: there is no menu-bar tray, no "⋯" menu and
+no popup windows. Every screen — History, Tasks, Rules, Wallet, Trade, Settings — is a page
+inside the notch, and the approval card renders inline. The Settings page's Diagnostics runs
+per-feature checks (`FeatureChecks`). See `docs/notch-ui.md`; the wallet, session and autonomy
+design is `docs/wallet-track.md`.
 
 **First run:** launch → the Wallet gate opens → **Create** (phrase shown once) or **Import**
 → **Friendbot** funds the account → add a **contact** (recipient) → hold **Control+Option**

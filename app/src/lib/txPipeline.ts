@@ -1,12 +1,12 @@
 /**
- * The shared "approve → Touch ID → sign → submit" pipeline for panels (W0d).
+ * The shared "approve → Touch ID → sign → submit" pipeline for the notch pages (W0d).
  *
  * The voice payment path (`@/lib/chain.ts`) drives one intent through the seam
- * and then `signAndSubmit`. Panels (Security, Schedules, P2P, Anchor) already
+ * and then `signAndSubmit`. The notch pages (Rules, Tasks, Trade) already
  * build unsigned transactions with the `@polaris/stellar` builders and must push
  * them through the *same* approval pipeline — the Touch ID gate, then the
  * wallet signing, then Horizon. This module factors that path out once so a
- * panel never re-implements it (and never gets it subtly wrong).
+ * page never re-implements it (and never gets it subtly wrong).
  *
  * It composes, and never re-implements, the real seams:
  * - `xdrDigest` (`@polaris/agent`) computes the digest exactly as `executeIntent`

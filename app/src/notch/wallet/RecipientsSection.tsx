@@ -10,7 +10,7 @@ import { useState, type FormEvent } from "react";
 import { Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { shortAddress } from "@/panels/wallet/walletModel";
+import { shortAddress } from "@/lib/address";
 
 import { useContacts } from "./useContacts";
 import { ACTIONS, CARD, ERROR, FIELD, HINT } from "./styles";

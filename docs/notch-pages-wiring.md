@@ -11,7 +11,7 @@ is: `setNotchPage("history" | "tasks" | "rules" | "wallet")` from
 | History | `notch/pages/HistoryPage.tsx` | `lib/history.ts`: `fetchOwnerPayments` + `mapHistoryRecords` (→ `WalletTransaction`), plus the turn's transcript/response text. Map to `HistoryEntry`. |
 | Tasks | `notch/pages/TasksPage.tsx` | `lib/schedulesLive.ts`: `loadUpcoming`; `lib/schedules.ts`: `toScheduleRows`, `keeperStatus` (mirror the `SchedulesPanel`). |
 | Rules | `notch/pages/RulesPage.tsx` | `lib/guardStateLive.ts`: `loadSecurityState`; `lib/guardState.ts`: `stateLines`, `profileModeOf`, `ruleFromFields` (mirror `SecurityPanel`). |
-| Wallet | `notch/pages/WalletPage.tsx` | `lib/stellarConfig.ts`: `getStellarConfig` (owner/network, `stellar_config`); `lib/history.ts`: `fetchOwnerAccount`/`fetchOwnerPayments`; `panels/wallet/walletModel.ts`: `deriveWalletView` (mirror `WalletPanel`). |
+| Wallet | `notch/pages/WalletPage.tsx` | `lib/stellarConfig.ts`: `getStellarConfig` (owner/network, `stellar_config`); `lib/history.ts`: `fetchOwnerAccount`/`fetchOwnerPayments`; `lib/address.ts`: `shortAddress`. |
 
 Tasks page (NW3): `notch/data/useTasksData.ts` adapts `loadUpcoming` →
 `toScheduleRows` → `TaskRow` (amount/recipient, local + UTC next run,
@@ -52,7 +52,7 @@ alias book. States: `unconfigured` ("Guard not configured"), `not_set_up` (rule
 `null`), `error` + Retry (`unreachable`); a real read failure never falls back to
 mock. Outside Tauri, or when `stellar_config` has no owner, the page shows the
 labelled mock demo. The page is read-only — its only action is "Edit rules in
-Security", which calls `openPanel("security")`.
+Security", which reveals the inline rules editor.
 ## History (NW4)
 `HistoryPage` now reads `useHistoryData`, which merges the local turn log
 (`lib/turnLog.ts`, a 50-entry `localStorage` ring buffer fed from `App.tsx`) with

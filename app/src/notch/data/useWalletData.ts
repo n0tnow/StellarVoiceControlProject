@@ -32,7 +32,7 @@ import {
 } from "../../lib/walletAssets.ts";
 import { listenPolarisEvents } from "../../lib/polaris.ts";
 import { getStellarConfig } from "../../lib/stellarConfig.ts";
-import { shortAddress } from "../../panels/wallet/walletModel.ts";
+import { shortAddress } from "../../lib/address.ts";
 
 /** The page's state machine; mirrors the Wallet panel's four read states. */
 export type WalletPageStatus = "loading" | "unconfigured" | "offline" | "unfunded" | "ready";
