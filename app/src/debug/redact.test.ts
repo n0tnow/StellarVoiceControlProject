@@ -35,6 +35,15 @@ test("a public key and a seed in the same string are handled differently", () =>
   assert.ok(!scrubbed.includes(SEED), scrubbed);
 });
 
+test("a BIP-39 recovery phrase is redacted", () => {
+  const phrase =
+    "illness spike retreat truth genius clock brain pass fit cave bargain toe";
+  assert.equal(redact(`seed: ${phrase}`), `seed: ${REDACTED}`);
+  // A short lowercase sentence is not a phrase and survives.
+  const short = "recipient alice is not a known alias";
+  assert.equal(redact(short), short);
+});
+
 test("ordinary text is untouched", () => {
   const text = "capture idle; last clip 1234 ms; Accessibility granted";
   assert.equal(redact(text), text);

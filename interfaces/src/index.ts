@@ -339,10 +339,66 @@ export interface StellarConfig {
   horizonUrl: string;
   networkPassphrase: string;
   ownerAddress: string | null;
+  /**
+   * Which signer the shell uses (step W10): `embedded` (the in-app wallet,
+   * the default) or `freighter` (the optional browser bridge, via
+   * `POLARIS_SIGNER=freighter`).
+   */
+  signer: "embedded" | "freighter";
   aliases: Record<string, string>;
   guardContractId: string | null;
   /** `POLARIS_P2P_CONTRACT_ID`; the deployed `polaris_p2p_escrow` id, or null. */
   p2pContractId: string | null;
+}
+
+/* ------------------------------------------------------------------ *
+ * 7b. Embedded wallet (step W10)
+ * ------------------------------------------------------------------ */
+
+/** `wallet_status` result. `store` is `keychain` or `file (testnet only)`. */
+export interface WalletStatus {
+  signer: "embedded" | "freighter";
+  /** The active account, or null when no wallet exists yet. */
+  active: { address: string; label: string } | null;
+  /** How many accounts the metadata file holds. */
+  count: number;
+  store: string;
+}
+
+/** One account in `wallet_list`; metadata only, never a secret. */
+export interface WalletAccount {
+  address: string;
+  label: string;
+  /** Milliseconds since the Unix epoch. */
+  createdAt: number;
+  active: boolean;
+}
+
+/** `wallet_create` result: the address plus the one-time recovery phrase. */
+export interface WalletCreateOutcome {
+  address: string;
+  /** The 24-word BIP-39 phrase; show once, then discard. */
+  recoveryPhrase: string;
+}
+
+/** `wallet_import_preview`/`wallet_import`/select/rename/remove result. */
+export interface WalletAddressOutcome {
+  address: string;
+}
+
+/** The failure categories the wallet commands reject with. */
+export type WalletErrorKind =
+  | "exists"
+  | "invalid"
+  | "notFound"
+  | "cancelled"
+  | "keychain"
+  | "unauthorized";
+
+/** The typed rejection shape of the wallet commands. */
+export interface WalletCommandError {
+  kind: WalletErrorKind;
+  message: string;
 }
 
 /* ------------------------------------------------------------------ *

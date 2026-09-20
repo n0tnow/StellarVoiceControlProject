@@ -22,10 +22,11 @@ export const REDACTED = "[redacted]";
  * 2. `sk-…` — OpenAI/Anthropic-style keys.
  * 3. `S…` — a 56-char Stellar secret seed (base32).
  * 4. `G…` — a 56-char Stellar public key (recognised so it can be preserved).
- * 5. A ≥40-char base64/hex run — the catch-all for opaque tokens.
+ * 5. 12–24 consecutive lowercase words — a BIP-39 recovery phrase (W10).
+ * 6. A ≥40-char base64/hex run — the catch-all for opaque tokens.
  */
 const SECRET_TOKEN =
-  /\bgsk_[A-Za-z0-9_-]{8,}|\bsk-[A-Za-z0-9_-]{8,}|\bS[A-Z2-7]{55}\b|\bG[A-Z2-7]{55}\b|[A-Za-z0-9+/]{40,}={0,2}/g;
+  /\bgsk_[A-Za-z0-9_-]{8,}|\bsk-[A-Za-z0-9_-]{8,}|\bS[A-Z2-7]{55}\b|\bG[A-Z2-7]{55}\b|\b(?:[a-z]{2,8}\s+){11,23}[a-z]{2,8}\b|[A-Za-z0-9+/]{40,}={0,2}/g;
 
 /** A full Stellar public key: public, so it must not be scrubbed. */
 const PUBLIC_KEY = /^G[A-Z2-7]{55}$/;

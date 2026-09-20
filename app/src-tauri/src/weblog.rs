@@ -59,6 +59,44 @@ fn is_stellar_key(bytes: &[u8], index: usize, first: u8) -> bool {
         && bytes.get(end).map_or(true, |b| !is_base32(*b))
 }
 
+/// The length of a BIP-39-word-shaped token at `index` (3–8 ASCII lowercase
+/// letters), or `None`.
+fn lowercase_word_len(bytes: &[u8], index: usize) -> Option<usize> {
+    let mut len = 0;
+    while index + len < bytes.len() && bytes[index + len].is_ascii_lowercase() {
+        len += 1;
+        if len > 8 {
+            return None;
+        }
+    }
+    if (3..=8).contains(&len) {
+        Some(len)
+    } else {
+        None
+    }
+}
+
+/// The byte length of a run of 12+ space-separated lowercase words at `index`
+/// (a BIP-39 recovery phrase, W10), or `None`. Deliberately over-redacts: any
+/// 12-word lowercase run is scrubbed rather than risking a leaked phrase.
+fn mnemonic_len(bytes: &[u8], index: usize) -> Option<usize> {
+    if !word_boundary_before(bytes, index) {
+        return None;
+    }
+    let mut at = index;
+    let mut words = 0;
+    loop {
+        let word = lowercase_word_len(bytes, at)?;
+        words += 1;
+        let end = at + word;
+        // The run ends unless a single space is followed by another word.
+        if bytes.get(end) != Some(&b' ') || lowercase_word_len(bytes, end + 1).is_none() {
+            return if words >= 12 { Some(end - index) } else { None };
+        }
+        at = end + 1;
+    }
+}
+
 /// Length of a secret token starting at `index`, or `None`. `Bearer …` is
 /// handled by the caller because its whitespace must be preserved.
 fn secret_len(bytes: &[u8], index: usize) -> Option<usize> {
@@ -139,6 +177,13 @@ pub fn redact(input: &str) -> String {
         if is_stellar_key(bytes, index, b'G') {
             out.push_str(&input[index..index + 56]);
             index += 56;
+            continue;
+        }
+
+        // A BIP-39 recovery phrase (W10) is a secret even without a key shape.
+        if let Some(len) = mnemonic_len(bytes, index) {
+            out.push_str(REDACTED);
+            index += len;
             continue;
         }
 
@@ -225,6 +270,15 @@ mod tests {
     fn long_base64_and_hex_blobs_are_redacted() {
         assert_eq!(redact(&"A".repeat(64)), REDACTED);
         assert_eq!(redact(&"abcdef0123456789".repeat(4)), REDACTED);
+    }
+
+    #[test]
+    fn a_recovery_phrase_is_redacted() {
+        let phrase = "illness spike retreat truth genius clock brain pass fit cave bargain toe";
+        assert_eq!(redact(&format!("seed: {phrase}")), "seed: [redacted]");
+        // A short lowercase sentence is not a phrase and survives.
+        let short = "recipient alice is not a known alias";
+        assert_eq!(redact(short), short);
     }
 
     #[test]

@@ -7,16 +7,16 @@
  *
  * * **SEP-10 login challenge** (a transaction with sequence number 0 that can
  *   never be applied on-chain) is signed **wallet-only**, without Touch ID, by
- *   the Rust command `bridge_sign_challenge`. It proves key ownership and moves
- *   no funds.
+ *   `wallet_sign_challenge` (embedded) or `bridge_sign_challenge` (freighter).
+ *   It proves key ownership and moves no funds.
  * * **Every other anchor transaction** (the USDC trustline `changeTrust`, the
  *   withdrawal payment) goes through the shared approval pipeline
- *   (`@/lib/txPipeline` → Touch ID card → Freighter bridge). The pipeline signs
- *   the exact blob the session built; the session itself submits it, so this
- *   module deliberately does not reach Horizon.
+ *   (`@/lib/txPipeline` → Touch ID card → the configured signer). The pipeline
+ *   signs the exact blob the session built; the session itself submits it, so
+ *   this module deliberately does not reach Horizon.
  *
  * The routing decision is read from the XDR alone (`sequence === "0"`), never
- * from caller-supplied text. `bridge_sign_challenge` is feature-detected: on a
+ * from caller-supplied text. The challenge command is feature-detected: on a
  * build without it the login step fails closed with
  * [`AnchorSigningUnavailableError`], which the panel renders as "unknown"
  * rather than a silent skip.
@@ -31,6 +31,7 @@ import { runTx, type TxPipelineDeps, type TxRunMeta } from "./txPipeline.ts";
 import {
   defaultSigningDeps,
   isBridgeSigned,
+  resolveSigner,
   signAndSubmit,
   type BridgeOutcome,
   type SigningDeps,
@@ -124,9 +125,9 @@ export function anchorTxHash(
 export interface AnchorSignerDeps {
   /** The owner `G...` address (read from `stellar_config`). */
   owner: () => Promise<string>;
-  /** Wallet-only challenge signing (`bridge_sign_challenge`). */
+  /** Wallet-only challenge signing (`wallet_sign_challenge` / `bridge_sign_challenge`). */
   signChallenge: (xdr: string) => Promise<BridgeOutcome>;
-  /** Touch ID + Freighter signing of a non-challenge envelope; returns the signed XDR. */
+  /** Touch ID + configured-signer signing of a non-challenge envelope; returns the signed XDR. */
   signViaPipeline: (
     result: ChainToolResult,
     meta: TxRunMeta,
@@ -158,14 +159,18 @@ async function defaultOwner(): Promise<string> {
   return config.ownerAddress;
 }
 
-/** Default challenge signer: the W5a Rust command, feature-detected. */
+/** Default challenge signer: `wallet_sign_challenge` (embedded) or the W5a
+ * `bridge_sign_challenge` (freighter), chosen from `stellar_config` and
+ * feature-detected. */
 async function defaultSignChallenge(xdr: string): Promise<BridgeOutcome> {
+  const signer = await resolveSigner(invoke);
+  const command = signer === "embedded" ? "wallet_sign_challenge" : "bridge_sign_challenge";
   try {
-    return await invoke<BridgeOutcome>("bridge_sign_challenge", { xdr });
+    return await invoke<BridgeOutcome>(command, { xdr });
   } catch (error) {
     if (isMissingCommandError(error)) {
       throw new AnchorSigningUnavailableError(
-        "the Rust command bridge_sign_challenge is not present on this build yet; SEP-10 login cannot be signed",
+        `the Rust command ${command} is not present on this build yet; SEP-10 login cannot be signed`,
       );
     }
     throw error;
