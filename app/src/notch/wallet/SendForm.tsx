@@ -12,7 +12,8 @@ import { useState, type FormEvent } from "react";
 import { Check } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { executeApprovedIntent } from "@/lib/chain";
+import { ExplorerLink } from "@/notch/ExplorerLink";
+import { executeApprovedIntent, recipientForTypedAddress } from "@/lib/chain";
 import type { PaymentStage } from "@/lib/turnSession";
 
 import { useContacts } from "./useContacts";
@@ -75,7 +76,7 @@ export function SendForm({ assets, onSent }: SendFormProps) {
     setState({ kind: "running", label: STAGE_LABEL.awaiting_approval });
     try {
       const outcome = await executeApprovedIntent(
-        { kind: "send", asset, amount: amount.trim(), recipient: to },
+        { kind: "send", asset, amount: amount.trim(), recipient: await recipientForTypedAddress(to) },
         { onStage: (stage) => setState({ kind: "running", label: STAGE_LABEL[stage] }) },
       );
       if (outcome.status === "executed" && outcome.txHash !== undefined) {
@@ -146,6 +147,7 @@ export function SendForm({ assets, onSent }: SendFormProps) {
             <code className="selectable" title={state.txHash}>
               {`${state.txHash.slice(0, 8)}…${state.txHash.slice(-8)}`}
             </code>
+            <ExplorerLink kind="tx" target={state.txHash} />
           </p>
         ) : null}
 

@@ -106,6 +106,41 @@ const OWNER_MISSING = "POLARIS_OWNER_ADDRESS is not set";
 let configured = false;
 let configuring: Promise<void> | undefined;
 
+/**
+ * The live alias book the payment tool resolves recipients against (shared by
+ * reference with the configured deps), so a typed address can be added to it.
+ */
+let paymentBook: Record<string, { address: string; network: "testnet" }> | undefined;
+
+// A contact saved (or removed) after start must be payable without a restart:
+// forget the memoized config so the next turn rebuilds the alias book from the
+// current contacts.
+if (typeof window !== "undefined") {
+  window.addEventListener("polaris:contacts-changed", () => {
+    configured = false;
+    configuring = undefined;
+  });
+}
+
+/**
+ * Lets a person pay an address they typed themselves: registers it in the alias
+ * book under a short deterministic name and returns that name for the intent.
+ * The voice agent never uses this — its recipients must still be saved aliases,
+ * so a hallucinated address cannot be paid. The approval card always shows the
+ * full address, and the owner path still needs Touch ID.
+ */
+export async function recipientForTypedAddress(address: string): Promise<string> {
+  await ensurePaymentsConfigured();
+  const { parseAliasBook } = await import("@polaris/stellar");
+  const trimmed = address.trim();
+  const name = `to-${trimmed.slice(-24).toLowerCase()}`;
+  const { book } = parseAliasBook({ [name]: trimmed });
+  const entry = book[name];
+  if (!entry || !paymentBook) throw new Error("could not use that address");
+  paymentBook[name] = entry;
+  return name;
+}
+
 /** The env `alias -> address` map as alias-book entries (testnet only). */
 function envAliasEntries(
   aliases: Record<string, string>,
@@ -139,6 +174,7 @@ async function ensurePaymentsConfigured(): Promise<void> {
       ...committedAliases,
       ...envAliasEntries(config.aliases),
     });
+    paymentBook = book;
     configurePayments(
       defaultPaymentDeps({
         ownerAddress: config.ownerAddress,
