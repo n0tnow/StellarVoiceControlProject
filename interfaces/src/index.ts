@@ -34,6 +34,25 @@ export type IntentKind =
   | "p2p_cancel"
   | "p2p_reclaim";
 
+/**
+ * A spending rule spoken by the user (`set_approval_rule`, voice-dialog). It is
+ * attached to a `guard_policy` intent as a **proposal only**: the executor does
+ * not apply it in this build (it answers "Autonomous rules aren't enabled in this
+ * build yet"), and a weakening change is never applied silently by voice.
+ * Amounts are decimal strings, never floats. Mirrors `guardState.ts`'s fields.
+ */
+export interface ApprovalRulePayload {
+  mode: "always_ask" | "auto_under_limit";
+  /** Biggest single unattended payment; required for `auto_under_limit`. */
+  autoApproveLimit?: string;
+  /** Asset the limits apply to; absent means the user's ambiguity was not resolved. */
+  asset?: string;
+  perTxLimit?: string;
+  dailyLimit?: string;
+  /** When true the agent may only pay addresses in the owner's alias book. */
+  knownRecipientsOnly?: boolean;
+}
+
 export interface Intent {
   kind: IntentKind;
   /** e.g. "USDC" (testnet) */
@@ -69,6 +88,17 @@ export interface Intent {
   priceTry?: string;
   /** P2P accept/confirm only: the on-chain offer id spoken by the user. */
   offerId?: number;
+  /**
+   * `guard_policy` voice proposal only (`set_approval_rule`). Present iff the rule
+   * came from a spoken command; the Security panel builds its own `guard_policy`
+   * intents without it, so the executor can tell the two apart.
+   */
+  rule?: ApprovalRulePayload;
+  /**
+   * `sell`/`buy` voice hint: which ramp the user chose. Display/telemetry only;
+   * the executor dispatches on `kind` (withdraw/deposit/p2p_offer/p2p_accept).
+   */
+  route?: "anchor" | "p2p";
 }
 
 /* ------------------------------------------------------------------ *

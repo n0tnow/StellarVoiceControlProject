@@ -1,4 +1,5 @@
 import type { Intent, NavigationRequest } from "@polaris/interfaces";
+import { clarificationSentence, DialogMemory, isCancelUtterance } from "./dialog.ts";
 import { AgentError, isAgentError } from "./errors.ts";
 import type { PolarisEventBus } from "./events.ts";
 import { resolveTurnLanguage } from "./language.ts";
@@ -59,6 +60,12 @@ export interface AgentTurnOptions {
    * transcript text wins (`resolveTurnLanguage`, inverted in A14).
    */
   transcriptLanguage?: string;
+  /**
+   * Conversation memory (voice-dialog). When present, the last exchanges and any
+   * pending clarification are added to the prompt and the turn updates the memory;
+   * absent keeps the old one-shot behaviour (the CLI/demo path).
+   */
+  dialog?: DialogMemory;
 }
 
 export interface AgentTurnResult {
@@ -115,7 +122,8 @@ export function describeIntent(intent: Intent): string {
  *   UI can show the short label while the terminal keeps the full detail.
  */
 export async function runTurn(options: AgentTurnOptions): Promise<AgentTurnResult> {
-  const { transcript, registry, llm, bus } = options;
+  const { transcript, registry, llm, bus, dialog } = options;
+  const now = options.toolContext?.now ?? new Date();
   const context: ToolContext = {
     network: options.network ?? "testnet",
     transcript,
@@ -123,13 +131,18 @@ export async function runTurn(options: AgentTurnOptions): Promise<AgentTurnResul
   };
   const system = withClock(
     withDetectedLanguage(options.system ?? POLARIS_SYSTEM_PROMPT, options.transcriptLanguage),
-    options.toolContext?.now ?? new Date(),
+    now,
     options.toolContext?.timeZone,
   );
+  // voice-dialog: the model sees what it just asked and what it already knows,
+  // built from the pre-turn state (never the current utterance).
+  const dialogBlock = dialog?.contextBlock(now.getTime()) ?? "";
+  const prompt = dialogBlock.length > 0 ? `${system}\n\n${dialogBlock}` : system;
+  dialog?.recordUser(transcript);
 
   try {
     bus.emit({ type: "agent_status", stage: "thinking" });
-    const first = await llm.turn({ transcript, system, tools: registry.definitions() });
+    const first = await llm.turn({ transcript, system: prompt, tools: registry.definitions() });
 
     // A14: the model's assessment of the transcript text is authoritative; the
     // STT label is a hint kept as the fallback. Say which won when the two
@@ -160,6 +173,13 @@ export async function runTurn(options: AgentTurnOptions): Promise<AgentTurnResul
       }
 
       if (tool.requiresApproval) {
+        // voice-dialog: an approval-gated tool may have a read-only branch for
+        // this input (buying peer-to-peer opens the offers before anything signs).
+        const readOnly = tool.toNavigationFor?.(call.input as never, context);
+        if (readOnly) {
+          navigations.push(readOnly);
+          continue;
+        }
         if (!tool.toIntent) {
           throw new AgentError("config", `approval-gated tool ${tool.name} does not implement toIntent()`);
         }
@@ -171,9 +191,16 @@ export async function runTurn(options: AgentTurnOptions): Promise<AgentTurnResul
           if (isAgentError(error) && error.kind === "input") {
             // The model's tool call could not be trusted. Ask instead of storing
             // a bogus intent (docs/architecture.md §6: the LLM proposes).
-            clarification ??=
-              `I couldn't turn that into a payment. Please repeat the amount, ` +
-              `asset and recipient. (${error.detail})`;
+            if (error.pending) {
+              // voice-dialog: remember exactly which slot is missing so the next
+              // utterance completes this request instead of starting over.
+              dialog?.setPending(error.pending, now.getTime());
+              clarification ??= clarificationSentence(error.pending.question, language.language);
+            } else {
+              clarification ??=
+                `I couldn't turn that into a payment. Please repeat the amount, ` +
+                `asset and recipient. (${error.detail})`;
+            }
           } else {
             throw error;
           }
@@ -216,6 +243,19 @@ export async function runTurn(options: AgentTurnOptions): Promise<AgentTurnResul
     // A value-moving intent outranks navigation: if the model produced both, the
     // payment is what matters and the screen request is dropped.
     const navigation = intents.length === 0 ? navigations[0] : undefined;
+
+    // voice-dialog: settle the dialogue for the next utterance. An explicit
+    // cancel or a completed/refused action clears it; a clarification keeps the
+    // pending slot (already armed above) and the answer is remembered.
+    if (dialog) {
+      if (isCancelUtterance(transcript)) {
+        dialog.reset();
+      } else if (resolved || navigation || intents.length > 1) {
+        dialog.reset();
+      } else {
+        dialog.recordAssistant(answer);
+      }
+    }
 
     if (toolResults.length > 0) {
       bus.emit({

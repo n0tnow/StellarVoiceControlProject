@@ -73,6 +73,13 @@ export interface AgentTool<Input = unknown, Output = unknown> {
    * chain.
    */
   toNavigation?(output: Output): NavigationRequest | undefined;
+  /**
+   * Optional read-only branch of an **approval-gated** tool (voice-dialog): for
+   * an input that should open a screen instead of building an intent (e.g. buying
+   * peer-to-peer before an offer id is known). Checked before `toIntent`; the
+   * intent is not built when a navigation is returned.
+   */
+  toNavigationFor?(input: Input, ctx: ToolContext): NavigationRequest | undefined;
 }
 
 /** Chain tools take an `Intent` (see docs/interfaces.md §2). */
