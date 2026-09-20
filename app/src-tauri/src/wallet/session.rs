@@ -466,7 +466,13 @@ mod tests {
 
     fn service() -> WalletService {
         let root = crate::env::temp_dir("wallet-session");
-        WalletService::new(Arc::new(crate::wallet::memory::MemoryStore::new()), root)
+        let stores = crate::wallet::Stores::new(
+            Arc::new(crate::wallet::memory::MemoryStore::new()),
+            Arc::new(crate::wallet::memory::MemoryStore::new()),
+            true,
+            false,
+        );
+        WalletService::new(stores, root)
     }
 
     /// A service with one known account, no session attached.

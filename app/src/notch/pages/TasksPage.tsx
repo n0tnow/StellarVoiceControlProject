@@ -13,6 +13,9 @@ import { CalendarClock, LoaderCircle, RefreshCw, Trash2 } from "lucide-react";
 
 import { useTasksData, type TaskRow } from "@/notch/data/useTasksData";
 
+import { LoginGate } from "../wallet/LoginGate";
+import { useWalletLocked } from "../wallet/useWalletSession";
+
 /** "5 XLM → acc2", or just the recipient label in demo mode. */
 function rowTitle(row: TaskRow): string {
   return row.amountLabel ? `${row.amountLabel} → ${row.recipient}` : row.recipient;
@@ -67,6 +70,12 @@ function TaskRowItem({ row, busy, disabled, onCancel }: TaskRowItemProps) {
 }
 
 export function TasksPage() {
+  const locked = useWalletLocked();
+  if (locked) return <LoginGate />;
+  return <TasksBody />;
+}
+
+function TasksBody() {
   const { rows, loading, error, demo, keeper, refresh, cancel, actionError, tx } = useTasksData();
   const [busyId, setBusyId] = useState<number | null>(null);
   const running = tx.state === "running";

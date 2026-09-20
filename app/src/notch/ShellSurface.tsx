@@ -20,11 +20,13 @@ import type { NavigationRequest, ShellGeometry } from "@polaris/interfaces";
 
 import { StageLabel } from "@/components/StageLabel";
 import { notchPageFor } from "@/lib/navigation";
+import { shouldAutoOpenWallet, shouldPinWallet } from "@/lib/walletSession";
 import { MoreMenu } from "./MoreMenu";
 import { NotchPanel } from "./NotchPanel";
 import { PromptPanel } from "./PromptPanel";
 import { inlineVoiceStage } from "./shellState";
 import { useNotchPage } from "./useNotchPage";
+import { useWalletSession } from "./wallet/useWalletSession";
 import { SHELL_MOTION_MS, useShellState, usePrefersReducedMotion, type ShellStateName } from "./useShellState";
 
 export interface ShellSurfaceProps {
@@ -71,6 +73,13 @@ export function ShellSurface({
     voiceAttention: panelRequest || voiceAttention,
   });
 
+  // W13b: while nobody is logged in the Wallet login owns the panel. The panel
+  // opens itself on the Wallet page at launch and on every `wallet_session_changed`
+  // → `none`/`locked`, and cannot be dismissed (hover-leave, Escape, nav-close)
+  // until the session unlocks.
+  const { session } = useWalletSession();
+  const walletPin = shouldPinWallet(session);
+
   // Page routing for the `panel` state. Owned here (not in the panel) so the
   // controller survives the panel body's mount/unmount cycles and the voice
   // seam can later be wired one level up without touching the pages. Closing
@@ -78,11 +87,20 @@ export function ShellSurface({
   // panel (otherwise the pinned request would immediately reopen it). Nav-close,
   // Escape and hover-leave all end in the same collapse path.
   const closePanel = useCallback((): void => {
+    if (walletPin) return;
     setPanelRequest(false);
     dismiss();
-  }, [dismiss]);
+  }, [dismiss, walletPin]);
   const pageController = useNotchPage(closePanel);
   const { setNotchPage } = pageController;
+
+  // The startup trigger: a locked/absent session pins the panel open on Wallet.
+  // `session?.state` is what re-arms this when the engine reports a transition.
+  useEffect(() => {
+    if (!shouldAutoOpenWallet(session)) return;
+    setNotchPage("wallet");
+    setPanelRequest(true);
+  }, [session?.state, setNotchPage]);
 
   // Apply a voice navigation request. Notch targets select their page and pin
   // the panel; panel-window targets are opened by App's `applyNavigation`, so

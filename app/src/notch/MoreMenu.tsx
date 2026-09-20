@@ -12,9 +12,10 @@
  * reachable.
  */
 import { useEffect, useRef, useState } from "react";
-import { Ellipsis } from "lucide-react";
+import { Ellipsis, Lock } from "lucide-react";
 
 import { MORE_MENU, quitPolaris, openPanel, type MoreMenuEntry } from "@/lib/panels";
+import { useWalletLocked } from "./wallet/useWalletSession";
 
 function runEntry(entry: MoreMenuEntry): void {
   if ("quit" in entry) {
@@ -29,6 +30,7 @@ function runEntry(entry: MoreMenuEntry): void {
 }
 
 export function MoreMenu() {
+  const locked = useWalletLocked();
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -76,21 +78,32 @@ export function MoreMenu() {
           aria-label="Polaris"
           className="absolute right-0 bottom-full mb-1 w-44 overflow-hidden rounded-xl border border-white/10 bg-[#0b0b0d]/95 p-1 shadow-xl backdrop-blur"
         >
-          {MORE_MENU.map((entry, index) => (
-            <button
-              key={entry.label}
-              ref={index === 0 ? firstItemRef : undefined}
-              type="button"
-              role="menuitem"
-              onClick={() => {
-                setOpen(false);
-                runEntry(entry);
-              }}
-              className="flex w-full items-center rounded-lg px-3 py-1.5 text-left text-[13px] text-[var(--color-notch-muted)] transition-colors hover:bg-white/10 hover:text-[var(--color-notch-text)] focus-visible:bg-white/10 focus-visible:text-[var(--color-notch-text)] focus-visible:outline-none"
-            >
-              {entry.label}
-            </button>
-          ))}
+          {locked ? (
+            <p className="px-3 py-1.5 text-[11px] text-[var(--color-notch-muted)]">
+              Log in to use this
+            </p>
+          ) : null}
+          {MORE_MENU.map((entry, index) => {
+            const gated = locked && "panel" in entry;
+            return (
+              <button
+                key={entry.label}
+                ref={index === 0 ? firstItemRef : undefined}
+                type="button"
+                role="menuitem"
+                disabled={gated}
+                title={gated ? "Log in to use this" : undefined}
+                onClick={() => {
+                  setOpen(false);
+                  runEntry(entry);
+                }}
+                className="flex w-full items-center gap-2 rounded-lg px-3 py-1.5 text-left text-[13px] text-[var(--color-notch-muted)] transition-colors hover:bg-white/10 hover:text-[var(--color-notch-text)] focus-visible:bg-white/10 focus-visible:text-[var(--color-notch-text)] focus-visible:outline-none disabled:pointer-events-none disabled:opacity-40"
+              >
+                {gated ? <Lock aria-hidden="true" className="h-3.5 w-3.5" /> : null}
+                {entry.label}
+              </button>
+            );
+          })}
         </div>
       ) : null}
     </div>
