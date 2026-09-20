@@ -22,6 +22,8 @@ import {
 import { formatTimestamp, truncateKey, type TxStatus } from "@/lib/mockData";
 import type { HistoryEntryView } from "../data/historyModel";
 import { useHistoryData } from "../data/useHistoryData";
+import { LoginGate } from "../wallet/LoginGate";
+import { useWalletLocked } from "../wallet/useWalletSession";
 
 function StatusIcon({ status }: { status: TxStatus }) {
   // The class carries the colour; the icon carries the shape. Both are needed:
@@ -89,6 +91,12 @@ function HistoryRow({ entry }: { entry: HistoryEntryView }) {
 }
 
 export function HistoryPage() {
+  const locked = useWalletLocked();
+  if (locked) return <LoginGate />;
+  return <HistoryBody />;
+}
+
+function HistoryBody() {
   const { entries, source, loading, error, refresh, clearLocal } = useHistoryData();
 
   return (

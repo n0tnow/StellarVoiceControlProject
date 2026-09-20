@@ -25,6 +25,8 @@
 
 import type { Intent } from "@polaris/interfaces";
 
+import type { WalletSessionState } from "./walletSession.ts";
+
 /** A turn that was admitted to run: its generation plus the trimmed transcript. */
 export interface TurnTicket {
   /** Monotonic; a newer admitted turn always has a strictly larger generation. */
@@ -138,4 +140,26 @@ export function decideWalletGate(intent: Intent, hasActiveWallet: boolean): Wall
     return { block: false, sentence: "", page: null };
   }
   return { block: true, sentence: CONNECT_WALLET_SENTENCE, page: "wallet" };
+}
+
+/** The one short sentence spoken when a value-moving intent meets a locked wallet. */
+export const UNLOCK_WALLET_SENTENCE = "Please unlock your wallet first.";
+
+/**
+ * W13b: the session-aware gate. A `locked` wallet answers "Please unlock your
+ * wallet first."; a `none` wallet keeps the onboarding line. Either way the
+ * intent is refused before any chain call and the Wallet page is pinned.
+ */
+export function decideWalletGateForSession(
+  intent: Intent,
+  session: WalletSessionState,
+): WalletGateDecision {
+  if (session === "unlocked" || !isValueMovingIntent(intent)) {
+    return { block: false, sentence: "", page: null };
+  }
+  return {
+    block: true,
+    sentence: session === "locked" ? UNLOCK_WALLET_SENTENCE : CONNECT_WALLET_SENTENCE,
+    page: "wallet",
+  };
 }

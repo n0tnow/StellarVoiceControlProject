@@ -13,7 +13,16 @@ import { CircleAlert, PenLine, RefreshCw, ShieldCheck } from "lucide-react";
 import { openPanel } from "@/lib/panels";
 import { useRulesData } from "@/notch/data/useRulesData";
 
+import { LoginGate } from "../wallet/LoginGate";
+import { useWalletLocked } from "../wallet/useWalletSession";
+
 export function RulesPage() {
+  const locked = useWalletLocked();
+  if (locked) return <LoginGate />;
+  return <RulesBody />;
+}
+
+function RulesBody() {
   const { state, lines, detail, demo, refresh } = useRulesData();
 
   const editRules = (): void => {
