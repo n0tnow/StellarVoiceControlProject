@@ -9,6 +9,13 @@
  *
  * The anchor home domain is read through the Rust `bank_anchor_config` command
  * (the webview cannot read arbitrary env); it defaults to the SDF test anchor.
+ *
+ * Before any money moves, [`selectActiveAnchor`] probes the approved scenarios
+ * (SDF first, then the TR mock) with a cheap SEP-1 + SEP-6 `/info` check and
+ * uses the first healthy one. The asset pair, fiat label, wallet balances and
+ * trustline all come from that one scenario — never mixed. A failure after the
+ * bank step keeps the flow's refund behaviour; the second anchor is never
+ * silently retried once value moved.
  */
 import { anchor } from "@polaris/stellar";
 import type { Intent } from "@polaris/interfaces";
@@ -65,7 +72,8 @@ export interface BankWiringOptions {
 }
 
 let sessionOverride: anchor.AnchorSession | undefined;
-let fallback: anchor.AnchorSession | undefined;
+let selected: { candidate: anchor.AnchorCandidate; session: anchor.AnchorSession } | undefined;
+let selecting: Promise<{ candidate: anchor.AnchorCandidate; session: anchor.AnchorSession }> | undefined;
 
 /** Installs a session for the bank flows (tests only). */
 export function configureBankSession(session: anchor.AnchorSession | undefined): void {
@@ -73,22 +81,43 @@ export function configureBankSession(session: anchor.AnchorSession | undefined):
 }
 
 /**
- * The session the bank flows drive: the shell-configured one when a voice turn
- * already installed it, else a fresh one on the selected home domain.
+ * Selects the first HEALTHY anchor (SDF test anchor, then the TR mock) ONCE per
+ * shell and caches it. Selection happens strictly before any bank debit or
+ * wallet payment, and is never retried mid-flow: a failure after value moved
+ * keeps the flow's refund-on-failure behaviour.
  */
-function configuredSession(homeDomain: string): anchor.AnchorSession {
-  try {
-    return anchor.getAnchorSession();
-  } catch {
-    fallback ??= createAnchorSession({ homeDomain });
-    return fallback;
-  }
+async function selectActiveAnchor(
+  configuredHomeDomain: string,
+): Promise<{ candidate: anchor.AnchorCandidate; session: anchor.AnchorSession }> {
+  selecting ??= (async () => {
+    const { chosen } = await anchor.selectAnchor(anchor.approvedAnchorCandidates(configuredHomeDomain), {
+      fetch: (input, init) => fetch(input, init),
+    });
+    const session = createAnchorSession({
+      homeDomain: chosen.homeDomain,
+      assetCode: chosen.assetCode,
+      ...(chosen.fiatCode ? { fiatCode: chosen.fiatCode } : {}),
+      ...(chosen.sep38DeliveryMethod ? { sep38DeliveryMethod: chosen.sep38DeliveryMethod } : {}),
+      customerFields: chosen.customerFields,
+    });
+    selected = { candidate: chosen, session };
+    return selected;
+  })().catch((error: unknown) => {
+    selecting = undefined;
+    throw error;
+  });
+  return selecting;
+}
+
+/** The session the bank flows drive: an injected one (tests) or the selected anchor. */
+async function activeSession(homeDomain: string): Promise<anchor.AnchorSession> {
+  return sessionOverride ?? (await selectActiveAnchor(homeDomain)).session;
 }
 
 /** Builds the flow deps from the real seams and any overrides. */
 export async function resolveBankDeps(options: BankWiringOptions = {}): Promise<BankFlowDeps> {
   const config = await getBankAnchorConfig();
-  const session = options.session ?? sessionOverride ?? configuredSession(config.homeDomain);
+  const session = options.session ?? (await activeSession(config.homeDomain));
   return {
     bank: options.bank ?? bankApi,
     session: toBankSession(session),
@@ -124,15 +153,60 @@ export async function reconcileBankFlows(
   return reconcileFlows(await resolveBankDeps(options), report);
 }
 
+/** The active anchor's home domain: the selected one, else the configured one. */
+async function activeHomeDomain(): Promise<string> {
+  return selected?.candidate.homeDomain ?? (await getBankAnchorConfig()).homeDomain;
+}
+
 /** The active anchor scenario (SDF test anchor by default). */
 export async function bankAnchorScenario(): Promise<anchor.AnchorScenario> {
-  const config = await getBankAnchorConfig();
+  const homeDomain = await activeHomeDomain();
   try {
-    return anchor.describeAnchorScenario(config.homeDomain);
+    return anchor.describeAnchorScenario(homeDomain);
   } catch {
-    return anchor.describeAnchorScenario(config.homeDomain, { custom: true });
+    return anchor.describeAnchorScenario(homeDomain, { custom: true });
   }
 }
+
+/** What the Trade page shows about the active anchor (caption + currency label). */
+export interface ActiveAnchorInfo {
+  homeDomain: string;
+  scenarioId: anchor.ScenarioId;
+  label: string;
+  /** Off-chain currency label the balances/amount follow (e.g. "USD", "TRY"). */
+  fiat: string;
+  /** On-chain asset the wallet balances follow (e.g. "SRT", "USDC"). */
+  assetCode: string;
+}
+
+/**
+ * The active anchor, selecting a healthy one (and thus a scenario) if that has
+ * not happened yet. A selection failure throws [`anchor.NoHealthyAnchorError`],
+ * which [`anchorSelectionDetails`] turns into the panel's Details list.
+ */
+export async function activeAnchorInfo(): Promise<ActiveAnchorInfo> {
+  const config = await getBankAnchorConfig();
+  const { candidate } = await selectActiveAnchor(config.homeDomain);
+  const scenario = anchor.describeAnchorScenario(candidate.homeDomain, { custom: true });
+  return {
+    homeDomain: candidate.homeDomain,
+    scenarioId: scenario.id,
+    label: scenario.label,
+    fiat: candidate.fiatCode ?? "TRY",
+    assetCode: candidate.assetCode,
+  };
+}
+
+/** Per-anchor reasons for a selection failure, or `null` for any other error. */
+export function anchorSelectionDetails(error: unknown): string[] | null {
+  if (!(error instanceof anchor.NoHealthyAnchorError)) return null;
+  return error.health
+    .filter((health) => !health.ok)
+    .map((health) => `${health.homeDomain}: ${health.reason ?? "unhealthy"}`);
+}
+
+/** The one plain line the panel shows when no anchor is reachable. */
+export const NO_ANCHOR_MESSAGE = anchor.NO_ANCHOR_MESSAGE;
 
 export interface BankLimits {
   assetCode: string;
@@ -146,7 +220,7 @@ export interface BankLimits {
  */
 export async function readBankLimits(): Promise<BankLimits> {
   const config = await getBankAnchorConfig();
-  const session = configuredSession(config.homeDomain);
+  const session = await activeSession(config.homeDomain);
   const info = (await session.info()).data;
   const deposit = info.deposit[session.assetCode];
   const withdraw = info.withdraw[session.assetCode];
@@ -166,9 +240,8 @@ export async function readBankPayoutHealth(): Promise<anchor.PayoutHealthResult 
   if (scenario.id !== "tr-mock") return null;
   try {
     const config = await getBankAnchorConfig();
-    return await anchor.readPayoutHealth(configuredSession(config.homeDomain).ctx, {
-      homeDomain: config.homeDomain,
-    });
+    const session = await activeSession(config.homeDomain);
+    return await anchor.readPayoutHealth(session.ctx, { homeDomain: session.homeDomain });
   } catch {
     return null;
   }

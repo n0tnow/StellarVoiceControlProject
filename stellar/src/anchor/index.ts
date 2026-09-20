@@ -61,6 +61,18 @@ export {
   type ScenarioId,
 } from "./scenarios.ts";
 export {
+  ANCHOR_PREFLIGHT_TIMEOUT_MS,
+  approvedAnchorCandidates,
+  NO_ANCHOR_MESSAGE,
+  NoHealthyAnchorError,
+  preflightAnchor,
+  selectAnchor,
+  type AnchorCandidate,
+  type AnchorHealth,
+  type AnchorPreflightDeps,
+  type AnchorSelection,
+} from "./selection.ts";
+export {
   classifyPayoutHealth,
   findTreasuryAddress,
   parseHorizonPayments,

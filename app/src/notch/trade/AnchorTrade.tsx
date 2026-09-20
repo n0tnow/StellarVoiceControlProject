@@ -56,6 +56,10 @@ export function AnchorTrade({ direction }: { direction: TradeDirection }) {
         })}
       </p>
 
+      {flow.anchorHomeDomain ? (
+        <p className="text-[10px] text-notch-muted">via {flow.anchorHomeDomain}</p>
+      ) : null}
+
       <div className="flex items-center gap-2">
         <label className="flex items-center gap-2 text-[11px] text-notch-muted">
           <span>Amount ({unit})</span>
@@ -105,12 +109,24 @@ export function AnchorTrade({ direction }: { direction: TradeDirection }) {
       ) : null}
 
       {flow.error ? (
-        <p className="text-[11px] text-polaris-danger">
-          {flow.error}{" "}
-          <button type="button" className="underline" disabled={flow.busy || !check.ok} onClick={submit}>
-            Retry
-          </button>
-        </p>
+        <div className="text-[11px] text-polaris-danger">
+          <p>
+            {flow.error}{" "}
+            <button type="button" className="underline" disabled={flow.busy || !check.ok} onClick={submit}>
+              Retry
+            </button>
+          </p>
+          {flow.errorDetails && flow.errorDetails.length > 0 ? (
+            <details className="mt-1 text-notch-muted">
+              <summary className="cursor-pointer">Details</summary>
+              <ul className="mt-1 list-disc pl-4">
+                {flow.errorDetails.map((reason) => (
+                  <li key={reason}>{reason}</li>
+                ))}
+              </ul>
+            </details>
+          ) : null}
+        </div>
       ) : null}
     </div>
   );

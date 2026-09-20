@@ -10,8 +10,17 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { StellarConfig } from "@polaris/interfaces";
 
-import { getBankAccount, subscribeBankChanged } from "@/lib/bank";
-import { bankDeposit, bankWithdraw, readBankLimits, type BankLimits } from "@/lib/bankAnchor";
+import { getBankAccount, bankSetCurrency, subscribeBankChanged } from "@/lib/bank";
+import {
+  activeAnchorInfo,
+  anchorSelectionDetails,
+  bankDeposit,
+  bankWithdraw,
+  NO_ANCHOR_MESSAGE,
+  readBankLimits,
+  type ActiveAnchorInfo,
+  type BankLimits,
+} from "@/lib/bankAnchor";
 import type { BankAccount, BankFlowResult, BankStepId, BankStepStatus } from "@/lib/bankFlow";
 import { getStellarConfig } from "@/lib/stellarConfig";
 import { fetchAccountDetail, type HorizonAccountDetail } from "@/lib/walletAssets";
@@ -22,11 +31,15 @@ export interface AnchorTradeState {
   steps: Record<BankStepId, BankStepStatus>;
   busy: boolean;
   error: string | null;
+  /** Per-anchor reasons behind the error's "Details" toggle (selection failures only). */
+  errorDetails: string[] | null;
   result: BankFlowResult | null;
   bankBalance: string | null;
   bankCurrency: string | null;
   walletBalance: string | null;
   walletAsset: string;
+  /** The chosen anchor's home domain, shown as the "via …" caption. */
+  anchorHomeDomain: string | null;
   max: number | undefined;
   run: (amount: string) => Promise<void>;
   cancel: () => void;
@@ -42,9 +55,11 @@ export function useAnchorTrade(direction: TradeDirection): AnchorTradeState {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<BankFlowResult | null>(null);
+  const [errorDetails, setErrorDetails] = useState<string[] | null>(null);
   const [account, setAccount] = useState<BankAccount | null>(null);
   const [detail, setDetail] = useState<HorizonAccountDetail | null>(null);
   const [limits, setLimits] = useState<BankLimits | null>(null);
+  const [anchor, setAnchor] = useState<ActiveAnchorInfo | null>(null);
   const cancelRef = useRef(false);
   const configRef = useRef<StellarConfig | null>(null);
 
@@ -67,8 +82,27 @@ export function useAnchorTrade(direction: TradeDirection): AnchorTradeState {
   useEffect(() => {
     void refreshWallet();
     void getBankAccount().then(setAccount).catch(() => {});
-    void readBankLimits().then(setLimits).catch(() => {});
     const subscription = subscribeBankChanged(setAccount);
+    void (async () => {
+      try {
+        const info = await activeAnchorInfo();
+        setAnchor(info);
+        setLimits(await readBankLimits());
+        // Keep the demo ledger's label on the active scenario's fiat, so the
+        // balances line and the flow's credit label never mix currencies.
+        const current = await getBankAccount();
+        setAccount(current);
+        if (info.fiat && current.currency !== info.fiat) {
+          setAccount(await bankSetCurrency(info.fiat));
+        }
+      } catch (failure) {
+        const reasons = anchorSelectionDetails(failure);
+        if (reasons) {
+          setError(NO_ANCHOR_MESSAGE);
+          setErrorDetails(reasons);
+        }
+      }
+    })();
     return () => {
       void subscription.then((off) => off()).catch(() => {});
     };
@@ -79,6 +113,7 @@ export function useAnchorTrade(direction: TradeDirection): AnchorTradeState {
       if (busy) return;
       setBusy(true);
       setError(null);
+      setErrorDetails(null);
       setResult(null);
       setSteps(freshBankSteps());
       cancelRef.current = false;
@@ -93,9 +128,17 @@ export function useAnchorTrade(direction: TradeDirection): AnchorTradeState {
         setResult(outcome);
         if (outcome.status !== "completed") setError(outcome.detail);
       } catch (failure) {
-        setError(messageOf(failure));
+        const reasons = anchorSelectionDetails(failure);
+        if (reasons) {
+          setError(NO_ANCHOR_MESSAGE);
+          setErrorDetails(reasons);
+        } else {
+          setError(messageOf(failure));
+        }
       } finally {
         await refreshWallet();
+        // Reflect a selection that succeeded on a Retry (cached; no extra probe).
+        void activeAnchorInfo().then(setAnchor).catch(() => {});
         setBusy(false);
       }
     },
@@ -106,17 +149,22 @@ export function useAnchorTrade(direction: TradeDirection): AnchorTradeState {
     cancelRef.current = true;
   }, []);
 
-  const walletAsset = limits?.assetCode ?? "USDC";
+  // The active scenario drives the labels: its asset for the wallet side, its
+  // fiat for the bank side (falling back to the ledger only before selection).
+  const walletAsset = anchor?.assetCode ?? limits?.assetCode ?? "USDC";
+  const bankCurrency = anchor?.fiat ?? account?.currency ?? null;
 
   return {
     steps,
     busy,
     error,
+    errorDetails,
     result,
     bankBalance: account?.balanceTry ?? null,
-    bankCurrency: account?.currency ?? null,
+    bankCurrency,
     walletBalance: detail ? walletBalanceLabel(detail, walletAsset) : null,
     walletAsset,
+    anchorHomeDomain: anchor?.homeDomain ?? null,
     max: direction === "deposit" ? limits?.depositMax : limits?.withdrawMax,
     run,
     cancel,
