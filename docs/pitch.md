@@ -1,4 +1,4 @@
-# Polaris — Pitch
+# Autonomy — Pitch
 
 > A push-to-talk voice assistant that lives in the MacBook notch and **can act on
 > Stellar**: hold **Control+Option**, speak Turkish or English, and it answers — or
@@ -11,7 +11,7 @@ gap. Voice is the natural interface for "send 10 to Ahmet", but letting an LLM m
 money unattended is unacceptable. Users need **voice speed with human control**.
 
 ## Solution
-Polaris turns a spoken sentence into a decoded, unsigned transaction; the user
+Autonomy turns a spoken sentence into a decoded, unsigned transaction; the user
 approves it with **Touch ID** and signs it with the **wallet inside the app**. It also
 remembers the conversation, sets spending rules by voice, runs guarded auto-pay under
 limits, ramps dollars through the SDF test anchor, and trades P2P via a Soroban escrow.

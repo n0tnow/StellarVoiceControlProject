@@ -17,7 +17,7 @@
  *
  * The face is `speaking`, the liveliest pose in the vocabulary. There is nothing
  * for it to listen to and nothing pending, so `listening` and `thinking` would
- * both be theatre; `speaking` is the pose the shell shows when Polaris is doing
+ * both be theatre; `speaking` is the pose the shell shows when Autonomy is doing
  * something for you, which is the note to end on.
  */
 import { BlobatarFace } from "@/notch/BlobatarFace";
@@ -36,16 +36,16 @@ export function ReadyPage({ clean, onComplete }: ReadyPageProps) {
         <BlobatarFace stage="speaking" placement={FACE_PLACEMENTS.panel} />
       </div>
 
-      <h1 className="ob-title">Polaris is ready</h1>
+      <h1 className="ob-title">Autonomy is ready</h1>
       <p className="ob-body">
         {clean
-          ? "Hold control and option whenever you need it. Polaris will be waiting in the notch."
+          ? "Hold control and option whenever you need it. Autonomy will be waiting in the notch."
           : "You can finish the parts you skipped any time — everything lives in the notch, under the ⋯ menu."}
       </p>
 
       <div className="ob-actions">
         <button type="button" className="ob-button ob-button-primary" autoFocus onClick={onComplete}>
-          Start using Polaris
+          Start using Autonomy
         </button>
       </div>
     </>

@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Polaris",
+  "productName": "Autonomy",
   "version": "0.1.0",
   "identifier": "dev.polaris.desktop",
   "build": {
@@ -15,7 +15,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Polaris",
+        "title": "Autonomy",
         "width": 900,
         "height": 520,
         "resizable": false,

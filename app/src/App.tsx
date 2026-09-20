@@ -476,7 +476,7 @@ export default function App() {
       : session?.stage === "listening"
         ? "Release to finish"
         : session?.stage === "speaking"
-          ? "Polaris is talking"
+          ? "Autonomy is talking"
           : session !== null
             ? "Working…"
             : showPermissionHint
@@ -485,7 +485,7 @@ export default function App() {
   const error = connectionError ?? status.error;
 
   return (
-    <main className="notch-stage" aria-label="Polaris voice capture">
+    <main className="notch-stage" aria-label="Autonomy voice capture">
       <ShellSurface
         geometry={geometry}
         visual={visual}

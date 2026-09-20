@@ -1,7 +1,7 @@
 /**
  * Page 2 — the two permissions, and the only page that can genuinely fail.
  *
- * Polaris needs exactly two things from macOS and cannot fake either one: the
+ * Autonomy needs exactly two things from macOS and cannot fake either one: the
  * microphone, or there is nothing to transcribe; and Accessibility trust, or the
  * modifier-only Control+Option gesture is invisible to it
  * (`hotkey_flags.rs` gates its global `flagsChanged` monitor on
@@ -46,11 +46,11 @@ import { CheckIcon } from "../icons.tsx";
 const ROWS: Record<PermissionKey, { name: string; why: string }> = {
   microphone: {
     name: "Microphone",
-    why: "So Polaris can hear you while you hold the keys. Audio is only captured during a hold.",
+    why: "So Autonomy can hear you while you hold the keys. Audio is only captured during a hold.",
   },
   accessibility: {
     name: "Accessibility",
-    why: "So Polaris can notice Control and Option being held, even while you are in another app.",
+    why: "So Autonomy can notice Control and Option being held, even while you are in another app.",
   },
 };
 
@@ -147,7 +147,7 @@ export function PermissionsPage({
     <>
       <h1 className="ob-title">Two permissions</h1>
       <p className="ob-body">
-        Polaris asks for as little as it can. These two are the ones it cannot work
+        Autonomy asks for as little as it can. These two are the ones it cannot work
         without.
       </p>
 

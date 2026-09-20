@@ -435,10 +435,10 @@ test("a ceiling failure lands in the terminal error stage", () => {
  * ------------------------------------------------------------------ */
 
 test("stage and notice labels follow the turn language", () => {
-  assert.equal(stageLabel("awaiting_approval", null), "Approve in Polaris");
-  assert.equal(stageLabel("awaiting_approval", "en-US"), "Approve in Polaris");
-  assert.equal(stageLabel("awaiting_approval", "tr"), "Polaris'te onayla");
-  assert.equal(stageLabel("awaiting_approval", "tr-TR"), "Polaris'te onayla");
+  assert.equal(stageLabel("awaiting_approval", null), "Approve in Autonomy");
+  assert.equal(stageLabel("awaiting_approval", "en-US"), "Approve in Autonomy");
+  assert.equal(stageLabel("awaiting_approval", "tr"), "Autonomy'de onayla");
+  assert.equal(stageLabel("awaiting_approval", "tr-TR"), "Autonomy'de onayla");
   assert.equal(stageLabel("signing", "tr"), "İmzalanıyor");
   assert.equal(stageLabel("submitting", "tr"), "Gönderiliyor");
   assert.equal(stageLabel("listening", "tr"), "Dinliyorum");

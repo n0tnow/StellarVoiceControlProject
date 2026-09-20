@@ -57,7 +57,7 @@ export function summarizeNetwork(facts: NetworkFacts): CheckResult {
     return makeResult("warn", "stellar_config is not present on this build");
   }
   if (config.network && config.network !== "testnet") {
-    return makeResult("fail", `network is "${config.network}" but Polaris is testnet-only`);
+    return makeResult("fail", `network is "${config.network}" but Autonomy is testnet-only`);
   }
   const owner = config.ownerAddress;
   if (!owner) {

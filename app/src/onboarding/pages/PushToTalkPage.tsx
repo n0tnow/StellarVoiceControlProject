@@ -5,7 +5,7 @@
  * has been held and released. That the gesture is *possible* to detect from a
  * focused window is not an assumption: `hotkey_flags.rs` installs a local
  * `NSEvent` monitor next to the global one, and both feed the same latch, so the
- * `hotkey` event arrives here exactly as it would if Polaris were in the
+ * `hotkey` event arrives here exactly as it would if Autonomy were in the
  * background. [`usePushToTalkProbe`] carries the whole argument, and reads the
  * DOM as well so the lesson also works in a plain browser.
  *
@@ -86,7 +86,7 @@ export function PushToTalkPage({
         <p className="ob-body">
           Hold <span className="ob-key">control</span> and{" "}
           <span className="ob-key">option</span>, say what you want, then let go.
-          Polaris listens only while you hold them.
+          Autonomy listens only while you hold them.
         </p>
 
         {/* One fixed-height line, so nothing above it moves as the text changes. */}

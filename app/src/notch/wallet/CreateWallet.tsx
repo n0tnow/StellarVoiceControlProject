@@ -91,7 +91,7 @@ export function CreateWallet({ onDone, onCancel }: CreateWalletProps) {
 
   return (
     <section className={CARD}>
-      <p className={HINT}>Polaris will generate a key in the macOS Keychain.</p>
+      <p className={HINT}>Autonomy will generate a key in the macOS Keychain.</p>
       {state.error !== null ? <p className={ERROR}>{state.error}</p> : null}
       <div className={ACTIONS}>
         <Button size="sm" disabled={state.step === "working"} onClick={() => void create()}>

@@ -296,7 +296,7 @@ export function ShellSurface({
       aria-label={
         expanded
           ? `${label}. ${detail}`
-          : "Polaris ready. Hold Control and Option to record, or hold Control, Option and Space."
+          : "Autonomy ready. Hold Control and Option to record, or hold Control, Option and Space."
       }
     >
       {/* Polaris' face. A direct child of the shell, and rendered in exactly one

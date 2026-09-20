@@ -38,7 +38,7 @@ use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 pub const WINDOW_LABEL: &str = "onboarding";
 
 /// Window title, also exposed to assistive tech.
-const WINDOW_TITLE: &str = "Polaris Onboarding";
+const WINDOW_TITLE: &str = "Autonomy Onboarding";
 
 /// The Vite entry the window loads; mirrored by `app/onboarding.html`.
 const WINDOW_URL: &str = "onboarding.html";

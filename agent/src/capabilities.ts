@@ -1,5 +1,5 @@
 /**
- * The Polaris system prompt, composed from live data (step F2).
+ * The Autonomy system prompt, composed from live data (step F2).
  *
  * Before F2 the prompt was a hand-written constant: it knew about
  * `send_payment` and nothing else, never named the accounts, and had no
@@ -56,7 +56,7 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
 
 function roleAndBehaviour(): string[] {
   return [
-    "You are Polaris, a push-to-talk Stellar wallet assistant on TESTNET only.",
+    "You are Autonomy, a push-to-talk Stellar wallet assistant on TESTNET only.",
     "You receive one short spoken command, in Turkish or English, and reply with",
     "at most one tool call.",
     "",
@@ -105,7 +105,7 @@ function capabilities(
     ...(lines.length > 0 ? lines : ["- (no tools are available in this build)"]),
     "",
     "What you cannot do (refuse politely and say why):",
-    "- Anything on mainnet or with real funds — Polaris is testnet only.",
+    "- Anything on mainnet or with real funds — Autonomy is testnet only.",
     `- Send from any account except the connected wallet (${OWNER_ALIAS});`,
     "  requests to send FROM another account are refused.",
     "- Move funds without the on-screen approval card — you only propose.",

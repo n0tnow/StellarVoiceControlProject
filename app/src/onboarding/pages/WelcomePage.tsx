@@ -2,7 +2,7 @@
  * Page 1 — the introduction.
  *
  * One clip, one line, one sentence, one button. The restraint is the design:
- * this is the first thing a user sees of Polaris and the only job it has is to
+ * this is the first thing a user sees of Autonomy and the only job it has is to
  * establish that there is a creature living in their notch. Anything else on
  * this page — a feature list, a "what's new", a second button — would be spent
  * before the product has been shown.
@@ -34,9 +34,9 @@ export function WelcomePage({ onAdvance }: WelcomePageProps) {
         poster={heroPoster}
         still={heroStill}
       />
-      <h1 className="ob-title">Meet Polaris</h1>
+      <h1 className="ob-title">Meet Autonomy</h1>
       <p className="ob-body">
-        Polaris lives in the notch. Hold two keys, say what you want, and let go —
+        Autonomy lives in the notch. Hold two keys, say what you want, and let go —
         it listens, thinks, and answers without ever taking over your screen.
       </p>
       <div className="ob-actions">
@@ -44,7 +44,7 @@ export function WelcomePage({ onAdvance }: WelcomePageProps) {
             the first frame: Return advances, and the focus ring lands somewhere
             sensible for anyone who reaches for Tab. */}
         <button type="button" className="ob-button ob-button-primary" autoFocus onClick={onAdvance}>
-          Set up Polaris
+          Set up Autonomy
         </button>
       </div>
     </>

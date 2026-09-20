@@ -68,11 +68,11 @@ pub const STORE_FILE: &str = "file (testnet only, plaintext)";
 /// store was not opted into: no seed can be written or read.
 pub const STORE_UNAVAILABLE: &str = "keychain unavailable";
 /// The Touch ID reason shown when creating the wallet.
-pub const CREATE_REASON: &str = "Create the Polaris wallet";
+pub const CREATE_REASON: &str = "Create the Autonomy wallet";
 /// The Touch ID reason shown before importing a wallet.
-pub const IMPORT_REASON: &str = "Import a wallet into Polaris";
+pub const IMPORT_REASON: &str = "Import a wallet into Autonomy";
 /// The Touch ID reason shown before removing an account.
-pub const REMOVE_REASON: &str = "Remove a Polaris wallet account";
+pub const REMOVE_REASON: &str = "Remove an Autonomy wallet account";
 /// The Tauri event emitted whenever the active wallet changes.
 pub const CHANGED_EVENT: &str = "wallet_changed";
 /// Default idle auto-lock timeout (W13a). `0` means "never".
@@ -144,7 +144,7 @@ impl WalletError {
             Self::FileStorage(detail) => {
                 format!("the plaintext wallet file store failed: {detail}")
             }
-            Self::KeychainUnavailable => "the macOS Keychain is unavailable — allow Polaris in \
+            Self::KeychainUnavailable => "the macOS Keychain is unavailable — allow Autonomy in \
                  Keychain Access, or unlock the login keychain"
                 .to_string(),
             Self::FileStoreDisabled => "this account's seed is in the plaintext file store; set \
@@ -156,7 +156,7 @@ impl WalletError {
             Self::InvalidLabel => {
                 "the account name must be between 1 and 40 characters".to_string()
             }
-            Self::AlreadyExists => "a Polaris wallet already exists".to_string(),
+            Self::AlreadyExists => "an Autonomy wallet already exists".to_string(),
             Self::NoWallet => "no wallet is configured; create or import one first".to_string(),
             Self::UnknownAccount => "that account is not in this wallet".to_string(),
             Self::SignerChanged => "the active account changed since this payment was approved — \
@@ -720,7 +720,7 @@ impl WalletService {
         let Some(active) = status.active.as_ref() else {
             return FeatureHealth::new(
                 commands::HEALTH_ID,
-                "Polaris wallet",
+                "Autonomy wallet",
                 "W10",
                 HealthStatus::Warn,
                 "No wallet yet — open the Wallet screen to create or import one.",
@@ -728,7 +728,7 @@ impl WalletService {
         };
         FeatureHealth::new(
             commands::HEALTH_ID,
-            "Polaris wallet",
+            "Autonomy wallet",
             "W10",
             self.stores.health(),
             format!(

@@ -1337,9 +1337,9 @@ pub fn hover_health(app: &AppHandle) -> HoverHealth {
     let detail = if !monitors_installed {
         "the mouse monitor could not be installed; hover expansion is disabled".to_string()
     } else if active {
-        "Polaris is the active app, so macOS pauses the global mouse monitor".to_string()
+        "Autonomy is the active app, so macOS pauses the global mouse monitor".to_string()
     } else if !trusted {
-        "monitor installed; if hover still does nothing, grant Accessibility to Polaris in \
+        "monitor installed; if hover still does nothing, grant Accessibility to Autonomy in \
          System Settings → Privacy & Security → Accessibility"
             .to_string()
     } else if last_sample_age_ms.is_none() {

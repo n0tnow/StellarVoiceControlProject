@@ -306,7 +306,7 @@ const STAGE_LABELS: Record<TurnStage, { en: string; tr: string }> = {
   listening: { en: "Listening", tr: "Dinliyorum" },
   thinking: { en: "Thinking", tr: "Düşünüyorum" },
   speaking: { en: "Speaking", tr: "Konuşuyorum" },
-  awaiting_approval: { en: "Approve in Polaris", tr: "Polaris'te onayla" },
+  awaiting_approval: { en: "Approve in Autonomy", tr: "Autonomy'de onayla" },
   signing: { en: "Signing", tr: "İmzalanıyor" },
   submitting: { en: "Sending", tr: "Gönderiliyor" },
   done: { en: "Done", tr: "Tamam" },

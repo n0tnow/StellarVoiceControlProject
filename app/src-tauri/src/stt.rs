@@ -501,7 +501,7 @@ impl SttError {
             }
             Self::Malformed(message) => format!("could not read the transcription response: {message}"),
             Self::PermissionDenied => "Speech Recognition permission was not granted. Answer the \
-                 macOS prompt, or enable Polaris under System Settings › Privacy & Security › \
+                 macOS prompt, or enable Autonomy under System Settings › Privacy & Security › \
                  Speech Recognition. Capture keeps working."
                 .to_string(),
             Self::Unavailable { locale } => format!(

@@ -1,5 +1,5 @@
 /**
- * Page 5 — where Polaris lives.
+ * Page 5 — where Autonomy lives.
  *
  * ## This page illustrates; it does not test. Here is why.
  *
@@ -7,7 +7,7 @@
  * an explicit instruction to fall back to illustration if that turns out to be
  * undetectable from a focused window. It is undetectable, and the evidence is
  * laid out in full on [`useNotchHoverProbe`]: macOS pauses the *global*
- * `mouseMoved` monitor while Polaris is the active app — `notch.rs` ships that
+ * `mouseMoved` monitor while Autonomy is the active app — `notch.rs` ships that
  * sentence as a user-facing diagnostic, and `lib.rs` resigns active after
  * closing a panel purely to undo it — while the *local* monitor never sees a
  * cursor over the notch because the overlay is `ignoresMouseEvents`. The
@@ -54,7 +54,7 @@ export function NotchPage({ active, onAdvance }: NotchPageProps) {
 
       <h1 className="ob-title">It lives in the notch</h1>
       <p className="ob-body">
-        Polaris has no window and no icon in your menu bar. Move the pointer over
+        Autonomy has no window and no icon in your menu bar. Move the pointer over
         the notch and it opens; move away and it is gone again.
       </p>
 
