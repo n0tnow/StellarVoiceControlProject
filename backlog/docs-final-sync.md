@@ -7,4 +7,4 @@
 ## Verify
 - `caffeinate -i npm run check` → green (interfaces/agent/stellar/app tsc). Docs only; no code/Cargo/`.env` touched. Lengths: wallet-track 103, demo-script 67, pitch 50, reviews index 15.
 ## Remaining / Blocked
-- Human-verify unchanged (mic/STT, Touch ID, Keychain, anchor payout, `pay_executor`, real notch). W11a review MAJOR-1/2 still open — see `docs/reviews/README.md`.
+- Human-verify unchanged (mic/STT, Touch ID, Keychain, anchor payout, `pay_executor`, real notch). W11a review MAJOR-1/2 were fixed afterwards (`backlog/w11a-executor-rust-review-fixes.md`).
