@@ -14,14 +14,14 @@
  * turn's stage as a small inline indicator (see `inlineVoiceStage`). The panel
  * placeholder remains for the menus we design later.
  */
-import { useCallback, type CSSProperties } from "react";
+import { useCallback, useEffect, useState, type CSSProperties } from "react";
 
 import type { ShellGeometry } from "@polaris/interfaces";
 
 import { StageLabel } from "@/components/StageLabel";
 import { PromptPanel } from "./PromptPanel";
 import { inlineVoiceStage } from "./shellState";
-import { useShellState, type ShellStateName } from "./useShellState";
+import { SHELL_MOTION_MS, useShellState, usePrefersReducedMotion, type ShellStateName } from "./useShellState";
 
 export interface ShellSurfaceProps {
   geometry: ShellGeometry;
@@ -62,9 +62,43 @@ export function ShellSurface({
   // `FALLBACK_SHELL_GEOMETRY`).
   const safeTop = geometry.notch.safeTop;
   const handleContentHeight = useCallback(
-    (bodyHeight: number) => applyContentHeight(bodyHeight + safeTop),
-    [applyContentHeight, safeTop],
+    (bodyHeight: number) => {
+      // Guard against the deferred-unmount window below: `PromptPanel` stays
+      // mounted (and its `ResizeObserver` keeps firing) for one shell-motion
+      // length after `applied` has already moved off `prompt`, purely so its
+      // closing fade can play. Reporting a height for a state that is no
+      // longer active would resize a state Rust no longer considers
+      // content-driven.
+      if (applied !== "prompt") return;
+      applyContentHeight(bodyHeight + safeTop);
+    },
+    [applied, applyContentHeight, safeTop],
   );
+
+  // Open/close polish (2026-09-20): `PromptPanel` mounts and unmounts with
+  // `applied` (see its own doc comment: "starts clean and measured on every
+  // open"), but instantly removing it the moment `applied` leaves `prompt`
+  // used to cut its `.notch-prompt` closing fade off on the very first frame —
+  // the text just vanished while the shell was still collapsing. Keeping it
+  // mounted for one shell-motion length after the state moves on gives the CSS
+  // fade (`.notch:not(.shell-prompt) .notch-prompt { opacity: 0; }`) time to
+  // actually play, matching how `.notch-panel` (always mounted, only
+  // crossfaded) already closes. Declared before the early return so hook order
+  // never changes.
+  const reducedMotion = usePrefersReducedMotion();
+  const [showPrompt, setShowPrompt] = useState(applied === "prompt");
+  useEffect(() => {
+    if (applied === "prompt") {
+      setShowPrompt(true);
+      return;
+    }
+    if (reducedMotion) {
+      setShowPrompt(false);
+      return;
+    }
+    const timer = setTimeout(() => setShowPrompt(false), SHELL_MOTION_MS);
+    return () => clearTimeout(timer);
+  }, [applied, reducedMotion]);
 
   const active = geometry.states.find((state) => state.name === applied) ?? geometry.states[0];
   if (!active) return null;
@@ -130,9 +164,12 @@ export function ShellSurface({
         </div>
       ) : null}
 
-      {/* The folded A6 typed prompt: mounted only while its state is applied, so
-          it starts clean and measured on every open. */}
-      {applied === "prompt" ? (
+      {/* The folded A6 typed prompt: mounted while its state is applied *and*
+          for one shell-motion length after (`showPrompt`), so it starts clean
+          and measured on every open but gets to play its closing fade instead
+          of vanishing the instant `applied` moves on (see the comment on
+          `showPrompt` above). */}
+      {showPrompt ? (
         <PromptPanel
           voiceStage={voiceStage}
           onContentHeight={handleContentHeight}

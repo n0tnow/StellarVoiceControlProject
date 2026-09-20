@@ -70,8 +70,12 @@ export interface ShellStateController {
   dismiss: () => void;
 }
 
-/** `prefers-reduced-motion` is honoured by skipping the tween wait entirely. */
-function usePrefersReducedMotion(): boolean {
+/**
+ * `prefers-reduced-motion` is honoured by skipping the tween wait entirely.
+ * Exported so `ShellSurface` can use the same signal to skip its own
+ * deferred-unmount wait for the prompt body's closing fade.
+ */
+export function usePrefersReducedMotion(): boolean {
   const [reduced, setReduced] = useState(
     () =>
       typeof window !== "undefined" &&

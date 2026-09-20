@@ -114,27 +114,28 @@
   border-radius: var(--shell-top-radius) var(--shell-top-radius)
     var(--shell-bottom-radius) var(--shell-bottom-radius);
   /* BUG-2: the voice strip (`collapsed` <-> `compact`) uses main's animation
-     **verbatim** — width and border-radius on one spring curve, and the height
-     is deliberately NOT transitioned. Main sized the strip at the cutout height
-     and snapped it on the first frame so the perceived motion stayed purely
-     left/right; the state table keeps `collapsed` and `compact` the same height,
-     so this is the same motion with the same properties, duration and easing.
+     **verbatim** — width and border-radius on one spring curve. Main sized the
+     strip at the cutout height and snapped it on the first frame so the
+     perceived motion stayed purely left/right; the state table keeps
+     `collapsed` and `compact` the same height, so listing `height` in this
+     transition below changes nothing for those two states (the value never
+     moves, so no `height` transition ever actually runs) and the voice
+     animation's look and timing stay exactly main's.
      `--shell-ear` is not transitioned either: it drives the radial gradients on
      the pseudo-elements, and interpolating a gradient stop forces a full repaint
      of both on every frame. The ears keep a fixed size and fade instead, which
-     the compositor does on the GPU. */
-  will-change: width;
-  transition:
-    width var(--shell-motion) var(--shell-ease),
-    border-radius var(--shell-motion) var(--shell-ease);
-}
+     the compositor does on the GPU.
 
-/* The new, downward-growing states (the folded prompt, the future menus) add the
-   height tween on top of the voice-strip transition. Scoped to them so the voice
-   strip rule above stays main's word for word; the additions do not change how
-   the voice animation looks or times. */
-.notch.shell-panel,
-.notch.shell-prompt {
+     Open/close polish (2026-09-20): `height` used to be listed only on
+     `.notch.shell-panel, .notch.shell-prompt`, so it animated when *entering*
+     those states (the target class already carried the extra transition entry
+     at the moment height started changing) but not when *leaving* them — CSS
+     transitions are governed by the after-change style, and `shell-collapsed`
+     never matched that selector. The panel/prompt therefore grew open on the
+     same curve as everything else but snapped shut in height while the width
+     kept easing, which is exactly the "kapanış açılış gibi değil" the owner
+     reported. Listing `height` here, unconditionally, makes every direction of
+     every transition use one shared property list. */
   will-change: width, height;
   transition:
     width var(--shell-motion) var(--shell-ease),
@@ -447,6 +448,35 @@
   pointer-events: auto;
   color: var(--color-notch-text);
   font-size: 13px;
+  /* Open/close polish (2026-09-20): unlike `.notch-panel` (always mounted,
+     crossfaded by toggling `opacity` on a class), `PromptPanel` mounts and
+     unmounts with `applied` so it starts clean on every open (see
+     `ShellSurface`). A freshly-inserted element has no "before" style for a
+     `transition` to animate from, so the open uses an `animation` instead
+     (parallel to `stage-label-in`) while the close is a real `transition`:
+     `ShellSurface` keeps the component mounted for one shell-motion length
+     after `applied` leaves `prompt`, which gives this `opacity: 0` rule below
+     time to actually play before the node is removed. Without that lag the
+     prompt body used to vanish on the very first frame of the collapse. */
+  opacity: 1;
+  transition: opacity var(--shell-motion) var(--shell-ease);
+  animation: prompt-fade-in var(--shell-motion) var(--shell-ease) both;
+}
+
+/* The outer shell has already left `shell-prompt` (the collapse is under way)
+   while the prompt body is kept mounted to play this fade; see the comment
+   above and `ShellSurface`'s deferred unmount. */
+.notch:not(.shell-prompt) .notch-prompt {
+  opacity: 0;
+}
+
+@keyframes prompt-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 .notch-prompt-body {
@@ -613,12 +643,14 @@
   .notch::before,
   .notch::after,
   .notch-content,
-  .notch-panel {
+  .notch-panel,
+  .notch-prompt {
     transition: none;
   }
 
   .notch-label.is-current,
-  .notch-label.is-leaving {
+  .notch-label.is-leaving,
+  .notch-prompt {
     animation: none;
   }
 
