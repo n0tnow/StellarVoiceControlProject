@@ -56,7 +56,7 @@ for arg in "$@"; do
   case "$arg" in
     --skip-build) SKIP_BUILD=1 ;;
     --skip-notarize) SKIP_NOTARIZE=1 ;;
-    -h|--help) sed -n '2,40p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    -h|--help) sed -n "2,31p" "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "unknown flag: $arg" >&2; exit 2 ;;
   esac
 done
@@ -102,34 +102,55 @@ fi
 # bundle that contains it, otherwise the outer seal covers stale signatures.
 step "Signing $APP_PATH"
 sign() {
-  codesign --force --timestamp --options runtime \
-    --entitlements "$ENTITLEMENTS" \
-    --sign "$APPLE_SIGNING_IDENTITY" "$1"
+  codesign --force --timestamp --options runtime "$@"
 }
 
+# `-depth` makes find post-order, so a dylib inside a .framework is reached
+# before the framework itself. Without it a nested bundle would be sealed over
+# unsigned contents. Entitlements stay off the nested pass: they belong to the
+# main executable, and a nested helper that needed its own would need its own
+# file rather than this one.
 while IFS= read -r -d '' nested; do
   echo "  nested: ${nested#$APP_PATH/}"
-  sign "$nested"
+  sign --sign "$APPLE_SIGNING_IDENTITY" "$nested"
 done < <(
-  find "$APP_PATH/Contents" \
+  find "$APP_PATH/Contents" -depth \
     \( -name '*.dylib' -o -name '*.so' -o -name '*.framework' -o -name '*.app' \) \
-    -not -path "$APP_PATH" -print0 2>/dev/null
+    -print0
 )
 
-sign "$APP_PATH"
+sign --entitlements "$ENTITLEMENTS" --sign "$APPLE_SIGNING_IDENTITY" "$APP_PATH"
 codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 
 # --- 4. Notarize the app -----------------------------------------------------
 # The app is notarized on its own (zipped) so the ticket can be stapled into
 # the bundle before it is copied into the disk image.
 mkdir -p "$DIST_DIR"
+
+# `notarytool submit --wait` exits 0 for a finished submission even when the
+# verdict is Invalid, so the status line has to be asserted explicitly —
+# otherwise the first sign of trouble is a confusing `stapler` failure.
+notarize() {
+  local target="$1" out
+  out="$(caffeinate -i xcrun notarytool submit "$target" \
+    --keychain-profile "$NOTARY_PROFILE" --wait 2>&1)" || { echo "$out" >&2; return 1; }
+  echo "$out"
+  if ! grep -q 'status: Accepted' <<<"$out"; then
+    local id
+    id="$(sed -nE 's/.*id: ([0-9a-f-]{36}).*/\1/p' <<<"$out" | head -1)"
+    die "notarization did not succeed for $target. Reasons: xcrun notarytool log ${id:-<submission-id>} --keychain-profile $NOTARY_PROFILE"
+  fi
+}
+
 if [[ $SKIP_NOTARIZE -eq 0 ]]; then
   step "Notarizing the app"
   rm -f "$ZIP_PATH"
   ditto -c -k --keepParent "$APP_PATH" "$ZIP_PATH"
-  caffeinate -i xcrun notarytool submit "$ZIP_PATH" \
-    --keychain-profile "$NOTARY_PROFILE" --wait
+  notarize "$ZIP_PATH"
   xcrun stapler staple "$APP_PATH"
+  # The zip predates the staple, so the app inside it has no ticket. Leaving it
+  # in dist/ next to the shippable dmg invites uploading the wrong artifact.
+  rm -f "$ZIP_PATH"
 fi
 
 # --- 5. Disk image -----------------------------------------------------------
@@ -139,15 +160,14 @@ trap 'rm -rf "$STAGING"' EXIT
 ditto "$APP_PATH" "$STAGING/$APP_NAME.app"
 ln -s /Applications "$STAGING/Applications"
 rm -f "$DMG_PATH"
-hdiutil create -volname "$APP_NAME $VERSION" -srcfolder "$STAGING" \
+caffeinate -i hdiutil create -volname "$APP_NAME $VERSION" -srcfolder "$STAGING" \
   -ov -format UDZO "$DMG_PATH" >/dev/null
 
 codesign --force --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$DMG_PATH"
 
 if [[ $SKIP_NOTARIZE -eq 0 ]]; then
   step "Notarizing the disk image"
-  caffeinate -i xcrun notarytool submit "$DMG_PATH" \
-    --keychain-profile "$NOTARY_PROFILE" --wait
+  notarize "$DMG_PATH"
   xcrun stapler staple "$DMG_PATH"
 fi
 

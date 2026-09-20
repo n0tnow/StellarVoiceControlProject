@@ -49,8 +49,8 @@ security find-certificate -c "Developer ID Application" -p | openssl x509 -noout
 ## Cutting a release
 
 ```bash
-# 1. VERSION, app/src-tauri/tauri.conf.json and CHANGELOG.md all carry the version.
-#    Bump them together, open the PR, merge it.
+# 1. VERSION, app/src-tauri/tauri.conf.json, CHANGELOG.md and the README download
+#    badge (which embeds the version twice) all carry it. Bump together, PR, merge.
 
 # 2. Build, sign, notarize, staple, verify. ~10 min including two Apple round trips.
 make release-macos
