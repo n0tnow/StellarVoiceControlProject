@@ -8,10 +8,12 @@
 //!
 //! ## One request at a time
 //!
-//! The store holds at most one entry. [`ApprovalStore::begin`] supersedes
-//! whatever was there (the old request becomes `Denied` with the reason
+//! The store holds at most one single entry **or** one batch. [`ApprovalStore::begin`]
+//! supersedes whatever was there (the old request becomes `Denied` with the reason
 //! `superseded`), so a stale approval can never be presented to the bridge after
-//! the user has moved on.
+//! the user has moved on. A batch (W11a) is several requests authorised by one
+//! Touch ID; each keeps its own digest binding and is released once, exactly like
+//! a single request.
 //!
 //! ## Hash binding
 //!
@@ -56,6 +58,10 @@ pub const APPROVAL_TTL: Duration = Duration::from_secs(120);
 /// couple of kilobytes at most; the cap keeps a hostile webview from parking a
 /// huge blob in managed state.
 pub const MAX_XDR_BYTES: usize = 16 * 1024;
+
+/// Step W11a: the most steps one batch may ask a single Touch ID to authorise.
+/// Bounds the managed state a hostile webview can park in one call.
+pub const MAX_BATCH_ITEMS: usize = 8;
 
 /// The reason recorded when a `begin` replaces an outstanding request.
 pub const SUPERSEDED_REASON: &str = "superseded";
@@ -143,6 +149,48 @@ pub struct ApprovalSnapshot {
     pub mode: ApprovalMode,
     pub state: ApprovalState,
     pub expires_at_ms: u64,
+    /// Step W11a: present only while a **batch** is the current request. It
+    /// carries step ids, titles and states — never any XDR.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub batch: Option<ApprovalBatchSnapshot>,
+}
+
+/// One step of an approval batch, as the panel sees it: an id, a title and the
+/// step's state. Never any XDR.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApprovalBatchStep {
+    pub id: String,
+    pub title: String,
+    pub state: ApprovalState,
+}
+
+/// The batch half of [`ApprovalSnapshot`] (step W11a): one Touch ID authorises
+/// every step, each keeping its own digest binding.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApprovalBatchSnapshot {
+    pub batch_id: String,
+    pub title: String,
+    pub count: usize,
+    pub state: ApprovalState,
+    pub steps: Vec<ApprovalBatchStep>,
+    pub expires_at_ms: u64,
+}
+
+/// What `approval_begin_batch` returns.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApprovalBatchBegin {
+    pub batch_id: String,
+    pub ids: Vec<String>,
+}
+
+/// What `approval_authorize_batch` returns: every authorized step id.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApprovalBatchAuthorized {
+    pub authorized: Vec<String>,
 }
 
 /// The state of one request, including why it was denied. Returned by
@@ -180,6 +228,10 @@ pub enum BeginError {
     OversizedXdr { bytes: usize, max: usize },
     HashMismatch,
     WalletOnlyNotAllowed,
+    /// Step W11a: a batch must contain at least one step.
+    EmptyBatch,
+    /// Step W11a: a batch may contain at most [`MAX_BATCH_ITEMS`] steps.
+    BatchTooLarge { count: usize, max: usize },
 }
 
 /// Why an authorization could not be completed.
@@ -223,6 +275,10 @@ impl BeginError {
             Self::HashMismatch => "the payload hash does not match the unsigned XDR".to_string(),
             Self::WalletOnlyNotAllowed => {
                 "wallet-only approval is not available from the webview".to_string()
+            }
+            Self::EmptyBatch => "the approval batch contained no steps".to_string(),
+            Self::BatchTooLarge { count, max } => {
+                format!("the approval batch has {count} steps; the cap is {max}")
             }
         }
     }
@@ -297,11 +353,11 @@ pub struct SupersededRequest {
 }
 
 /// The outcome of `begin`: the stored request (with its assigned id) and the
-/// request it superseded, if any.
+/// requests it superseded, if any.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BeginOutcome {
     pub request: ApprovalRequest,
-    pub superseded: Option<SupersededRequest>,
+    pub superseded: Vec<SupersededRequest>,
 }
 
 /// The result of preparing a Touch ID prompt.
@@ -321,6 +377,18 @@ struct Entry {
     reason: Option<String>,
 }
 
+/// Step W11a: one batch of requests authorised by a single Touch ID. Each entry
+/// keeps its own digest binding and is released once, exactly like a single
+/// request; only the prompt is shared.
+struct Batch {
+    id: String,
+    title: String,
+    entries: Vec<Entry>,
+    expires_at: Instant,
+    /// True while the batch's one prompt is being shown.
+    in_flight: bool,
+}
+
 /// Normalises a request whose TTL has elapsed to `Expired`. Terminal states are
 /// left as they are.
 fn expire_if_due(entry: &mut Entry, now: Instant) {
@@ -330,6 +398,39 @@ fn expire_if_due(entry: &mut Entry, now: Instant) {
     ) && now >= entry.expires_at
     {
         entry.state = ApprovalState::Expired;
+    }
+}
+
+/// Step W11a: the batch's derived state. Every step is authorised together, so
+/// the batch is `Authorized` only when all of them are, and `Denied`/`Expired`
+/// as soon as any step is.
+fn batch_state(batch: &Batch, now: Instant) -> ApprovalState {
+    if batch.entries.is_empty() {
+        return ApprovalState::Expired;
+    }
+    let any = |state: ApprovalState| batch.entries.iter().any(|entry| {
+        entry.state == state || (now >= entry.expires_at && state == ApprovalState::Expired)
+    });
+    if any(ApprovalState::Expired) {
+        ApprovalState::Expired
+    } else if any(ApprovalState::Denied) {
+        ApprovalState::Denied
+    } else if batch
+        .entries
+        .iter()
+        .all(|entry| entry.state == ApprovalState::Authorized)
+    {
+        ApprovalState::Authorized
+    } else if batch
+        .entries
+        .iter()
+        .any(|entry| entry.state == ApprovalState::Consumed)
+    {
+        // A partially released batch is terminal: the panel must not show it as
+        // pending again after the first `wallet_sign(id)`.
+        ApprovalState::Consumed
+    } else {
+        ApprovalState::Pending
     }
 }
 
@@ -343,12 +444,104 @@ fn snapshot_of_entry(entry: &Entry, expires_at_ms: u64) -> ApprovalSnapshot {
         mode: entry.request.mode,
         state: entry.state,
         expires_at_ms,
+        batch: None,
     }
+}
+
+/// Builds the batch snapshot. Never includes any XDR; the steps carry ids,
+/// titles and states only.
+fn snapshot_of_batch(batch: &Batch, now: Instant, expires_at_ms: u64) -> ApprovalSnapshot {
+    let state = batch_state(batch, now);
+    let steps = batch
+        .entries
+        .iter()
+        .map(|entry| ApprovalBatchStep {
+            id: entry.request.id.clone(),
+            title: entry.request.summary.title.clone(),
+            state: entry.state,
+        })
+        .collect();
+    let lines = batch
+        .entries
+        .iter()
+        .map(|entry| entry.request.summary.title.clone())
+        .collect();
+    ApprovalSnapshot {
+        id: batch.id.clone(),
+        // A batch has no single digest; the per-step ids and hashes do.
+        payload_hash: String::new(),
+        summary: TxSummary {
+            title: batch.title.clone(),
+            lines,
+            explorer_url: None,
+            estimated_fee: "0".to_string(),
+        },
+        intent: Intent {
+            kind: crate::types::IntentKind::RawTx,
+            asset: String::new(),
+            amount: "0".to_string(),
+            recipient: None,
+            alias: None,
+            memo: None,
+            source: None,
+        },
+        mode: ApprovalMode::TouchId,
+        state,
+        expires_at_ms,
+        batch: Some(ApprovalBatchSnapshot {
+            batch_id: batch.id.clone(),
+            title: batch.title.clone(),
+            count: batch.entries.len(),
+            state,
+            steps,
+            expires_at_ms,
+        }),
+    }
+}
+
+/// Removes every live request (single or batch) and reports each as superseded.
+fn take_live(inner: &mut StoreInner) -> Vec<SupersededRequest> {
+    let mut superseded = Vec::new();
+    let mut report = |entry: Entry| {
+        if matches!(
+            entry.state,
+            ApprovalState::Pending | ApprovalState::Authorized
+        ) {
+            superseded.push(SupersededRequest {
+                payload_hash: entry.request.payload_hash,
+                reason: SUPERSEDED_REASON,
+            });
+        }
+    };
+    if let Some(entry) = inner.current.take() {
+        report(entry);
+    }
+    if let Some(batch) = inner.batch.take() {
+        for entry in batch.entries {
+            report(entry);
+        }
+    }
+    superseded
+}
+
+/// Finds an entry by id across the single slot and the batch, mutably.
+fn find_entry_mut<'a>(inner: &'a mut StoreInner, id: &str) -> Option<&'a mut Entry> {
+    if let Some(entry) = inner.current.as_mut() {
+        if entry.request.id == id {
+            return Some(entry);
+        }
+    }
+    inner
+        .batch
+        .as_mut()
+        .and_then(|batch| batch.entries.iter_mut().find(|entry| entry.request.id == id))
 }
 
 struct StoreInner {
     next_id: u64,
+    next_batch_id: u64,
     current: Option<Entry>,
+    batch: Option<Batch>,
 }
 
 /// Clears an entry's `in_flight` latch when dropped, so a panic (or any early
@@ -369,6 +562,27 @@ impl Drop for InFlightGuard {
         if let Some(entry) = inner.current.as_mut() {
             if entry.request.id == self.id {
                 entry.in_flight = false;
+            }
+        }
+    }
+}
+
+/// Step W11a: the batch equivalent of [`InFlightGuard`]. A panic inside the
+/// batch's one prompt must not wedge the batch `Busy` forever.
+struct BatchInFlightGuard {
+    inner: Arc<Mutex<StoreInner>>,
+    id: String,
+}
+
+impl Drop for BatchInFlightGuard {
+    fn drop(&mut self) {
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(batch) = inner.batch.as_mut() {
+            if batch.id == self.id {
+                batch.in_flight = false;
             }
         }
     }
@@ -395,7 +609,9 @@ impl ApprovalStore {
         Self {
             inner: Arc::new(Mutex::new(StoreInner {
                 next_id: 0,
+                next_batch_id: 0,
                 current: None,
+                batch: None,
             })),
             now,
             base,
@@ -455,15 +671,13 @@ impl ApprovalStore {
         self.store_request(request, true)
     }
 
-    /// Shared validation + storage behind [`ApprovalStore::begin`] and
-    /// [`ApprovalStore::begin_wallet_only`]. `allow_wallet_only` is the one
-    /// difference between the webview path (always false) and the in-process
-    /// anchor path (true).
-    fn store_request(
-        &self,
-        mut request: ApprovalRequest,
+    /// Shared validation behind `begin`, `begin_wallet_only` and `begin_batch`:
+    /// an empty/oversized XDR, a hash that does not match it, or a `WalletOnly`
+    /// mode on the webview path is rejected fail-closed.
+    fn validate_request(
+        request: &ApprovalRequest,
         allow_wallet_only: bool,
-    ) -> Result<BeginOutcome, BeginError> {
+    ) -> Result<(), BeginError> {
         if request.unsigned_xdr.is_empty() {
             return Err(BeginError::EmptyXdr);
         }
@@ -480,29 +694,29 @@ impl ApprovalStore {
         if request.mode == ApprovalMode::WalletOnly && !allow_wallet_only {
             return Err(BeginError::WalletOnlyNotAllowed);
         }
+        Ok(())
+    }
+
+    /// Shared validation + storage behind [`ApprovalStore::begin`] and
+    /// [`ApprovalStore::begin_wallet_only`]. `allow_wallet_only` is the one
+    /// difference between the webview path (always false) and the in-process
+    /// anchor path (true).
+    fn store_request(
+        &self,
+        mut request: ApprovalRequest,
+        allow_wallet_only: bool,
+    ) -> Result<BeginOutcome, BeginError> {
+        Self::validate_request(&request, allow_wallet_only)?;
 
         let now = self.now();
         let mut inner = self.lock();
         inner.next_id += 1;
         request.id = format!("apr_{:016x}", inner.next_id);
 
-        // The old entry is replaced, not kept: the store holds exactly one
-        // request. Its `Denied`/`superseded` outcome survives only as the
-        // `approval_result` the command emits with the returned hash.
-        let superseded = match inner.current.take() {
-            Some(old)
-                if matches!(
-                    old.state,
-                    ApprovalState::Pending | ApprovalState::Authorized
-                ) =>
-            {
-                Some(SupersededRequest {
-                    payload_hash: old.request.payload_hash,
-                    reason: SUPERSEDED_REASON,
-                })
-            }
-            _ => None,
-        };
+        // The old request is replaced, not kept: the store holds exactly one
+        // request at a time. Its outcome survives as the `approval_result` the
+        // command emits with each returned hash.
+        let superseded = take_live(&mut inner);
         inner.current = Some(Entry {
             request: request.clone(),
             state: ApprovalState::Pending,
@@ -515,6 +729,58 @@ impl ApprovalStore {
             request,
             superseded,
         })
+    }
+
+    /// Step W11a: registers a batch of requests that one Touch ID authorises
+    /// together. Each step keeps its own digest binding and is consumed once by
+    /// [`ApprovalStore::take_authorized`]; only the prompt is shared. Validation
+    /// is fail-closed and a bad step rejects the whole batch before anything is
+    /// stored.
+    pub fn begin_batch(
+        &self,
+        title: String,
+        requests: Vec<ApprovalRequest>,
+    ) -> Result<(ApprovalBatchBegin, Vec<SupersededRequest>), BeginError> {
+        if requests.is_empty() {
+            return Err(BeginError::EmptyBatch);
+        }
+        if requests.len() > MAX_BATCH_ITEMS {
+            return Err(BeginError::BatchTooLarge {
+                count: requests.len(),
+                max: MAX_BATCH_ITEMS,
+            });
+        }
+        for request in &requests {
+            Self::validate_request(request, false)?;
+        }
+
+        let now = self.now();
+        let mut inner = self.lock();
+        let mut ids = Vec::with_capacity(requests.len());
+        let mut entries = Vec::with_capacity(requests.len());
+        for mut request in requests {
+            inner.next_id += 1;
+            request.id = format!("apr_{:016x}", inner.next_id);
+            ids.push(request.id.clone());
+            entries.push(Entry {
+                request,
+                state: ApprovalState::Pending,
+                expires_at: now + APPROVAL_TTL,
+                in_flight: false,
+                reason: None,
+            });
+        }
+        let superseded = take_live(&mut inner);
+        inner.next_batch_id += 1;
+        let batch_id = format!("bat_{:016x}", inner.next_batch_id);
+        inner.batch = Some(Batch {
+            id: batch_id.clone(),
+            title,
+            entries,
+            expires_at: now + APPROVAL_TTL,
+            in_flight: false,
+        });
+        Ok((ApprovalBatchBegin { batch_id, ids }, superseded))
     }
 
     /// Locks in a fresh `authorize_with` and returns the plan for the prompt
@@ -641,10 +907,138 @@ impl ApprovalStore {
         Ok(payload.payload_hash)
     }
 
-    /// Marks a pending request denied and returns its payload hash.
+    /// Step W11a: authorises **every** step of a batch with ONE Touch ID prompt.
+    /// Returns each step's `(id, payloadHash)`; each step is still released
+    /// individually and once by [`ApprovalStore::take_authorized`]. A cancelled
+    /// prompt leaves the whole batch Pending.
+    pub fn authorize_batch(
+        &self,
+        batch_id: &str,
+        authenticator: &dyn Authenticator,
+    ) -> Result<Vec<(String, String)>, AuthorizeFailure> {
+        let (reason, _guard) = self.prepare_authorize_batch(batch_id)?;
+        let approved = match authenticator.authenticate(&reason) {
+            Ok(()) => true,
+            Err(error) => {
+                let _ = self.finish_authorize_batch(batch_id, false);
+                return Err(AuthorizeFailure::Auth(error));
+            }
+        };
+        self.finish_authorize_batch(batch_id, approved)
+            .map_err(AuthorizeFailure::Store)
+    }
+
+    /// Locks in a fresh `authorize_batch` and returns the prompt reason plus the
+    /// guard that releases the batch latch on drop.
+    fn prepare_authorize_batch(
+        &self,
+        batch_id: &str,
+    ) -> Result<(String, BatchInFlightGuard), AuthorizeError> {
+        let now = self.now();
+        let mut inner = self.lock();
+        let batch = inner.batch.as_mut().ok_or(AuthorizeError::NotFound)?;
+        if batch.id != batch_id {
+            return Err(AuthorizeError::NotFound);
+        }
+        if now >= batch.expires_at {
+            for entry in &mut batch.entries {
+                entry.state = ApprovalState::Expired;
+            }
+            return Err(AuthorizeError::Expired);
+        }
+        if batch
+            .entries
+            .iter()
+            .any(|entry| entry.state != ApprovalState::Pending)
+        {
+            return Err(AuthorizeError::NotPending {
+                state: batch_state(batch, now),
+            });
+        }
+        if batch.in_flight {
+            return Err(AuthorizeError::Busy);
+        }
+        batch.in_flight = true;
+        let reason = format!("Approve {}", batch.title);
+        drop(inner);
+        let guard = BatchInFlightGuard {
+            inner: Arc::clone(&self.inner),
+            id: batch_id.to_string(),
+        };
+        Ok((reason, guard))
+    }
+
+    /// Records the batch decision. `approved == false` releases the latch but
+    /// leaves every step Pending, so the user may retry or deny explicitly.
+    fn finish_authorize_batch(
+        &self,
+        batch_id: &str,
+        approved: bool,
+    ) -> Result<Vec<(String, String)>, AuthorizeError> {
+        let now = self.now();
+        let mut inner = self.lock();
+        let batch = inner.batch.as_mut().ok_or(AuthorizeError::NotFound)?;
+        if batch.id != batch_id {
+            return Err(AuthorizeError::NotFound);
+        }
+        if now >= batch.expires_at {
+            for entry in &mut batch.entries {
+                entry.state = ApprovalState::Expired;
+            }
+            batch.in_flight = false;
+            return Err(AuthorizeError::Expired);
+        }
+        if batch
+            .entries
+            .iter()
+            .any(|entry| entry.state != ApprovalState::Pending)
+        {
+            batch.in_flight = false;
+            return Err(AuthorizeError::NotPending {
+                state: batch_state(batch, now),
+            });
+        }
+        batch.in_flight = false;
+        let mut authorized = Vec::with_capacity(batch.entries.len());
+        for entry in &mut batch.entries {
+            if approved {
+                entry.state = ApprovalState::Authorized;
+            }
+            authorized.push((entry.request.id.clone(), entry.request.payload_hash.clone()));
+        }
+        Ok(authorized)
+    }
+
+    /// Marks a pending request denied and returns its payload hash. Step W11a:
+    /// denying any step of a batch denies the **whole** batch (fail-closed).
     pub fn deny(&self, id: &str) -> Result<String, DenyError> {
         let now = self.now();
         let mut inner = self.lock();
+        if let Some(batch) = inner.batch.as_mut() {
+            if batch.entries.iter().any(|entry| entry.request.id == id) {
+                if now >= batch.expires_at {
+                    for entry in &mut batch.entries {
+                        entry.state = ApprovalState::Expired;
+                    }
+                    return Err(DenyError::Expired);
+                }
+                if batch
+                    .entries
+                    .iter()
+                    .any(|entry| entry.state != ApprovalState::Pending)
+                {
+                    return Err(DenyError::NotPending {
+                        state: batch_state(batch, now),
+                    });
+                }
+                for entry in &mut batch.entries {
+                    entry.state = ApprovalState::Denied;
+                    entry.in_flight = false;
+                    entry.reason = Some(DENIED_REASON.to_string());
+                }
+                return Ok(batch.entries[0].request.payload_hash.clone());
+            }
+        }
         let entry = inner.current.as_mut().ok_or(DenyError::NotFound)?;
         if entry.request.id != id {
             return Err(DenyError::NotFound);
@@ -662,14 +1056,12 @@ impl ApprovalStore {
         Ok(entry.request.payload_hash.clone())
     }
 
-    /// The current state of one request, or `None` if the id is unknown.
+    /// The current state of one request (single or batch step), or `None` if the
+    /// id is unknown.
     pub fn status(&self, id: &str) -> Option<ApprovalStatus> {
         let now = self.now();
         let mut inner = self.lock();
-        let entry = inner.current.as_mut()?;
-        if entry.request.id != id {
-            return None;
-        }
+        let entry = find_entry_mut(&mut inner, id)?;
         expire_if_due(entry, now);
         Some(ApprovalStatus {
             id: entry.request.id.clone(),
@@ -685,6 +1077,12 @@ impl ApprovalStore {
     fn snapshot_of(&self, id: &str) -> Option<ApprovalSnapshot> {
         let now = self.now();
         let mut inner = self.lock();
+        if let Some(batch) = inner.batch.as_mut() {
+            if batch.entries.iter().any(|entry| entry.request.id == id) {
+                let expires_at_ms = self.epoch_ms_of(batch.expires_at);
+                return Some(snapshot_of_batch(batch, now, expires_at_ms));
+            }
+        }
         let entry = inner.current.as_mut()?;
         if entry.request.id != id {
             return None;
@@ -699,6 +1097,16 @@ impl ApprovalStore {
     pub fn current(&self) -> Option<ApprovalSnapshot> {
         let now = self.now();
         let mut inner = self.lock();
+        if let Some(batch) = inner.batch.as_mut() {
+            if matches!(
+                batch_state(batch, now),
+                ApprovalState::Pending | ApprovalState::Authorized
+            ) {
+                let expires_at_ms = self.epoch_ms_of(batch.expires_at);
+                return Some(snapshot_of_batch(batch, now, expires_at_ms));
+            }
+            return None;
+        }
         let entry = inner.current.as_mut()?;
         expire_if_due(entry, now);
         if !matches!(
@@ -721,10 +1129,7 @@ impl ApprovalStore {
     pub(crate) fn take_authorized(&self, id: &str) -> Result<AuthorizedPayload, TakeError> {
         let now = self.now();
         let mut inner = self.lock();
-        let entry = inner.current.as_mut().ok_or(TakeError::NotFound)?;
-        if entry.request.id != id {
-            return Err(TakeError::NotFound);
-        }
+        let entry = find_entry_mut(&mut inner, id).ok_or(TakeError::NotFound)?;
         if entry.state == ApprovalState::Expired || now >= entry.expires_at {
             entry.state = ApprovalState::Expired;
             return Err(TakeError::Expired);
@@ -743,24 +1148,41 @@ impl ApprovalStore {
         })
     }
 
-    /// Invalidates the current request when the wallet session locks (W13a): a
-    /// `Pending` or `Authorized` approval belongs to the session that created it,
-    /// so it may not survive a logout. Returns the denied payload hash so the
-    /// caller can emit the matching `approval_result`; `None` when there was
-    /// nothing live.
+    /// Invalidates the current request — and every step of a batch — when the
+    /// wallet session locks (W13a): an approval belongs to the session that
+    /// created it, so it may not survive a logout. Returns the first denied
+    /// payload hash so the caller can emit the matching `approval_result`; `None`
+    /// when there was nothing live.
     pub(crate) fn invalidate_for_lock(&self) -> Option<String> {
         let mut inner = self.lock();
-        let entry = inner.current.as_mut()?;
-        if !matches!(
-            entry.state,
-            ApprovalState::Pending | ApprovalState::Authorized
-        ) {
-            return None;
+        let mut first = None;
+        if let Some(entry) = inner.current.as_mut() {
+            if matches!(
+                entry.state,
+                ApprovalState::Pending | ApprovalState::Authorized
+            ) {
+                entry.state = ApprovalState::Denied;
+                entry.in_flight = false;
+                entry.reason = Some(LOCKED_REASON.to_string());
+                first = Some(entry.request.payload_hash.clone());
+            }
         }
-        entry.state = ApprovalState::Denied;
-        entry.in_flight = false;
-        entry.reason = Some(LOCKED_REASON.to_string());
-        Some(entry.request.payload_hash.clone())
+        if let Some(batch) = inner.batch.as_mut() {
+            for entry in &mut batch.entries {
+                if matches!(
+                    entry.state,
+                    ApprovalState::Pending | ApprovalState::Authorized
+                ) {
+                    entry.state = ApprovalState::Denied;
+                    entry.in_flight = false;
+                    entry.reason = Some(LOCKED_REASON.to_string());
+                    if first.is_none() {
+                        first = Some(entry.request.payload_hash.clone());
+                    }
+                }
+            }
+        }
+        first
     }
 }
 
@@ -913,7 +1335,7 @@ pub fn approval_begin(
         ));
     }
     let outcome = store.begin(request)?;
-    if let Some(superseded) = &outcome.superseded {
+    for superseded in &outcome.superseded {
         events::emit(
             &app,
             PolarisEvent::ApprovalResult {
@@ -1024,6 +1446,100 @@ pub fn approval_status(store: State<'_, ApprovalStore>, id: String) -> Option<Ap
 #[tauri::command]
 pub fn approval_current(store: State<'_, ApprovalStore>) -> Option<ApprovalSnapshot> {
     store.current()
+}
+
+/// Step W11a: registers a batch of requests that one Touch ID authorises
+/// together. Enabling auto-pay is several transactions (`set_rule` →
+/// `set_executor` → `set_alias`…), so they share one prompt. Emits the same
+/// `approval_request` / `approval_result` vocabulary as the single path.
+#[tauri::command]
+pub fn approval_begin_batch(
+    app: AppHandle,
+    store: State<'_, ApprovalStore>,
+    session: State<'_, std::sync::Arc<SessionStore>>,
+    title: String,
+    items: Vec<ApprovalRequest>,
+) -> Result<ApprovalBatchBegin, ApprovalCommandError> {
+    if !session.is_unlocked() {
+        return Err(ApprovalCommandError::new(
+            ApprovalErrorKind::Locked,
+            "the wallet is locked; log in before approving a batch",
+        ));
+    }
+    let (begin, superseded) = store.begin_batch(title, items)?;
+    for superseded in &superseded {
+        events::emit(
+            &app,
+            PolarisEvent::ApprovalResult {
+                payload_hash: superseded.payload_hash.clone(),
+                approved: false,
+            },
+        );
+    }
+    if let Some(snapshot) = store.current() {
+        events::emit(
+            &app,
+            PolarisEvent::ApprovalRequest {
+                intent: snapshot.intent,
+                summary: snapshot.summary,
+                payload_hash: snapshot.payload_hash,
+            },
+        );
+    }
+    events::emit(
+        &app,
+        PolarisEvent::AgentStatus {
+            stage: AgentStage::AwaitingApproval,
+        },
+    );
+    Ok(begin)
+}
+
+/// Step W11a: ONE Touch ID authorises every step of the batch. Resolves to the
+/// authorized step ids; each is still released once by `wallet_sign(id)`.
+#[tauri::command]
+pub async fn approval_authorize_batch(
+    app: AppHandle,
+    store: State<'_, ApprovalStore>,
+    session: State<'_, std::sync::Arc<SessionStore>>,
+    authenticator: State<'_, Arc<dyn Authenticator>>,
+    batch_id: String,
+) -> Result<ApprovalBatchAuthorized, ApprovalCommandError> {
+    if !session.is_unlocked() {
+        return Err(ApprovalCommandError::new(
+            ApprovalErrorKind::Locked,
+            "the wallet is locked; log in before authorizing",
+        ));
+    }
+    let snapshot_store = store.inner().clone();
+    let task_store = snapshot_store.clone();
+    let authenticator = Arc::clone(authenticator.inner());
+    let joined = tauri::async_runtime::spawn_blocking(move || {
+        task_store.authorize_batch(&batch_id, authenticator.as_ref())
+    })
+    .await;
+
+    match joined {
+        Ok(Ok(authorized)) => {
+            for (_, payload_hash) in &authorized {
+                events::emit(
+                    &app,
+                    PolarisEvent::ApprovalResult {
+                        payload_hash: payload_hash.clone(),
+                        approved: true,
+                    },
+                );
+            }
+            Ok(ApprovalBatchAuthorized {
+                authorized: authorized.into_iter().map(|(id, _)| id).collect(),
+            })
+        }
+        Ok(Err(failure)) => Err(failure.into()),
+        Err(error) => Err(ApprovalCommandError::new(
+            ApprovalErrorKind::Failed,
+            format!("the approval task did not finish: {error}"),
+        )),
+    }
 }
 
 #[cfg(test)]
@@ -1241,11 +1757,11 @@ mod tests {
         let store = ApprovalStore::new();
         let first = store.begin(request(XDR_ABC)).unwrap();
         assert!(first.request.id.starts_with("apr_"));
-        assert!(first.superseded.is_none());
+        assert!(first.superseded.is_empty());
 
         let second = store.begin(request(XDR_REAL)).unwrap();
         assert_ne!(first.request.id, second.request.id);
-        let superseded = second.superseded.as_ref().unwrap();
+        let superseded = &second.superseded[0];
         assert_eq!(superseded.payload_hash, XDR_ABC_HASH);
         assert_eq!(superseded.reason, SUPERSEDED_REASON);
 
@@ -1523,5 +2039,150 @@ mod tests {
         for cut in 0..XDR_REAL.len().min(96) {
             let _ = signer_hint_of(&XDR_REAL[..cut]);
         }
+    }
+
+    #[test]
+    fn begin_batch_authorizes_every_step_with_one_prompt_and_consumes_each_once() {
+        let store = ApprovalStore::new();
+        let (begin, superseded) = store
+            .begin_batch("Enable auto-pay".to_string(), vec![request(XDR_ABC), request(XDR_REAL)])
+            .unwrap();
+        assert!(superseded.is_empty());
+        assert_eq!(begin.ids.len(), 2);
+        assert!(begin.ids.iter().all(|id| id.starts_with("apr_")));
+
+        let auth = FakeAuth::ok();
+        let authorized = store.authorize_batch(&begin.batch_id, &auth).unwrap();
+        assert_eq!(authorized.len(), 2);
+        // ONE prompt authorises the whole batch.
+        assert_eq!(*auth.calls.lock().unwrap(), 1);
+        for id in &begin.ids {
+            assert_eq!(store.status(id).unwrap().state, ApprovalState::Authorized);
+        }
+        // Each step still releases exactly once, with its own digest.
+        let first = store.take_authorized(&begin.ids[0]).unwrap();
+        assert_eq!(first.unsigned_xdr, XDR_ABC);
+        assert_eq!(first.payload_hash, XDR_ABC_HASH);
+        // A partially released batch is no longer "current".
+        assert!(store.current().is_none());
+        assert_eq!(
+            store.take_authorized(&begin.ids[0]),
+            Err(TakeError::NotAuthorized {
+                state: ApprovalState::Consumed
+            })
+        );
+        let second = store.take_authorized(&begin.ids[1]).unwrap();
+        assert_eq!(second.unsigned_xdr, XDR_REAL);
+    }
+
+    #[test]
+    fn denying_or_invalidating_any_step_rejects_the_whole_batch() {
+        let store = ApprovalStore::new();
+        let (begin, _) = store
+            .begin_batch("Enable".to_string(), vec![request(XDR_ABC), request(XDR_REAL)])
+            .unwrap();
+        store.deny(&begin.ids[1]).unwrap();
+        for id in &begin.ids {
+            assert_eq!(store.status(id).unwrap().state, ApprovalState::Denied);
+            assert!(store.take_authorized(id).is_err());
+        }
+
+        // A lock invalidates every step too (fail-closed).
+        let store = ApprovalStore::new();
+        let (begin, _) = store
+            .begin_batch("Enable".to_string(), vec![request(XDR_ABC), request(XDR_REAL)])
+            .unwrap();
+        store.authorize_batch(&begin.batch_id, &FakeAuth::ok()).unwrap();
+        assert!(store.invalidate_for_lock().is_some());
+        for id in &begin.ids {
+            assert_eq!(store.status(id).unwrap().state, ApprovalState::Denied);
+            assert_eq!(
+                store.take_authorized(id),
+                Err(TakeError::NotAuthorized {
+                    state: ApprovalState::Denied
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn an_expired_batch_authorizes_nothing() {
+        let clock = ManualClock::new();
+        let store = ApprovalStore::with_clock(clock.handle());
+        let (begin, _) = store
+            .begin_batch("Enable".to_string(), vec![request(XDR_ABC), request(XDR_REAL)])
+            .unwrap();
+        clock.advance(APPROVAL_TTL + Duration::from_secs(1));
+        let auth = FakeAuth::ok();
+        assert_eq!(
+            store.authorize_batch(&begin.batch_id, &auth),
+            Err(AuthorizeFailure::Store(AuthorizeError::Expired))
+        );
+        assert_eq!(*auth.calls.lock().unwrap(), 0);
+        assert!(store.current().is_none());
+        for id in &begin.ids {
+            assert_eq!(store.status(id).unwrap().state, ApprovalState::Expired);
+            assert!(store.take_authorized(id).is_err());
+        }
+    }
+
+    #[test]
+    fn begin_batch_rejects_bad_steps_and_stores_nothing() {
+        let store = ApprovalStore::new();
+        assert_eq!(
+            store.begin_batch("empty".to_string(), vec![]).unwrap_err(),
+            BeginError::EmptyBatch
+        );
+        let too_many: Vec<ApprovalRequest> =
+            (0..MAX_BATCH_ITEMS + 1).map(|_| request(XDR_ABC)).collect();
+        assert_eq!(
+            store.begin_batch("big".to_string(), too_many).unwrap_err(),
+            BeginError::BatchTooLarge {
+                count: MAX_BATCH_ITEMS + 1,
+                max: MAX_BATCH_ITEMS
+            }
+        );
+        // One bad digest rejects the whole batch before anything is stored.
+        let mut bad = request(XDR_ABC);
+        bad.payload_hash = XDR_REAL_HASH.to_string();
+        assert_eq!(
+            store
+                .begin_batch("hashes".to_string(), vec![request(XDR_REAL), bad])
+                .unwrap_err(),
+            BeginError::HashMismatch
+        );
+        assert!(store.current().is_none());
+    }
+
+    #[test]
+    fn the_batch_snapshot_carries_steps_but_no_xdr() {
+        let store = ApprovalStore::new();
+        let (begin, _) = store
+            .begin_batch("Enable auto-pay".to_string(), vec![request(XDR_ABC), request(XDR_REAL)])
+            .unwrap();
+        let snapshot = store.current().unwrap();
+        let json = serde_json::to_string(&snapshot).unwrap();
+        assert!(json.contains(r#""batch""#), "{json}");
+        assert!(json.contains(r#""count":2"#), "{json}");
+        assert!(json.contains(&begin.batch_id), "{json}");
+        assert!(json.contains(r#""title":"Send 10 XLM""#), "{json}");
+        assert!(!json.contains("unsignedXdr"));
+        assert!(!json.contains(XDR_ABC));
+        assert!(!json.contains(XDR_REAL));
+    }
+
+    #[test]
+    fn a_new_request_supersedes_a_live_batch() {
+        let store = ApprovalStore::new();
+        let (_, none) = store
+            .begin_batch("first".to_string(), vec![request(XDR_ABC), request(XDR_REAL)])
+            .unwrap();
+        assert!(none.is_empty());
+        let superseded = store.begin(request(XDR_ABC)).unwrap().superseded;
+        assert_eq!(superseded.len(), 2);
+        assert!(superseded.iter().all(|s| s.reason == SUPERSEDED_REASON));
+        assert_eq!(superseded[0].payload_hash, XDR_ABC_HASH);
+        assert_eq!(superseded[1].payload_hash, XDR_REAL_HASH);
+        assert!(store.current().unwrap().batch.is_none());
     }
 }

@@ -22,6 +22,12 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
+  type ApprovalBatchAuthorized,
+  type ApprovalBatchBegin,
+  type ApprovalRequestInput,
+  type ExecutorAddress,
+  type ExecutorSignOutcome,
+  type ExecutorStatus,
   type WalletAccount,
   type WalletAddressOutcome,
   type WalletCommandError,
@@ -42,6 +48,16 @@ export type {
   WalletSession,
   WalletSessionState,
   WalletStatus,
+  // Step W11a: the autopay executor and the one-Touch-ID approval batch.
+  ApprovalBatchAuthorized,
+  ApprovalBatchBegin,
+  ApprovalBatchSnapshot,
+  ApprovalBatchStep,
+  ApprovalRequestInput,
+  ExecutorAddress,
+  ExecutorSignCode,
+  ExecutorSignOutcome,
+  ExecutorStatus,
 } from "@polaris/interfaces";
 export {
   WalletEngineError,
@@ -192,4 +208,53 @@ export function walletErrorKind(error: unknown): WalletErrorKind | "unknown" {
     if (typeof candidate.kind === "string") return candidate.kind as WalletErrorKind;
   }
   return "unknown";
+}
+
+/* ------------------------------------------------------------------ *
+ * Autopay executor + approval batch (step W11a)
+ *
+ * Thin `invoke` wrappers only. `executor_create` shows Touch ID;
+ * `executor_sign_pay` never does, but Rust refuses unless the transaction is
+ * exactly the guard's `pay_executor` call for this wallet's executor.
+ * ------------------------------------------------------------------ */
+
+/** `executor_status`: whether the active owner has an executor key. Never prompts. */
+export function executorStatus(deps: WalletDeps = defaultDeps): Promise<ExecutorStatus> {
+  return deps.invoke<ExecutorStatus>("executor_status");
+}
+
+/** `executor_create`: Touch-ID-gated creation of the executor key. */
+export function executorCreate(deps: WalletDeps = defaultDeps): Promise<ExecutorAddress> {
+  return deps.invoke<ExecutorAddress>("executor_create");
+}
+
+/**
+ * `executor_sign_pay`: signs one `pay_executor` call without Touch ID. The
+ * union's `code` says why a refusal happened.
+ */
+export function executorSignPay(
+  xdr: string,
+  deps: WalletDeps = defaultDeps,
+): Promise<ExecutorSignOutcome> {
+  return deps.invoke<ExecutorSignOutcome>("executor_sign_pay", { xdr });
+}
+
+/**
+ * `approval_begin_batch`: registers several requests under one batch id. The
+ * caller builds each item exactly as for `approval_begin`.
+ */
+export function approvalBeginBatch(
+  title: string,
+  items: ApprovalRequestInput[],
+  deps: WalletDeps = defaultDeps,
+): Promise<ApprovalBatchBegin> {
+  return deps.invoke<ApprovalBatchBegin>("approval_begin_batch", { title, items });
+}
+
+/** `approval_authorize_batch`: ONE Touch ID authorises every step. */
+export function approvalAuthorizeBatch(
+  batchId: string,
+  deps: WalletDeps = defaultDeps,
+): Promise<ApprovalBatchAuthorized> {
+  return deps.invoke<ApprovalBatchAuthorized>("approval_authorize_batch", { batchId });
 }

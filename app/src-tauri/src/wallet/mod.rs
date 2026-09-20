@@ -34,6 +34,7 @@
 //! sequence-0 SEP-10 challenge without Touch ID and refuses anything else.
 
 pub mod commands;
+pub mod executor;
 pub mod file;
 pub mod keychain;
 pub mod keys;
@@ -332,6 +333,12 @@ pub struct Metadata {
     /// means "never lock". Non-secret, so it is safe in this file.
     #[serde(default)]
     pub auto_lock_minutes: Option<u64>,
+    /// Autopay executor address per owner address (W11a): `G…` owner -> `G…`
+    /// executor. Public addresses only, so this file stays non-secret; the
+    /// executor's **seed** lives in the same store as the wallet seeds under
+    /// `executor-<ownerAddress>`.
+    #[serde(default)]
+    pub executors: std::collections::BTreeMap<String, String>,
 }
 
 struct Inner {
