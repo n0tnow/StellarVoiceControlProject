@@ -66,6 +66,15 @@ bip39 = { version = "2.1", features = ["zeroize"] }
 hmac = "0.12"
 zeroize = "1.8"
 
+# Step W11a: `executor_sign_pay` decodes the Soroban invocation itself, so the
+# executor key can sign ONLY the guard's `pay_executor` call. Decoding arbitrary
+# XDR by hand is exactly where a parser bug becomes a signature over a different
+# transaction, so this uses the audited `stellar-xdr` reader instead of the
+# parse-free envelope slicing the bridge uses. `base64` gates `from_xdr_base64`;
+# the default `std` face is left off to keep the feature surface minimal (28.x
+# dropped the old `curr` feature — the generated types ARE the current protocol).
+stellar-xdr = { version = "28", default-features = false, features = ["base64"] }
+
 # The overlay's window level / collection behaviour come from AppKit directly,
 # because Tauri's window API does not expose them. Versions are pinned to the
 # objc2 generation tauri 2.11 already links (see `cargo tree -i objc2`); a

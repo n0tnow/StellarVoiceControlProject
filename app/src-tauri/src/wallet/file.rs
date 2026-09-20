@@ -178,6 +178,7 @@ mod tests {
                 store: StoreKind::File,
             }],
             auto_lock_minutes: None,
+            executors: Default::default(),
         };
         save_metadata(&root, &meta).unwrap();
         assert_eq!(load_metadata(&root), meta);

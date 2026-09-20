@@ -78,6 +78,10 @@ pub fn run() {
             approval::approval_deny,
             approval::approval_status,
             approval::approval_current,
+            // Step W11a: one Touch ID authorises a whole batch (e.g. enabling
+            // auto-pay: set_rule → set_executor → set_alias).
+            approval::approval_begin_batch,
+            approval::approval_authorize_batch,
             health::biometric_health,
             health::biometric_selftest,
             voice_health::voice_health,
@@ -120,6 +124,12 @@ pub fn run() {
             bank::bank_set_currency,
             bank::bank_anchor_config,
             bank::bank_health,
+            // Step W11a: the autopay executor key and the strict `pay_executor`
+            // signer (no Touch ID; only the guard's pay_executor call).
+            wallet::executor::executor_status,
+            wallet::executor::executor_create,
+            wallet::executor::executor_sign_pay,
+            wallet::executor::executor_health,
         ])
         // Step W0: a panel's close button hides it instead of quitting the app
         // (the overlay's `main` window is never closed, so the close handler is

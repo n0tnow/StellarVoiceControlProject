@@ -467,6 +467,48 @@ export interface WalletCommandError {
 }
 
 /* ------------------------------------------------------------------ *
+ * 7d. Autopay executor (step W11a)
+ *
+ * The on-chain autonomy path: the owner registers a separate executor key, and
+ * payments inside the rule are signed by that key with `pay_executor` — no
+ * approval card, no Touch ID. Rust decodes the transaction and signs ONLY that
+ * one call shape; the `ExecutorSignOutcome` union is the whole contract.
+ * ------------------------------------------------------------------ */
+
+/** `executor_status`: whether the active owner has an executor key. */
+export interface ExecutorStatus {
+  exists: boolean;
+  /** The executor's public `G…` address, or null. */
+  address: string | null;
+  /**
+   * Always null from Rust: funding needs a network read, which the Debug check
+   * performs over Horizon.
+   */
+  funded: boolean | null;
+}
+
+/** `executor_create` result. The seed never leaves Rust. */
+export interface ExecutorAddress {
+  address: string;
+}
+
+/** Why `executor_sign_pay` refused to sign. */
+export type ExecutorSignCode =
+  | "locked"
+  | "no_executor"
+  | "not_pay_executor"
+  | "wrong_source"
+  | "wrong_contract"
+  | "over_hard_cap"
+  | "invalid"
+  | "error";
+
+/** `executor_sign_pay`'s typed union: a signed XDR, or a coded refusal. */
+export type ExecutorSignOutcome =
+  | { ok: true; signedXdr: string; txHash: string }
+  | { ok: false; code: ExecutorSignCode; message: string };
+
+/* ------------------------------------------------------------------ *
  * 8. Approval gate (step W3)
  *
  * Section 7 is reserved for the chain-configuration types (W1), which append
@@ -515,6 +557,11 @@ export interface ApprovalSnapshot {
   mode: ApprovalMode;
   state: ApprovalState;
   expiresAtMs: number;
+  /**
+   * Step W11a: present only while a **batch** is the current request. It
+   * carries step ids, titles and states — never any XDR.
+   */
+  batch?: ApprovalBatchSnapshot;
 }
 
 /** What `approval_status` returns, including why a request was denied. */
@@ -547,6 +594,42 @@ export type ApprovalErrorKind =
 export interface ApprovalCommandError {
   kind: ApprovalErrorKind;
   message: string;
+}
+
+/* ------------------------------------------------------------------ *
+ * 8b. Approval batch (step W11a)
+ *
+ * Enabling auto-pay is several transactions (`set_rule` → `set_executor` →
+ * `set_alias`…). A batch lets ONE Touch ID authorise them together, while each
+ * step keeps its own digest binding and is released once by `wallet_sign(id)`.
+ * ------------------------------------------------------------------ */
+
+/** One step of an approval batch: id, title and state only — never any XDR. */
+export interface ApprovalBatchStep {
+  id: string;
+  title: string;
+  state: ApprovalState;
+}
+
+/** The batch half of an `ApprovalSnapshot`. */
+export interface ApprovalBatchSnapshot {
+  batchId: string;
+  title: string;
+  count: number;
+  state: ApprovalState;
+  steps: ApprovalBatchStep[];
+  expiresAtMs: number;
+}
+
+/** `approval_begin_batch` result: the batch id and each step's request id. */
+export interface ApprovalBatchBegin {
+  batchId: string;
+  ids: string[];
+}
+
+/** `approval_authorize_batch` result: every step id the one prompt authorised. */
+export interface ApprovalBatchAuthorized {
+  authorized: string[];
 }
 
 /* ------------------------------------------------------------------ *
