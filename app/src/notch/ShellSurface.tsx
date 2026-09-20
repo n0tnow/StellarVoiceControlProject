@@ -31,6 +31,8 @@ import type { NavigationRequest, ShellGeometry } from "@polaris/interfaces";
 import { StageLabel } from "@/components/StageLabel";
 import { notchPageFor } from "@/lib/navigation";
 import { shouldAutoOpenWallet, shouldPinWallet } from "@/lib/walletSession";
+import { ApprovalOverlay } from "./approval/ApprovalOverlay";
+import { usePendingApproval } from "./approval/usePendingApproval";
 import { BlobatarFace } from "./BlobatarFace";
 import { facePlacementFor, shouldRenderFace } from "./faceState";
 import { MoreMenu } from "./MoreMenu";
@@ -80,11 +82,15 @@ export function ShellSurface({
   // → `none`/`locked`, and cannot be dismissed (hover-leave, Escape, nav-close)
   // until the session unlocks.
   const { session } = useWalletSession();
+  // W15g: a pending approval owns the notch. The overlay below renders the card
+  // and this pin forces the panel open; suppressing voice attention keeps the
+  // payment turn's compact proposal from shrinking the card away.
+  const approval = usePendingApproval();
   const walletPin = shouldPinWallet(session);
   // The pin is a proposal of its own (not a faked attention voice): it outranks
   // the ready/error dwell so the wallet screen gets the full panel, while a
   // genuine attention voice turn still takes the surface and hands it back.
-  const pinned = walletPin || panelRequest;
+  const pinned = walletPin || panelRequest || approval.visible;
   const {
     applied,
     onTransitionEnd,
@@ -92,7 +98,7 @@ export function ShellSurface({
     applyContentHeight,
     dismiss,
   } = useShellState(voiceState, {
-    voiceAttention,
+    voiceAttention: voiceAttention && !approval.visible,
     pin: pinned ? "panel" : "collapsed",
   });
 
@@ -292,6 +298,9 @@ export function ShellSurface({
             Quit). Mounted only while the panel is applied so no focusable
             control hides inside the collapsed, click-through shell. */}
         {applied === "panel" ? <MoreMenu /> : null}
+        {/* W15g: the approval card renders over the page body; no separate
+            approval window exists. */}
+        <ApprovalOverlay approval={approval} />
       </div>
     </section>
   );

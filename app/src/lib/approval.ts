@@ -24,6 +24,12 @@ export interface ApprovalBatchStep {
   index: number;
   title: string;
   detail?: string;
+  /**
+   * The gate's id for this step (W15g). The Rust snapshot carries `id`, so the
+   * overlay can deny the whole batch through one step id; optional so callers
+   * that only render titles are unaffected.
+   */
+  id?: string;
 }
 
 /**
