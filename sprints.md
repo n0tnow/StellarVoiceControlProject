@@ -33,6 +33,10 @@
 - [ ] Touch ID approval card → signed XDR → testnet tx confirmed (SLICE COMPLETE)
 
 ### M2 — Owner A Track: Voice Pipeline, step-by-step 🔲
+> **Superseded (2026-09-20, `integration/wallet-login`).** A2 (agent loop), A3 (TTS) and
+> A5 (chain tool + approval/Touch ID) all shipped in integrated form; only **A4 (screen
+> reading)** stays open. The step rows below are kept as history — see **Milestone 5** for
+> the real order and the current open list.
 > Rule: **one feature at a time, no skipping.** Do not start step N+1 until step N's
 > acceptance test passes and is demoed. Each step is its own branch + PR + review.
 
@@ -169,20 +173,23 @@
 - [x] (2026-09-20, chain-lane PR) **C2.** `polaris_guard` owner-side TypeScript client: `set_rule`, `set_alias`, SAC `approve`, `pay_executor`, plus `direct` / `guarded` modes of `sendPayment` (D1 step 2)
 - [x] (2026-09-20, chain-lane PR) **C3.** Headless end-to-end script: `Intent` → XDR → dev-key sign → `submitSignedTx` → testnet tx; over-limit rejected with guard error **#105** (`NeedsOwnerApproval`) (D1 step 3)
 - [x] **C4.** Registration/adapter so a shell can turn an `Intent` into a `ChainToolResult`; expose `@polaris/stellar` to the webview (no voice dependency) — (2026-09-20, `feat/w1-network-wiring`: `stellar_config` Rust command → `app/src/lib/chain.ts` lazily configures `sendPayment`; the A9 seam now builds the XDR before the approval gate and hands the card `summary` + `payloadHash`; live `e2e:build-xdr`) — see `backlog/w1-network-wiring.md`
-- [ ] **C5. (PROPOSED)** Signing option: Rust approval gate + TypeScript signing/submission (option 1) for the demo; full Rust-native signer post-hackathon
-- [ ] **C6. (PROPOSED)** Standardise signing on XDR: `SigningService.sign(payloadHash)` → `signTransaction(xdr)` — needs Owner A agreement
+- [x] **C5. (PROPOSED)** Rust approval gate + TypeScript signing/submission → **superseded 2026-09-20** by the embedded **Rust-native signer** behind the Touch ID gate (`feat/w10-embedded-wallet`, `feat/w11a-executor-rust`; Milestone 5).
+- [x] **C6. (PROPOSED)** Standardise on `SigningService.sign(payloadHash)` → **superseded**: XDR is built in TS and signed in Rust, bound by the approval `xdrDigest`; no separate signing service remains.
 - [x] (2026-09-20, chain-lane PR) **C7.** Guard client + keeper take the contract id as a parameter (e.g. `GUARD_CONTRACT_ID`), never hard-coded, so v0.1 and v0.2 (`polaris_guard_v2`) run side by side (D9)
 - [x] (2026-09-20, chain-lane PR) **T1.** Approval policy + `enableAutoPay(draft)` builder (`always_ask` | `auto_under_limit`; safe order `approve` → `set_rule` → `set_executor`, executor last = arming), `buildBaselineSetup()` / `buildTightenRule()` / `disableAutoPay()`, profile→on-chain mapping — `stellar/src/guard/` (PLANNED) (D10/D10b/D10c/D13; see `docs/approval-and-scheduling.md` §3, §9, §11)
 - [x] (2026-09-20, chain-lane PR) **T2.** Schedule tools: `schedulePayment`, `cancelSchedule`, `listSchedules` ChainTools + explicit-timezone local→UTC helper (see `docs/approval-and-scheduling.md` §5, §9)
 
 ### Voice lane (Owner A — not blocking)
-- [ ] **V1. (PROPOSED)** Merge order of the `interfaces/src/index.ts` branches: `a0` → `a1-stt` → `a1-ondevice` → `a2` → `a3` → `docs/rule-types-and-decisions` (freeze the seam after `a0`)
-- [ ] **V2.** Merge A0 (+ A1): `make dev` runs, hold hotkey → `transcript` event
-- [ ] **V3.** Text-input dev path calling `runAgentTurn(text)` → `Intent` in `AgentTrace`
-- [ ] **V4.** Approval card component renders the summary + Approve/Deny
-- [ ] **V5.** Submit path: sign in TS, `submitSignedTx(signedXdr, unsignedXdr)`, emit `tx_submitted`
-- [ ] **V6.** Replace text input with the merged voice path
-- [ ] **V7. (stretch)** Touch ID (LocalAuthentication) behind the approval gate
+> **Collapsed (2026-09-20):** V1–V7 were planning rows for a merge order that the
+> `integration/wallet-login` build absorbed; V2–V7 shipped as the notch voice pipeline,
+> approval card, Touch ID gate and submit path. Kept as history — see **Milestone 5**.
+- [x] **V1. (PROPOSED)** `interfaces/src/index.ts` merge order — **superseded** by the single integration branch.
+- [x] **V2.** `make dev` runs; hold hotkey → `transcript` event — **done**.
+- [x] **V3.** Text/voice path calling `runAgentTurn` → `Intent` in `AgentTrace` — **done** (`agent/src/loop.ts`).
+- [x] **V4.** Approval card renders the summary + Approve/Deny — **done** (`panels/ApprovalPanel.tsx`).
+- [x] **V5.** Submit path + `tx_submitted` — **done**, now signed by the embedded wallet in Rust.
+- [x] **V6.** Replace text input with the merged voice path — **done**.
+- [x] **V7. (stretch)** Touch ID behind the approval gate — **done** (`wallet/biometric.rs`, W3).
 - [x] **F2.** Real assistant system prompt: `capabilities.ts` (role/behaviour + tool-registry capability list + config account table + few-shot examples), pure `accountRefs.ts` normalisation before the model and at validation, `app/src/lib/agent.ts` config wiring, live `npm run e2e:prompt` eval (31/31 = 100%) — `backlog/f2-assistant-prompt.md`
 - [x] (2026-09-20, branch `feat/t1-asset-defaults`) **T1-defaults.** `send_payment` asks instead of defaulting a missing asset, read-only `get_balance` with a deterministic spoken sentence (`toSpeech` in the loop, Horizon reader injected from `stellar_config`), PGUSD added to the chain asset registry — `backlog/t1-asset-defaults.md`
 - [x] (2026-09-20, branch `feat/nw1-wallet-page`) **NW1.** Notch Wallet page on real data: `notch/data/useWalletData.ts` (stellar_config + Horizon balances/payments + alias book + session `tx_submitted` latest tx), mock import removed from `WalletPage.tsx`; check/tests (301 pass)/build green — `backlog/nw-wallet.md`
@@ -209,10 +216,10 @@
 
 ## Milestone 3 — Chain & Guard 🔲
 - [x] polaris_guard Soroban contract: per-tx/daily spending limit + alias book; deployed on testnet, contract ID documented (2026-09-19, PR #10 + keeper PR #9)
-- [ ] Anchor flow: SEP-10/38/6 TRY mock deposit → USDC balance, driven by voice
-  - SEP-6 client merged ([PR #11](https://github.com/n0tnow/StellarVoiceControlProject/pull/11)); voice wiring pending (Owner A, not on the chain-lane critical path)
-  - [x] (2026-09-20, branch `feat/w5b-anchor-flows`) **W5b.** App-side anchor `Signer` (seq-0 wallet-only `bridge_sign_challenge`, else Touch ID pipeline) + `createAnchorSession`, voice `deposit`/`withdraw` intents, Anchor panel + Debug check; live Touch ID/Freighter needs a human — `backlog/w5b-anchor-flows.md`
-  - [ ] (2026-09-20, branch `feat/w5a-anchor-signing`) **W5a (Rust).** Wallet-only SEP-10 challenge signing: `bridge_sign_challenge` + `anchor_signing_health`, seq-0/owner-source integrity checks (op types not parsed), parser hardened against crafted XDR (no panic), generalised signature-list parsing; live anchor challenge still needs a human — see `backlog/w5a-anchor-signing.md`
+- [x] Anchor flow, driven by voice — **primary is the SDF test anchor `testanchor.stellar.org`** (SRT/USD), verified live both directions; the TR mock anchor is secondary (deposit payouts stalled 2026-09-20). See `docs/anchor-sdf-flow.md`, `backlog/anchor-sep10-validity.md`.
+  - [x] SEP-6 client merged ([PR #11](https://github.com/n0tnow/StellarVoiceControlProject/pull/11)); voice wiring landed in W5b.
+  - [x] (2026-09-20, branch `feat/w5b-anchor-flows`) **W5b.** App-side anchor `Signer` (seq-0 wallet-only challenge signing, else Touch ID pipeline) + `createAnchorSession`, voice `deposit`/`withdraw` intents, Anchor panel + Debug check; live Touch ID needs a human — `backlog/w5b-anchor-flows.md`
+  - [x] (2026-09-20, branch `feat/w5a-anchor-signing`) **W5a (Rust).** Wallet-only SEP-10 challenge signing (now `wallet_sign_challenge` after W12 removed the bridge) + `anchor_signing_health`, seq-0/owner-source integrity checks (op types not parsed), parser hardened against crafted XDR (no panic), generalised signature-list parsing; live anchor challenge still needs a human — see `backlog/w5a-anchor-signing.md`
   - [x] (2026-09-20, branch `feat/w5b-anchor-flows`) **W5b-fix.** Review corrections: the real pipeline captures the signed XDR (fake-bridge tests), voice `deposit`/`withdraw` drive `runAnchorIntent` on the panel `AnchorSession`, stricter missing-command check, directional step mapping, configured passphrase — `backlog/w5b-anchor-flows.md`
   - [x] (2026-09-20, branch `fix/anchor-sdf-primary`) **ANCHOR-SDF.** Stellar SDF test anchor as a first-class scenario: fixed the SEP-10 window check (`maxTime-minTime`, not `maxTime-now`) that failed live login for both anchors, auto-filled SDF SEP-12 with clearly-fake demo data (unknown fields → `KycRequiredError`), live check + manual deposit verified; e2e blocked by SDF's USD-only SEP-38 and per-transaction identity KYC — `backlog/anchor-sep10-validity.md`
   - [x] (2026-09-20, branch `feat/bank-sim-automation`) **BANK-SIM.** Rust simulated bank ledger (`bank.rs`) + pure bank↔anchor automation (`bankFlow.ts`/`bankAnchor.ts`): deposit reserve→refund on stall, withdraw credit-once, restart reconciliation; Anchor-panel bank card/forms/history; voice routed via `runBankIntent`; `POLARIS_ANCHOR_HOME_DOMAIN` (default SDF); `bank` Debug check; cargo 328/0 + clippy clean, app 372/372 — `backlog/bank-sim.md`
@@ -266,10 +273,24 @@
 - [x] (2026-09-20, `integration/wallet-login`) **MERGE-FINAL.** Merged `feat/w11a-executor-rust` + `feat/w11b-autopay-ui` + `chore/remove-freighter-bridge` (3 commits): `lib.rs` command/module union exactly once with no `bridge_*`, approval batch + autopay routing + Freighter removal reconciled; check/app 416/agent 213/stellar 1044/build/cargo 364/clippy green, `e2e:autopay OK` — `backlog/w12-remove-freighter.md`
 - [x] (2026-09-20, branch `chore/remove-freighter-bridge`) **W12.** Removed the Freighter bridge entirely (Rust server/launcher/commands + `tiny_http`, bridge page/`app/src/bridge`/Wallets Kit dep/fixture/docs, `POLARIS_SIGNER`/`bridge_sign` branches); kept `verify.rs`/`strkey.rs` + `bridge/outcome.rs`; embedded wallet is the only signer — all checks/tests/build/cargo/clippy green, no wallets-kit chunk in `dist`
 - [x] README refreshed to reflect current codebase (constitution requirement)
-- [ ] Demo video recorded + pitch deck; demo script + pitch text written (`docs/demo-script.md`, `docs/pitch.md`, T1-demo)
-- [ ] Docs synced: notes.md, backlog reports, docs/reports/INDEX.md, sprints.md all up to date
+- [ ] Demo video recorded + pitch deck; demo script + pitch text **rewritten for the current flow** (`docs/demo-script.md`, `docs/pitch.md`, branch `docs/final-sync`); the video itself is still to record.
+- [ ] Docs synced: README/sprints/backlog/demo/pitch/wallet-track refreshed by `docs/final-sync` and the independent reviews archived in `docs/reviews/`; `notes.md` + `docs/reports/INDEX.md` unchanged by it.
 - [ ] (bonus, if everything above is done) passkey wallet / P2P escrow / developer mode
-- [ ] (2026-09-20, W8a) P2P escrow contract `polaris_p2p_escrow`: built, 20 tests, testnet-deployed `CBMXLTX…` — TS client + order-book UI pending review
+- [x] (2026-09-20, W8a/W8b) P2P escrow contract `polaris_p2p_escrow`: built, 20 tests, testnet-deployed `CBMXLTXS76…`; TS client + voice intents + P2P panel via `txPipeline` (live panel/approval need a human) — `backlog/w8a-p2p-escrow.md`, `backlog/w8b-p2p-client.md`.
+
+## Milestone 5 — Wallet & UI track ✅
+> The wallet/UI track that landed on `integration/wallet-login` (branches merged in this
+> order; details in `docs/wallet-track.md`). Docs for it: `docs/demo-script.md`,
+> `docs/pitch.md`, `docs/reviews/`.
+- [x] **W10** embedded wallet (Rust core + TS lib): BIP-39/SEP-5, Keychain seed, local Ed25519 signing → [x] **W10b** wallet login + recipients in the notch UI → **MERGE-WALLET** (`feat/w10-embedded-wallet`, `feat/w10b-wallet-notch-ui`, `fix/w10-review`).
+- [x] **W13a** Rust-enforced session (`none`/`locked`/`unlocked`, auto-lock) → [x] **W13b** professional Wallet page (Connect/Unlock/Dashboard, QR, Send, Log out) → **MERGE-WALLET2** (`feat/w13a-wallet-session`, `feat/w13b-wallet-experience`).
+- [x] **HISTORY-UI** pro History timeline (filters/search/drawer/paging) + **MERGE-HIST** behind the same lock gate (`feat/history-ui-pro`).
+- [x] **VOICE-DIALOG** (dialogue memory, `set_approval_rule`, sell/buy routing) + **NAV** voice navigation (`feat/voice-dialog`, `feat/nav-voice-navigation`).
+- [x] **W6c** Wallet/Suggestions panels; **NOTCH-CLIP** pinning fix (`feat/w6c-wallet-suggestions`, `fix/notch-panel-clipped`).
+- [x] Chain track: **ANCHOR-SDF/BANK-SIM** (SDF anchor + demo bank, both directions live), **W8a/W8b** P2P escrow contract + client/panel, **W9** SPP read-only.
+- [x] **W11a** executor key + `executor_sign_pay` → [x] **W11b** autonomous payments UI (`e2e:autopay` live) → [x] **W12** remove the Freighter bridge → **MERGE-FINAL**.
+- [ ] **Open / honest:** SPP **value-moving** integration (needs wallet `signAuthEntry`); **Trade page**; CT (confidential tokens) spike/integration; protocol integration (Soroswap swap **or** DeFindex, not both); **A4 screen reading**; developer mode; MPP; passkey wallet.
+- **Human-verification list (unverified by automation):** real mic + STT, real Touch ID (create/sign/unlock/batch), real Keychain first-access, live anchor payout leg, live `pay_executor`, real notch windows/hover/pin, Friendbot.
 
 ---
 
