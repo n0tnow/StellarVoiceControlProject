@@ -15,6 +15,7 @@ import { createDemoCommands } from "@/panels/approval/demo";
 import { usePolarisEvents } from "@/panels/events";
 import { parseApprovalDemo } from "@/panels/panelRoutes";
 import { PanelShell } from "@/panels/PanelShell";
+import { playSfx } from "@/lib/sfx";
 
 /** The card's live error, if the current stage is `error`. */
 function errorOf(state: ApprovalFlowState) {
@@ -91,8 +92,12 @@ export function ApprovalPanel() {
     dispatch({ type: "approveClicked" });
     commands
       .authorize(snapshot.id)
-      .then((next) => dispatch({ type: "authorizeOk", snapshot: next }))
+      .then((next) => {
+        playSfx("success");
+        dispatch({ type: "authorizeOk", snapshot: next });
+      })
       .catch((error: unknown) => {
+        playSfx("error");
         const failure = toApprovalError(error);
         dispatch({ type: "authorizeFailed", kind: failure.kind, message: failure.message });
       });
@@ -106,8 +111,14 @@ export function ApprovalPanel() {
     dispatch({ type: "denyClicked" });
     commands
       .deny(snapshot.id)
-      .then((next) => dispatch({ type: "snapshot", snapshot: next, nowMs: Date.now() }))
-      .catch(() => refresh());
+      .then((next) => {
+        playSfx("error");
+        dispatch({ type: "snapshot", snapshot: next, nowMs: Date.now() });
+      })
+      .catch(() => {
+        playSfx("error");
+        refresh();
+      });
   }, [commands, refresh]);
 
   return (
