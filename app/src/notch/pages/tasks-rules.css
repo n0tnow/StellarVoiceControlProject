@@ -1,0 +1,261 @@
+/*
+ * Shared chrome for the redesigned Tasks and Rules pages (UI-TASKS-RULES).
+ *
+ * Reuses the notch's existing tokens and primitives (`page-stack`, `page-list`,
+ * `task-row`, `rule-card`, `rule-add`, `page-icon-button`, `page-toggle`); this
+ * file only adds the page header, status dot, skeleton, empty and notice
+ * affordances the two pages share. Nothing here invents a new palette, radius
+ * or motion curve.
+ */
+
+/* --- page header --- */
+.nr-page .nr-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.nr-head-main {
+  min-width: 0;
+}
+
+.nr-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.nr-sub {
+  margin: 2px 0 0;
+  color: var(--color-notch-muted);
+  font-size: 11.5px;
+  line-height: 1.35;
+}
+
+/* --- status indicator --- */
+.nr-dot {
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: #ffffff3d;
+}
+
+.nr-dot.is-active {
+  background: var(--color-polaris-ok);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-polaris-ok) 18%, transparent);
+}
+
+.nr-dot.is-warn {
+  background: var(--color-polaris-warn);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-polaris-warn) 18%, transparent);
+}
+
+.nr-dot.is-off {
+  background: #ffffff3d;
+}
+
+/* --- list rows --- */
+.nr-row-main {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  flex: 1;
+}
+
+.nr-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+/* --- skeleton / empty / notice --- */
+.nr-skeleton-list {
+  gap: 4px;
+}
+
+.nr-skeleton {
+  height: 44px;
+  border-radius: 10px;
+  background: linear-gradient(90deg, #ffffff08 25%, #ffffff14 37%, #ffffff08 63%);
+  background-size: 400% 100%;
+  animation: nr-shimmer 1.4s ease infinite;
+}
+
+@keyframes nr-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: 0 0;
+  }
+}
+
+.nr-empty {
+  margin: 0;
+  padding: 18px 10px;
+  text-align: center;
+  color: var(--color-notch-muted);
+  font-size: 12px;
+}
+
+.nr-notice {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 0;
+  color: var(--color-notch-muted);
+  font-size: 11.5px;
+}
+
+.nr-notice svg {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+}
+
+.nr-notice.is-error {
+  color: var(--color-polaris-danger);
+}
+
+/* A failed background revalidation: non-destructive, the data stays. */
+.nr-notice.is-hint {
+  color: var(--color-polaris-warn);
+}
+
+/* --- owner polish: solid, tinted fields and quiet actions --- *
+ * The shared primitives (`task-new`, `rule-add`) ship a dashed outline that
+ * reads as a placeholder. Inside these two pages they become solid, slightly
+ * tinted surfaces from the existing palette; no new colour is introduced.
+ */
+.nr-page .task-new {
+  gap: 8px;
+  padding: 7px 10px;
+  border: 1px solid #ffffff1f;
+  border-radius: 10px;
+  background: #ffffff0a;
+}
+
+.nr-page .task-new:focus-within {
+  border-color: color-mix(in srgb, var(--color-notch-accent) 55%, transparent);
+  background: #ffffff0f;
+}
+
+.nr-page .rule-add {
+  border: 1px solid #ffffff1f;
+  background: #ffffff08;
+}
+
+.nr-page .rule-add:hover {
+  border-color: #ffffff38;
+  background: #ffffff0d;
+}
+
+/* The primary Save/Create sits at the end of the card, aligned with the field. */
+.nr-page .rule-approval {
+  justify-content: flex-end;
+}
+
+/* "Advanced" is a quiet disclosure row, not a filled button. */
+.nr-page .rule-disclosure {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  width: 100%;
+  margin: 2px 0 0;
+  padding: 7px 2px;
+  border: 0;
+  background: transparent;
+  color: var(--color-notch-muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.nr-page .rule-disclosure:hover {
+  color: var(--color-notch-text);
+}
+
+.nr-page .rule-disclosure svg {
+  width: 13px;
+  height: 13px;
+  transition: transform 140ms ease;
+}
+
+.nr-page .rule-disclosure.is-open svg {
+  transform: rotate(180deg);
+}
+
+/* "Turn off automatic payments": subdued destructive text, separated. */
+.nr-page .rule-danger {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  margin-top: 8px;
+  padding: 8px 2px 2px;
+  border: 0;
+  border-top: 1px solid #ffffff12;
+  background: transparent;
+  color: color-mix(in srgb, var(--color-polaris-danger) 80%, var(--color-notch-muted));
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.nr-page .rule-danger:hover {
+  color: var(--color-polaris-danger);
+}
+
+.nr-page .rule-danger:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* On / Always ask status pill on the rule row. */
+.nr-page .nr-pill {
+  margin-left: auto;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+.nr-page .nr-pill.is-on {
+  color: var(--color-polaris-ok);
+  background: color-mix(in srgb, var(--color-polaris-ok) 16%, transparent);
+}
+
+.nr-page .nr-pill.is-off {
+  color: var(--color-notch-muted);
+  background: #ffffff12;
+}
+
+/* --- keyboard focus --- */
+.nr-page :is(button, input, select):focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--color-notch-accent) 70%, transparent);
+  outline-offset: 2px;
+}
+
+.nr-page :is(input, select):disabled {
+  opacity: 0.5;
+}
+
+/* The shimmer is the only motion these pages add; honour reduced motion. */
+@media (prefers-reduced-motion: reduce) {
+  .nr-skeleton {
+    animation: none;
+  }
+
+  .nr-page .rule-disclosure svg {
+    transition: none;
+  }
+}

@@ -78,6 +78,16 @@ pub fn install(app: &AppHandle) {
                     }
                 };
                 if fired {
+                    // Rehearsal: while the onboarding window is on screen the
+                    // first run must have no real side effects, so a rehearsal
+                    // double-Control tap must not open the notch's prompt
+                    // behind the onboarding window (see
+                    // `onboarding::is_rehearsing`). The detector keeps running
+                    // and consuming samples so the gesture machinery stays
+                    // warm; only the emitted consequence is suppressed.
+                    if crate::onboarding::is_rehearsing(&app) {
+                        continue;
+                    }
                     let prompt_open = app
                         .try_state::<ShellRuntime>()
                         .is_some_and(|runtime| runtime.active_state_is(PROMPT_STATE));

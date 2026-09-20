@@ -17,7 +17,7 @@ export {
   requestChallenge,
   validateChallenge,
 } from "./sep10.ts";
-export { ensureCustomer, getCustomer, KycRequiredError, type CustomerInfo, type CustomerStatus } from "./sep12.ts";
+export { ensureCustomer, ensureTransactionCustomer, getCustomer, KycRequiredError, type CustomerInfo, type CustomerStatus } from "./sep12.ts";
 export { getPrice, QuoteError, type PriceRequest } from "./sep38.ts";
 export {
   buildWithdrawPayment,
@@ -52,12 +52,26 @@ export { balanceOf, explorerAccountUrl, explorerTxUrl, hasTrustline, loadAccount
 export { simulateBankTransfer } from "./sandbox.ts";
 export {
   assertPlainAnchorDomain,
+  demoCustomerFields,
   describeAnchorScenario,
+  SDF_DEMO_CUSTOMER,
   SDF_TEST_ANCHOR_HOME_DOMAIN,
   TR_MOCK_HOME_DOMAIN,
   type AnchorScenario,
   type ScenarioId,
 } from "./scenarios.ts";
+export {
+  ANCHOR_PREFLIGHT_TIMEOUT_MS,
+  approvedAnchorCandidates,
+  NO_ANCHOR_MESSAGE,
+  NoHealthyAnchorError,
+  preflightAnchor,
+  selectAnchor,
+  type AnchorCandidate,
+  type AnchorHealth,
+  type AnchorPreflightDeps,
+  type AnchorSelection,
+} from "./selection.ts";
 export {
   classifyPayoutHealth,
   findTreasuryAddress,

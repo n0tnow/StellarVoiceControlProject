@@ -8,8 +8,8 @@ import {
   isNotchPage,
 } from "./notchPage.ts";
 
-test("the page list is exactly the four mock-data pages", () => {
-  assert.deepEqual(NOTCH_PAGES, ["history", "tasks", "rules", "wallet"]);
+test("the page list is the six notch pages", () => {
+  assert.deepEqual(NOTCH_PAGES, ["history", "tasks", "rules", "wallet", "trade", "settings"]);
 });
 
 test("the default page is a member of the page list", () => {
@@ -20,7 +20,7 @@ test("isNotchPage accepts every known page and rejects anything else", () => {
   for (const page of NOTCH_PAGES) {
     assert.equal(isNotchPage(page), true);
   }
-  assert.equal(isNotchPage("settings"), false);
+  assert.equal(isNotchPage("anchor"), false);
   assert.equal(isNotchPage(""), false);
   assert.equal(isNotchPage("History"), false); // case-sensitive: intents are normalized upstream
 });

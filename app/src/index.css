@@ -437,12 +437,21 @@
    the interactive state, so the nav and the page controls are clickable even
    though the window starts click-through. */
 .notch-panel {
+  /* The nav column's width, shared with `.notch-panel-inner`'s grid and with
+     `.approval-overlay`'s left edge so the two can never drift apart. */
+  --panel-nav-width: 128px;
   position: absolute;
   top: var(--cutout-height);
   left: 0;
   right: 0;
   bottom: 0;
   border-radius: 0 0 var(--shell-bottom-radius) var(--shell-bottom-radius);
+  /* Clip every child (the page body and the approval overlay) to the shell's
+     rounded bottom corners. Without this, an `absolute inset-0` overlay paints
+     a square rectangle over the corner cut-outs and the whole notch reads as a
+     hard-edged box for as long as the overlay is up (BUG: approval state lost
+     the notch's rounded corners). */
+  overflow: hidden;
   opacity: 0;
   transition: opacity var(--shell-motion) var(--shell-ease);
   pointer-events: none;
@@ -457,7 +466,7 @@
    radius carry the surface — no inner card, same rule as the prompt. */
 .notch-panel-inner {
   display: grid;
-  grid-template-columns: 128px 1fr;
+  grid-template-columns: var(--panel-nav-width) 1fr;
   height: 100%;
   color: var(--color-notch-text);
   font-size: 13px;
@@ -466,16 +475,21 @@
 .panel-nav {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
+  /* The six pages plus Close are the whole nav: it must never scroll, and it
+     must still fit under the reserved face header (`--face-size` + 28px). */
+  min-height: 0;
+  overflow: hidden;
   padding: 10px 8px 10px 14px;
   border-right: 1px solid #ffffff14;
 }
 
 .panel-nav-item {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: 8px;
-  padding: 7px 9px;
+  padding: 6px 9px;
   border: 0;
   border-radius: 9px;
   background: transparent;
@@ -508,10 +522,34 @@
 }
 
 .panel-body {
+  /* The panel's height is fixed by the shell (`--shell-height`), so a long page
+     scrolls here instead of clipping at the window edge. `min-height: 0` is what
+     lets this grid item shrink below its content and actually scroll. */
+  min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: 12px 16px 14px;
+}
+
+/* The approval surface (single and batch) takes over the page column only: the
+   nav — and its Close entry — stays visible, and the shell's own black carries
+   the surface, so a pending approval reads like any other notch page. It starts
+   where the nav column ends and shares `.panel-body`'s padding; the panel's
+   `overflow: hidden` clips it to the shell's rounded bottom corners. There is
+   deliberately no backdrop blur: the page behind is covered, not smeared. */
+.approval-overlay {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: var(--panel-nav-width);
+  z-index: 20;
+  display: flex;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 12px 16px 14px;
+  background: #000;
 }
 
 /* Shared page primitives. */
@@ -910,8 +948,24 @@
   align-items: center;
   gap: 8px;
   padding: 7px 10px;
+  border: 0;
   border-radius: 10px;
   background: #ffffff08;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+/* Selectable rows (the locked-wallet picker) reuse the nav's active surface
+   instead of a saturated accent outline, so a chosen account reads like a
+   chosen page rather than a warning. */
+button.wallet-key {
+  cursor: pointer;
+}
+
+button.wallet-key:hover,
+.wallet-key.is-selected {
+  background: #ffffff14;
 }
 
 .wallet-key-label {
@@ -1295,3 +1349,795 @@
     line-height: 18px;
   }
 }
+
+/* ================================================================== *
+ * Onboarding window
+ *
+ * First run. A 900x640 undecorated, transparent, centred window, so every
+ * pixel below — including the card, its radius and its close button — is
+ * drawn here; there is no title bar and no traffic lights to inherit.
+ *
+ * This section is additive and self-contained: it introduces no rule that
+ * matches an existing selector, and the only thing it borrows from the notch
+ * above is the motion language. That is deliberate. The notch shell moves on
+ * 470ms / cubic-bezier(0.32, 0.72, 0, 1), and the two surfaces are the same
+ * product — a user who has watched the notch expand should recognise the way
+ * this window turns a page. The values are restated rather than imported
+ * because `--shell-motion` is declared on `.notch`, which never exists in this
+ * document.
+ *
+ * Colour budget, held deliberately tight: black, `--color-notch-text`,
+ * `--color-notch-muted`, and `--color-notch-accent` reserved for exactly one
+ * meaning — "this is done". Everything else that glows on screen (the blue and
+ * orange on the keycaps, the lilac of the creature) is inside the media, not
+ * painted by this stylesheet.
+ * ================================================================== */
+
+.ob-root {
+  --ob-motion: 470ms;
+  --ob-ease: cubic-bezier(0.32, 0.72, 0, 1);
+  /* How far a page travels as it slides. Small on purpose: the window is a
+     fixed stage and the content is centred, so a large excursion reads as the
+     card sliding rather than the page turning inside it. */
+  --ob-slide: 52px;
+  --ob-line: #ffffff14;
+  --ob-line-strong: #ffffff26;
+
+  height: 100%;
+  display: flex;
+  color: var(--color-notch-text);
+}
+
+/* The card *is* the window. It fills the frame rather than floating inside a
+   margin: the native window already carries the shadow, and an inset would
+   show the desktop through the transparent gap as a black halo. */
+.ob-card {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  background: #000;
+  border-radius: 22px;
+  overflow: hidden;
+  /* A hairline *inside* the radius. A real border would have to be subtracted
+     from every child's padding; an inset shadow follows the corner for free and
+     costs no layout. */
+  box-shadow: inset 0 0 0 1px var(--ob-line);
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---- chrome ------------------------------------------------------ */
+
+/* The drag strip. It is the full width of the card and sits above the stage in
+   z-order but takes no space, so a page's content can run under it; nothing in
+   this window is placed high enough to be caught by it. */
+.ob-chrome {
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 52px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 16px;
+  /* The strip is only a drag handle; its two buttons re-enable themselves. */
+  pointer-events: auto;
+}
+
+/* Pushes the close button to the right whether or not Back is rendered, so
+   neither control moves as the flow progresses. */
+.ob-chrome-spacer {
+  flex: 1;
+}
+
+/* Back is a word, not an arrow: an arrow in an undecorated window's top-left
+   corner reads as a browser control, and this is not a browser. It is as quiet
+   as the close button and appears on the same terms. */
+.ob-back {
+  border: 0;
+  background: transparent;
+  padding: 5px 9px;
+  border-radius: 999px;
+  color: var(--color-notch-muted);
+  font-family: inherit;
+  font-size: 12.5px;
+  cursor: default;
+  opacity: 0;
+  transition:
+    opacity var(--ob-motion) var(--ob-ease),
+    background-color 160ms linear,
+    color 160ms linear;
+}
+
+.ob-card:hover .ob-back,
+.ob-back:focus-visible {
+  opacity: 1;
+}
+
+.ob-back:hover {
+  background: #ffffff0f;
+  color: var(--color-notch-text);
+}
+
+.ob-close {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--color-notch-muted);
+  /* Quiet: invisible until the pointer is in the window, and never a target
+     the eye lands on before the page's own content. */
+  opacity: 0;
+  cursor: default;
+  transition:
+    opacity var(--ob-motion) var(--ob-ease),
+    background-color 160ms linear,
+    color 160ms linear;
+}
+
+.ob-card:hover .ob-close,
+.ob-close:focus-visible {
+  opacity: 1;
+}
+
+.ob-close:hover {
+  background: #ffffff0f;
+  color: var(--color-notch-text);
+}
+
+.ob-close svg {
+  width: 13px;
+  height: 13px;
+}
+
+/* ---- the stage --------------------------------------------------- */
+
+/* A fixed stage: the window never resizes between pages, so this box never
+   changes size and only its contents move. `overflow: hidden` is what lets a
+   leaving page travel out of frame instead of growing the card. */
+.ob-stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Every page is absolutely positioned and fills the stage, so the outgoing and
+   incoming pages occupy the same rectangle during a turn rather than briefly
+   stacking and jolting the layout. */
+.ob-page {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 26px;
+  padding: 72px 96px 56px;
+  text-align: center;
+}
+
+/* A leaving page is on its way out and must not be clickable or tabbable on the
+   way; `inert` on the element would be the modern spelling, but this also
+   covers the frame before React applies it. */
+.ob-page.is-leaving {
+  pointer-events: none;
+}
+
+.ob-page.is-entering-forward {
+  animation: ob-enter-forward var(--ob-motion) var(--ob-ease) both;
+}
+
+.ob-page.is-leaving-forward {
+  animation: ob-leave-forward var(--ob-motion) var(--ob-ease) both;
+}
+
+.ob-page.is-entering-back {
+  animation: ob-enter-back var(--ob-motion) var(--ob-ease) both;
+}
+
+.ob-page.is-leaving-back {
+  animation: ob-leave-back var(--ob-motion) var(--ob-ease) both;
+}
+
+/* Forward slides left, back slides right — the reading direction, so the motion
+   itself says which way through the flow the user just went. */
+@keyframes ob-enter-forward {
+  from {
+    opacity: 0;
+    transform: translate3d(var(--ob-slide), 0, 0);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes ob-leave-forward {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: translate3d(calc(-1 * var(--ob-slide)), 0, 0);
+  }
+}
+
+@keyframes ob-enter-back {
+  from {
+    opacity: 0;
+    transform: translate3d(calc(-1 * var(--ob-slide)), 0, 0);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes ob-leave-back {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: translate3d(var(--ob-slide), 0, 0);
+  }
+}
+
+/* ---- type -------------------------------------------------------- */
+
+/* Small and confident. 27px is a headline on a 900px card only because
+   everything around it is quieter; the negative space does the emphasis that a
+   larger size would have to buy. */
+.ob-title {
+  margin: 0;
+  font-size: 27px;
+  font-weight: 500;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+}
+
+.ob-body {
+  margin: 0;
+  max-width: 44ch;
+  font-size: 14px;
+  line-height: 1.65;
+  color: var(--color-notch-muted);
+}
+
+/* The one place a key name appears inside a sentence. Not a full keycap
+   drawing: the page already has a photoreal one, and a second, smaller,
+   worse-looking keycap next to it would only compete with it. */
+.ob-key {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: #ffffff12;
+  color: var(--color-notch-text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.01em;
+}
+
+/* ---- media ------------------------------------------------------- */
+
+/* The clips were shot on pure #000, so they need no mask and no plate — the
+   frame simply is the card. Anything drawn behind them here would show as a
+   rectangle the moment the video's own black met it. */
+.ob-media {
+  display: block;
+  object-fit: contain;
+  /* The decode can paint one grey frame before the first video frame lands. */
+  background: #000;
+}
+
+/* The creature peaks at about 42% of the clip's height, so this is the size
+   that lands it at a comfortable ~105px — large enough to be a portrait rather
+   than an icon, small enough that the headline underneath is still the thing
+   the eye settles on. */
+.ob-media-hero {
+  width: 448px;
+  height: 252px;
+}
+
+.ob-media-keys {
+  width: 188px;
+  height: 235px;
+}
+
+.ob-media-key {
+  width: 196px;
+  height: 196px;
+}
+
+/* ---- the face ---------------------------------------------------- */
+
+/* The face box is sized for `FACE_PLACEMENTS.panel` (80px) with a little
+   shoulder, so the creature has room to bob without its idle layer clipping.
+   `BlobatarFace` is the notch's component, used unchanged — the shortcut lesson
+   shows the same creature reacting to the same gesture, and a second
+   implementation would be a second creature.
+   Its own `.notch-face` rules are written for the shell: absolutely positioned
+   from `--face-left`/`--face-top`, and `opacity: 0` until a non-collapsed
+   `.notch` ancestor turns it on. Neither ancestor exists here, so this wrapper
+   restates both — additively, without touching those rules, which another
+   worker may be editing. */
+.ob-face {
+  display: grid;
+  place-items: center;
+  width: 96px;
+  height: 96px;
+}
+
+.ob-face .notch-face {
+  position: relative;
+  left: auto;
+  top: auto;
+  opacity: 1;
+}
+
+/* ---- controls ---------------------------------------------------- */
+
+.ob-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  margin-top: 4px;
+}
+
+.ob-button {
+  border: 0;
+  border-radius: 999px;
+  padding: 10px 24px;
+  font-family: inherit;
+  font-size: 13.5px;
+  font-weight: 500;
+  letter-spacing: -0.005em;
+  cursor: default;
+  transition:
+    opacity 160ms linear,
+    background-color 160ms linear,
+    color 160ms linear;
+}
+
+/* The primary control is the brightest thing on a black card, which is the
+   whole of its emphasis. No fill colour, no gradient: there is exactly one of
+   these per page and it does not need to compete with anything. */
+.ob-button-primary {
+  background: var(--color-notch-text);
+  color: #000;
+}
+
+.ob-button-primary:hover:not(:disabled) {
+  background: #ffffff;
+}
+
+.ob-button-primary:disabled {
+  background: #ffffff1f;
+  color: #ffffff4d;
+}
+
+/* Row-level, next to a permission. Quiet but still a real button. */
+.ob-button-quiet {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--ob-line-strong);
+  color: var(--color-notch-text);
+  padding: 7px 15px;
+  font-size: 12.5px;
+}
+
+.ob-button-quiet:hover:not(:disabled) {
+  background: #ffffff0a;
+}
+
+.ob-button-quiet:disabled {
+  color: var(--color-notch-muted);
+  opacity: 0.5;
+}
+
+/* The escape hatch on a gated page. Deliberately unattractive — small, muted,
+   underlined on hover only — because it must be findable by a user who is stuck
+   and invisible to one who is not. It is never styled as a button: a second
+   button next to the primary one reads as a choice between two equal options,
+   and this is not one. */
+.ob-skip {
+  border: 0;
+  background: transparent;
+  padding: 4px;
+  color: #ffffff59;
+  font-family: inherit;
+  font-size: 12px;
+  cursor: default;
+  transition: color 160ms linear;
+}
+
+.ob-skip:hover {
+  color: var(--color-notch-muted);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+/* ---- focus ------------------------------------------------------- */
+
+/* One visible ring for every interactive element in the window. `:focus-visible`
+   rather than `:focus`, so a mouse user never sees it and a keyboard user
+   always does — on a surface this dark, a focus ring that only sometimes
+   appears is worse than none. */
+.ob-card :focus-visible {
+  outline: 2px solid var(--color-notch-accent);
+  outline-offset: 3px;
+  border-radius: 999px;
+}
+
+/* ---- the step row ------------------------------------------------ */
+
+/* Dots, never a percentage. A six-page flow does not need a number, and a
+   number would make the flow feel like a form to get through; the row is a
+   position marker, which is why it sits at the very bottom, outside the page's
+   own composition. */
+.ob-steps {
+  position: absolute;
+  inset: auto 0 22px 0;
+  z-index: 2;
+  display: flex;
+  justify-content: center;
+  gap: 7px;
+  pointer-events: none;
+}
+
+.ob-step-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--ob-line-strong);
+  transition:
+    width var(--ob-motion) var(--ob-ease),
+    background-color var(--ob-motion) var(--ob-ease);
+}
+
+/* The current dot stretches into a short bar rather than changing colour, so
+   position is read from shape and the row stays one colour. */
+.ob-step-dot.is-current {
+  width: 17px;
+  background: var(--color-notch-text);
+}
+
+.ob-step-dot.is-done {
+  background: #ffffff4d;
+}
+
+/* ---- permissions ------------------------------------------------- */
+
+.ob-rows {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 520px;
+  margin-top: 4px;
+}
+
+/* Hairline rules rather than cards. Two boxed panels on a black window read as
+   an inspector; two ruled rows read as a list of two facts, which is what this
+   is. */
+.ob-row {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 18px 2px;
+  text-align: left;
+  border-top: 1px solid var(--ob-line);
+}
+
+.ob-row:last-child {
+  border-bottom: 1px solid var(--ob-line);
+}
+
+.ob-row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.ob-row-name {
+  font-size: 13.5px;
+  font-weight: 500;
+}
+
+.ob-row-why {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--color-notch-muted);
+}
+
+.ob-row-action {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  min-width: 108px;
+  justify-content: flex-end;
+}
+
+/* The accent's one job in this window: "this is done". A granted row loses its
+   button entirely — there is nothing left to do to it, and leaving a disabled
+   control behind would say otherwise. */
+.ob-granted {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  color: var(--color-notch-accent);
+}
+
+.ob-granted svg {
+  width: 13px;
+  height: 13px;
+}
+
+.ob-row-denied {
+  font-size: 12px;
+  color: var(--color-notch-muted);
+}
+
+/* The one-line acknowledgement under the rows: the read says both permissions
+   were granted before this window opened, and the page says so instead of
+   letting two green rows sit above a button the user does not trust. */
+.ob-granted-note {
+  margin: 12px 0 0;
+  font-size: 12px;
+  color: var(--color-notch-muted);
+}
+
+/* ---- lesson status ----------------------------------------------- */
+
+/* A fixed-height slot under the lesson copy. The line inside it changes — prompt,
+   "hold it a little longer", passed — and reserving the height means none of
+   those changes nudges the video above it. */
+.ob-lesson-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 20px;
+  font-size: 12.5px;
+  color: var(--color-notch-muted);
+  transition: color var(--ob-motion) var(--ob-ease);
+}
+
+.ob-lesson-status.is-passed {
+  color: var(--color-notch-accent);
+}
+
+.ob-lesson-status svg {
+  width: 13px;
+  height: 13px;
+}
+
+/* The held indicator: a single dot that swells while the keys are down. It is
+   the smallest honest read-out of "the app can see your hands", and it is on
+   the same curve as everything else. */
+.ob-held-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--ob-line-strong);
+  transition:
+    transform var(--ob-motion) var(--ob-ease),
+    background-color var(--ob-motion) var(--ob-ease);
+}
+
+.ob-held-dot.is-held {
+  transform: scale(1.6);
+  background: var(--color-notch-accent);
+}
+
+/* ---- the notch illustration -------------------------------------- */
+
+/* A recreation, not a screenshot: a scaled display with the camera housing at
+   the top, expanding and collapsing on a loop. See `NotchPage` for why this
+   page illustrates rather than tests.
+   Every duration below is the shell's own, so this animation and the real notch
+   are the same gesture at different sizes. */
+.ob-display {
+  position: relative;
+  width: 300px;
+  height: 188px;
+  border-radius: 14px;
+  /* The lid: a hairline outline and nothing else. A filled screen would need a
+     wallpaper, and anything we invented there would be a second thing to look
+     at. */
+  box-shadow: inset 0 0 0 1px var(--ob-line-strong);
+}
+
+.ob-display-notch {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  translate: -50% 0;
+  background: #000;
+  /* Three sides, not an inset ring. The notch's top edge *is* the lid's top
+     edge, so a hairline there would sit on top of `.ob-display`'s own and read
+     as one doubled, thicker line — which is exactly the seam a real notch does
+     not have. Square at the top for the same reason, rounded below. */
+  box-sizing: border-box;
+  border: 1px solid var(--ob-line-strong);
+  border-top: 0;
+  border-radius: 0 0 9px 9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  animation: ob-notch-cycle 4400ms var(--ob-ease) infinite;
+}
+
+.ob-display-bar {
+  height: 2px;
+  border-radius: 999px;
+  background: var(--color-notch-muted);
+  opacity: 0;
+  animation: ob-notch-content 4400ms var(--ob-ease) infinite;
+}
+
+.ob-display-bar:nth-child(1) {
+  width: 26px;
+}
+
+.ob-display-bar:nth-child(2) {
+  width: 14px;
+  background: var(--color-notch-accent);
+}
+
+/* The cycle holds at each end rather than ping-ponging continuously: the notch
+   is a thing that opens, stays open while you read it, and closes. The 470ms
+   segments are the shell's real transition; the holds are the two ends. */
+@keyframes ob-notch-cycle {
+  0%,
+  22% {
+    width: 92px;
+    height: 20px;
+  }
+  32.7%,
+  72% {
+    width: 186px;
+    height: 32px;
+  }
+  82.7%,
+  100% {
+    width: 92px;
+    height: 20px;
+  }
+}
+
+/* One beat late, exactly as the shell's own content and face are. */
+@keyframes ob-notch-content {
+  0%,
+  24% {
+    opacity: 0;
+  }
+  36%,
+  70% {
+    opacity: 1;
+  }
+  80%,
+  100% {
+    opacity: 0;
+  }
+}
+
+/* ---- the live region --------------------------------------------- */
+
+/* Announcements only; `.sr-only` above does the hiding. Declared here so the
+   page has a named element to write into rather than reaching for a utility. */
+.ob-announce {
+  position: absolute;
+}
+
+/* ---- reduced motion ---------------------------------------------- */
+
+/* The rule the brief asks for: keep every state change, drop every translation.
+   The page still cross-fades, so a turn is still legible as a turn; nothing
+   travels, the looping illustration stops at its open state (which is the frame
+   that actually teaches the lesson), and the videos are swapped for their PNG
+   stills in the component rather than here — a paused <video> still decodes. */
+@media (prefers-reduced-motion: reduce) {
+  .ob-page.is-entering-forward,
+  .ob-page.is-entering-back {
+    animation: ob-fade-in var(--ob-motion) linear both;
+  }
+
+  .ob-page.is-leaving-forward,
+  .ob-page.is-leaving-back {
+    animation: ob-fade-out var(--ob-motion) linear both;
+  }
+
+  @keyframes ob-fade-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+
+  @keyframes ob-fade-out {
+    from {
+      opacity: 1;
+    }
+    to {
+      opacity: 0;
+    }
+  }
+
+  .ob-step-dot,
+  .ob-held-dot,
+  .ob-close,
+  .ob-back,
+  .ob-lesson-status {
+    transition: none;
+  }
+
+  .ob-display-notch,
+  .ob-display-bar {
+    animation: none;
+  }
+
+  /* Frozen open: the still frame that carries the lesson. */
+  .ob-display-notch {
+    width: 186px;
+    height: 32px;
+  }
+
+  .ob-display-bar {
+    opacity: 1;
+  }
+}
+
+/* ---- the lesson layout ------------------------------------------- */
+
+/* The two shortcut pages put the keycap clip beside the copy rather than above
+   it. Stacked, the clip (portrait, 640x800) plus a face plus a heading plus a
+   result line is taller than the 640px window, and everything has to shrink to
+   fit — which is how a plain page becomes a cramped one. Side by side the clip
+   keeps its full height and the copy keeps its air, and the page still holds
+   exactly one idea. */
+.ob-lesson {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 64px;
+  width: 100%;
+}
+
+.ob-lesson-copy {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 18px;
+  max-width: 320px;
+  /* Left-aligned here and centred everywhere else, because this column is a
+     ragged block of running text next to an image rather than a centred
+     statement — centring it would leave the instruction's ragged left edge
+     floating against the clip's hard one. */
+  text-align: left;
+}
+
+.ob-lesson-copy .ob-body {
+  max-width: none;
+}
+
+.ob-lesson-copy .ob-actions {
+  align-items: flex-start;
+  margin-top: 6px;
+}
+
+.ob-lesson-copy .ob-lesson-status {
+  justify-content: flex-start;
+}
+

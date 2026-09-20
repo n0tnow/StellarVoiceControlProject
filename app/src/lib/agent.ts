@@ -16,6 +16,7 @@ import {
   buildSystemPrompt,
   createDefaultRegistry,
   createEventBus,
+  DialogMemory,
   OpenAiCompatibleLlm,
   runTurn,
   toAgentError,
@@ -25,6 +26,7 @@ import {
   type BalanceReader,
 } from "@polaris/agent";
 import type { AgentStage, Intent, NavigationRequest } from "@polaris/interfaces";
+import { createAgentContactStore } from "@/lib/contacts";
 import { markTurnPhase } from "@/lib/polaris";
 import { getStellarConfig } from "@/lib/stellarConfig";
 import committedAliases from "../../../stellar/config/aliases.json";
@@ -115,6 +117,23 @@ export type AgentRun =
 
 const registry = createDefaultRegistry();
 const bus = createEventBus();
+/**
+ * Conversation memory (voice-dialog), kept per shell instance: the last few
+ * exchanges plus one pending clarification, so a follow-up ("to whom?" -> "acc2")
+ * completes the earlier request. In memory only, never persisted, no secrets.
+ */
+const dialog = new DialogMemory();
+/**
+ * The address book handed to `save_contact`/`list_contacts`/`delete_contact`
+ * (W15f). It reuses the Wallet page's store client and StrKey checksum, so a
+ * contact saved by voice or typed prompt is identical to one saved in the UI.
+ */
+const contactStore = createAgentContactStore();
+
+/** Drops the conversation memory (e.g. when the shell session resets). */
+export function resetAgentDialog(): void {
+  dialog.reset();
+}
 // The same `AgentLlm` port, two wire formats. The Rust `agent_chat` transport
 // is told which provider it is carrying (`AGENT_PROVIDER`) so it can add the
 // matching headers — `Authorization` + `x-opencode-session`, or `x-api-key` +
@@ -258,6 +277,12 @@ export async function runAgentTurn(
     : undefined;
   const started = performance.now();
   try {
+    // W10b: refresh the account/alias table from `stellar_config` at the start of
+    // every turn. The Rust command now merges the saved recipients, so a "rumuz"
+    // added in the Wallet page resolves on the very next utterance without a
+    // restart. The system prompt names the aliases, so it is rebuilt too.
+    accountsPromise = undefined;
+    systemPromptPromise = undefined;
     // F2: the prompt names the owner and the real aliases, and account phrases
     // ("wallet 2", "ek 2") are normalised before the model sees the transcript.
     const accounts = await loadPromptAccounts();
@@ -275,8 +300,10 @@ export async function runAgentTurn(
       llm: new AccountRefLlm(llm, accounts.aliases),
       bus,
       system,
+      dialog,
       toolContext: {
         aliases: { ...accounts.aliases },
+        contacts: contactStore,
         ...(readBalances ? { readBalances } : {}),
       },
       ...(transcriptLanguage ? { transcriptLanguage } : {}),

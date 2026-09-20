@@ -16,7 +16,16 @@
 export type ShellStateName = string;
 
 /** Where a proposal came from. */
-export type ShellSource = "voice" | "hover" | "hotkey";
+export type ShellSource = "voice" | "hover" | "hotkey" | "pin";
+
+/**
+ * The proposals each source makes. `pin` is optional and defaults to
+ * `"collapsed"` when absent, so a caller that has no pinned gate passes the same
+ * three-key object it always did.
+ */
+export type ShellProposals = Record<Exclude<ShellSource, "pin">, ShellStateName> & {
+  pin?: ShellStateName;
+};
 
 /** Continuous hover before the panel opens. */
 export const HOVER_ENTER_DWELL_MS = 250;
@@ -57,22 +66,30 @@ export interface ShellResolutionOptions {
  *    single surface. Dismissal is explicit: Escape, outside-click/blur, or the
  *    trigger again.
  * 2. an **attention** voice state — something the user must see right now;
- * 3. `hover` — the pointer rests on the shell;
- * 4. `voice` — the ambient ready/error dwell, which only keeps the label up.
+ * 3. `pin` — a gate the UI has locked open (the W13b wallet login/unlock gate
+ *    proposes `panel`). A pinned gate outranks the ambient ready/error dwell so
+ *    the wallet screen is usable, but a genuine attention voice state
+ *    (recording/transcribing/thinking/speaking, a pending approval/signing) still
+ *    takes the surface and the pin returns when it settles. Without this rank a
+ *    ready/error dwell would keep the shell in the small strip the wallet screen
+ *    was being rendered into — the notch-clip bug.
+ * 4. `hover` — the pointer rests on the shell;
+ * 5. `voice` — the ambient ready/error dwell, which only keeps the label up.
  *
  * A source with nothing to say proposes `"collapsed"`. Because a quiet hotkey
  * source proposes `"collapsed"`, this reordering only changes behaviour while a
  * mode is actually latched.
  */
 export function resolveShellState(
-  proposals: Record<ShellSource, ShellStateName>,
+  proposals: ShellProposals,
   options: ShellResolutionOptions = {},
 ): ShellStateName {
-  const { voice, hover, hotkey } = proposals;
+  const { voice, hover, hotkey, pin = "collapsed" } = proposals;
   if (hotkey !== "collapsed") return hotkey;
   if ((options.voiceAttention ?? true) && voice !== "collapsed") {
     return voice;
   }
+  if (pin !== "collapsed") return pin;
   if (hover !== "collapsed") return hover;
   if (voice !== "collapsed") return voice;
   return "collapsed";

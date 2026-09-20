@@ -137,7 +137,12 @@ flowchart TD
 4. User authenticates with **Touch ID**; the Rust core releases the key and signs.
 5. Result is submitted; hash + explorer link shown.
 
-Touch ID in Tauri: the *official* biometric plugin targets mobile only; the community plugin **`tauri-plugin-biometry`** covers macOS Touch ID with secure data storage (*verified* via its repo/crates listing; must be proven in the spike). The Ed25519 secret lives in the Keychain, never in the webview or the repo. Secure Enclave cannot hold Ed25519 (P-256 only), so the key is a Keychain item gated by biometrics.
+**As built (2026-09-20):** the signer is an **embedded wallet inside the app** — a
+BIP-39/SEP-5 seed in the macOS login Keychain, signed locally in Rust behind an
+`LAContext` (device-owner) Touch ID check, with a Rust-enforced
+`none`/`locked`/`unlocked` session and idle auto-lock. There is no browser and no
+extension: the Freighter bridge was built, reviewed and then removed. Design
+record, command contract and the autonomy gate: [`docs/wallet-track.md`](wallet-track.md).
 
 ### 4.6 Developer mode (build a project from inside the app) 🟡
 Polaris is not only a payments assistant. The user must be able to **develop a project by voice/chat inside it**, e.g. *"create a Soroban contract called hello, run its tests, deploy it to testnet and show me the contract ID."*
@@ -195,6 +200,10 @@ Build/deploy uses the toolchain in §11; the WASM path is `target/wasm32v1-none/
 
 ### 5.4 Why not a passkey smart wallet as the main account
 Passkey smart wallets are `C…` contract accounts. SEP-10 (what the mock anchor offers) supports only `G`/`M`; contract accounts authenticate via **SEP-45**, which is **Draft** (v0.1.1) and not offered by this anchor (*verified:* SEP-45 text in `stellar/stellar-protocol`; anchor's `stellar.toml`). So the anchor identity must be a `G` account. A passkey wallet stays a **bonus** for extra Soroban-auth credit.
+
+**As built (2026-09-20):** this is why the shipped wallet is an embedded **Ed25519
+`G…`** account rather than a smart wallet; the anchor scenario (SDF test anchor)
+signs SEP-10 challenges with it wallet-only. See [`docs/wallet-track.md`](wallet-track.md) §1/§5.
 
 ### 5.5 Agentic payments with MPP (instead of x402) 🟡
 We use **MPP (Machine Payments Protocol)**, not x402. Both give the HTTP `402 Payment Required` status a machine-readable meaning. Practical difference (per `skills/agentic-payments/SKILL.md`): x402 needs a **facilitator** (hosted or self-hosted) that also sponsors fees; MPP settles with native Soroban **SAC token transfers** and needs **no third-party facilitator**. *Verified:* `https://developers.stellar.org/docs/build/agentic-payments/mpp` and the skill file.

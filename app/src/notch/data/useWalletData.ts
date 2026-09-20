@@ -17,7 +17,6 @@ import {
   DEFAULT_EXPLORER_BASE,
   buildAliasEntries,
   explorerAccountUrl,
-  fetchOwnerAccount,
   fetchOwnerPayments,
   friendbotUrl,
   mapWalletTransactions,
@@ -26,9 +25,14 @@ import {
   type CommittedAliases,
   type PaymentsFetchResult,
 } from "../../lib/history.ts";
+import {
+  fetchAccountDetail,
+  type HorizonAccountDetail,
+  type HorizonAccountResult,
+} from "../../lib/walletAssets.ts";
 import { listenPolarisEvents } from "../../lib/polaris.ts";
 import { getStellarConfig } from "../../lib/stellarConfig.ts";
-import { shortAddress } from "../../panels/wallet/walletModel.ts";
+import { shortAddress } from "../../lib/address.ts";
 
 /** The page's state machine; mirrors the Wallet panel's four read states. */
 export type WalletPageStatus = "loading" | "unconfigured" | "offline" | "unfunded" | "ready";
@@ -71,12 +75,19 @@ export interface WalletPageView {
   /** One short sentence for the non-ready states (empty when ready). */
   message: string;
   network: string;
+  /** The full network passphrase, for the Testnet badge tooltip. */
+  networkPassphrase: string;
   ownerAddress: string | null;
   explorerUrl: string | null;
   friendbotUrl: string | null;
   assets: WalletPageAsset[];
   aliases: WalletPageAlias[];
+  /** The most recent rows for the compact legacy view (5). */
   transactions: WalletPageTransaction[];
+  /** The most recent rows for the dashboard (10). */
+  activity: WalletPageTransaction[];
+  /** The full account read (trustlines, sequence, subentries), when loaded. */
+  accountDetail: HorizonAccountDetail | null;
   latestTransaction: WalletPageLatestTx | null;
 }
 
@@ -84,9 +95,12 @@ export interface WalletPageInput {
   /** `false` until `stellar_config` resolves, so no "unconfigured" flash. */
   configLoaded: boolean;
   network: string;
+  networkPassphrase?: string;
   ownerAddress: string | null;
   /** `null` while the first read is still in flight. */
   account: AccountFetchResult | null;
+  /** The richer account read; `null` when it has not resolved yet. */
+  accountDetail?: HorizonAccountDetail | null;
   payments: PaymentsFetchResult | null;
   aliasEntries?: readonly AliasEntryView[];
   latestTransaction?: WalletPageLatestTx | null;
@@ -95,6 +109,9 @@ export interface WalletPageInput {
 
 /** How many recent payments the notch height can show. */
 export const WALLET_PAGE_TX_LIMIT = 5;
+
+/** How many recent operations the dashboard lists. */
+export const WALLET_ACTIVITY_LIMIT = 10;
 
 /**
  * Folds the loaded config and Horizon reads into the page's state. A missing
@@ -110,6 +127,7 @@ export function deriveWalletPageView(input: WalletPageInput): WalletPageView {
     "status" | "message" | "assets" | "transactions"
   > = {
     network: input.network,
+    networkPassphrase: input.networkPassphrase ?? "",
     ownerAddress,
     explorerUrl: ownerAddress ? explorerAccountUrl(explorerBase, ownerAddress) : null,
     friendbotUrl: null,
@@ -118,6 +136,8 @@ export function deriveWalletPageView(input: WalletPageInput): WalletPageView {
       address: entry.address,
       source: entry.source,
     })),
+    activity: [],
+    accountDetail: input.accountDetail ?? null,
     latestTransaction: input.latestTransaction ?? null,
   };
 
@@ -173,7 +193,19 @@ export function deriveWalletPageView(input: WalletPageInput): WalletPageView {
     ownerAddress,
     aliasEntries: input.aliasEntries ?? [],
     explorerBase,
-  }).slice(0, WALLET_PAGE_TX_LIMIT);
+  }).slice(0, WALLET_ACTIVITY_LIMIT);
+  const toRow = (row: (typeof rows)[number]): WalletPageTransaction => ({
+    id: row.id,
+    timestamp: Math.floor(row.createdAtMs / 1000),
+    summary:
+      `${row.direction === "sent" ? "Sent to" : "Received from"} ` +
+      (row.counterpartyAlias ?? shortAddress(row.counterparty)),
+    amount: `${row.direction === "sent" ? "-" : "+"}${row.amount} ${row.asset}`,
+    direction: row.direction === "sent" ? "out" : "in",
+    status: "success",
+    txHash: row.hash,
+    explorerUrl: row.explorerUrl,
+  });
 
   return {
     ...base,
@@ -187,18 +219,8 @@ export function deriveWalletPageView(input: WalletPageInput): WalletPageView {
       balance: balance.balance,
       note: balance.native ? "native" : "credit",
     })),
-    transactions: rows.map((row) => ({
-      id: row.id,
-      timestamp: Math.floor(row.createdAtMs / 1000),
-      summary:
-        `${row.direction === "sent" ? "Sent to" : "Received from"} ` +
-        (row.counterpartyAlias ?? shortAddress(row.counterparty)),
-      amount: `${row.direction === "sent" ? "-" : "+"}${row.amount} ${row.asset}`,
-      direction: row.direction === "sent" ? "out" : "in",
-      status: "success",
-      txHash: row.hash,
-      explorerUrl: row.explorerUrl,
-    })),
+    transactions: rows.slice(0, WALLET_PAGE_TX_LIMIT).map(toRow),
+    activity: rows.map(toRow),
   };
 }
 
@@ -208,19 +230,43 @@ export interface WalletData extends WalletPageView {
   refresh: () => void;
 }
 
+/** Narrows the richer account read to the balances the legacy view needs. */
+function toAccountResult(result: HorizonAccountResult): AccountFetchResult {
+  if (result.status === "ok") {
+    return {
+      status: "ok",
+      balances: result.detail.balances.map((balance) => ({
+        asset: balance.code,
+        balance: balance.balance,
+        native: balance.native,
+      })),
+    };
+  }
+  if (result.status === "not_found") return { status: "not_found" };
+  return { status: "offline", message: result.message };
+}
+
 /**
  * Loads and caches the wallet read for the session. Mount is the first load;
  * the page's Refresh button is the only other trigger (no polling). The
  * `tx_submitted` subscription is independent of Horizon: a submission from this
  * session stays visible even when the next read is still in flight.
  */
-export function useWalletData(committedAliases?: CommittedAliases): WalletData {
+export function useWalletData(
+  committedAliases?: CommittedAliases,
+  ownerAddressOverride?: string | null,
+): WalletData {
   const [config, setConfig] = useState<StellarConfig | null>(null);
   const [configLoaded, setConfigLoaded] = useState(false);
-  const [account, setAccount] = useState<AccountFetchResult | null>(null);
+  const [accountResult, setAccountResult] = useState<HorizonAccountResult | null>(null);
   const [payments, setPayments] = useState<PaymentsFetchResult | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [latestTransaction, setLatestTransaction] = useState<WalletPageLatestTx | null>(null);
+
+  // W10b: the active wallet address (from the wallet engine) wins over the env
+  // owner, so the page shows the wallet the user actually selected. When no
+  // override is supplied the NW1 behaviour (env `POLARIS_OWNER_ADDRESS`) is kept.
+  const effectiveOwner = ownerAddressOverride ?? config?.ownerAddress ?? null;
 
   useEffect(() => {
     let cancelled = false;
@@ -237,21 +283,21 @@ export function useWalletData(committedAliases?: CommittedAliases): WalletData {
   }, []);
 
   const refresh = useCallback(async () => {
-    if (!config?.ownerAddress) return;
+    if (!config || !effectiveOwner) return;
     setRefreshing(true);
     try {
       const [nextAccount, nextPayments] = await Promise.all([
-        fetchOwnerAccount(config.horizonUrl, config.ownerAddress),
-        fetchOwnerPayments(config.horizonUrl, config.ownerAddress, {
-          limit: WALLET_PAGE_TX_LIMIT,
+        fetchAccountDetail(config.horizonUrl, effectiveOwner),
+        fetchOwnerPayments(config.horizonUrl, effectiveOwner, {
+          limit: WALLET_ACTIVITY_LIMIT,
         }),
       ]);
-      setAccount(nextAccount);
+      setAccountResult(nextAccount);
       setPayments(nextPayments);
     } finally {
       setRefreshing(false);
     }
-  }, [config]);
+  }, [config, effectiveOwner]);
 
   useEffect(() => {
     if (config) void refresh();
@@ -288,13 +334,15 @@ export function useWalletData(committedAliases?: CommittedAliases): WalletData {
       deriveWalletPageView({
         configLoaded,
         network: config?.network ?? "testnet",
-        ownerAddress: config?.ownerAddress ?? null,
-        account,
+        networkPassphrase: config?.networkPassphrase,
+        ownerAddress: effectiveOwner,
+        account: accountResult === null ? null : toAccountResult(accountResult),
+        accountDetail: accountResult?.status === "ok" ? accountResult.detail : null,
         payments,
         aliasEntries,
         latestTransaction,
       }),
-    [account, aliasEntries, config, configLoaded, latestTransaction, payments],
+    [accountResult, aliasEntries, config, configLoaded, effectiveOwner, latestTransaction, payments],
   );
 
   const doRefresh = useCallback(() => {

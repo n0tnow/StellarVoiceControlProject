@@ -23,6 +23,10 @@
  * deterministic and unit-testable (`turnFlow.test.ts`).
  */
 
+import type { Intent } from "@polaris/interfaces";
+
+import type { WalletSessionState } from "./walletSession.ts";
+
 /** A turn that was admitted to run: its generation plus the trimmed transcript. */
 export interface TurnTicket {
   /** Monotonic; a newer admitted turn always has a strictly larger generation. */
@@ -86,4 +90,76 @@ export class TurnFlow {
       this.#inFlight = null;
     }
   }
+}
+
+/* ------------------------------------------------------------------ *
+ * W10b onboarding gate
+ * ------------------------------------------------------------------ */
+
+/**
+ * The intent kinds that actually move value (or lock it in escrow). A missing
+ * wallet must refuse these before any chain call; `guard_policy` only changes a
+ * rule and is deliberately excluded.
+ */
+const VALUE_MOVING_KINDS: ReadonlySet<Intent["kind"]> = new Set([
+  "send",
+  "deposit",
+  "withdraw",
+  "swap",
+  "raw_tx",
+  "schedule_payment",
+  "cancel_schedule",
+  "p2p_offer",
+  "p2p_accept",
+  "p2p_confirm",
+  "p2p_cancel",
+  "p2p_reclaim",
+]);
+
+export function isValueMovingIntent(intent: Intent): boolean {
+  return VALUE_MOVING_KINDS.has(intent.kind);
+}
+
+/** The one short sentence spoken when a value-moving intent has no wallet. */
+export const CONNECT_WALLET_SENTENCE = "Connect your wallet first.";
+
+export interface WalletGateDecision {
+  /** When true, the caller must speak `sentence`, open `page`, and stop. */
+  block: boolean;
+  sentence: string;
+  /** The notch page to open; `null` when the intent is allowed through. */
+  page: "wallet" | null;
+}
+
+/**
+ * Refuses a value-moving intent when no wallet is active. Pure, so the
+ * no-chain-call rule is pinned by a test instead of by App's control flow.
+ */
+export function decideWalletGate(intent: Intent, hasActiveWallet: boolean): WalletGateDecision {
+  if (hasActiveWallet || !isValueMovingIntent(intent)) {
+    return { block: false, sentence: "", page: null };
+  }
+  return { block: true, sentence: CONNECT_WALLET_SENTENCE, page: "wallet" };
+}
+
+/** The one short sentence spoken when a value-moving intent meets a locked wallet. */
+export const UNLOCK_WALLET_SENTENCE = "Please unlock your wallet first.";
+
+/**
+ * W13b: the session-aware gate. A `locked` wallet answers "Please unlock your
+ * wallet first."; a `none` wallet keeps the onboarding line. Either way the
+ * intent is refused before any chain call and the Wallet page is pinned.
+ */
+export function decideWalletGateForSession(
+  intent: Intent,
+  session: WalletSessionState,
+): WalletGateDecision {
+  if (session === "unlocked" || !isValueMovingIntent(intent)) {
+    return { block: false, sentence: "", page: null };
+  }
+  return {
+    block: true,
+    sentence: session === "locked" ? UNLOCK_WALLET_SENTENCE : CONNECT_WALLET_SENTENCE,
+    page: "wallet",
+  };
 }

@@ -260,16 +260,21 @@ export async function startWithdraw(
     }
     throw e;
   }
+  const out: WithdrawInstructions = { id: safeId(raw.id, "withdrawal order id") };
   const accountId = raw.account_id;
-  // Only a plain G... account: a muxed M... address would route the payment to an
+  // The anchor may DEFER the payout account until per-transaction KYC is done
+  // (the SDF test anchor returns only `{id}` at first). When it IS present it must
+  // be a plain G... account: a muxed M... address would route the payment to an
   // identity we cannot show the user, and other strings are not addresses at all.
-  if (typeof accountId !== "string" || !StrKey.isValidEd25519PublicKey(accountId)) {
-    throw new Error("the anchor did not give a valid plain Stellar account (G...) to pay for the withdrawal");
+  if (accountId !== undefined && accountId !== null && accountId !== "") {
+    if (typeof accountId !== "string" || !StrKey.isValidEd25519PublicKey(accountId)) {
+      throw new Error("the anchor did not give a valid plain Stellar account (G...) to pay for the withdrawal");
+    }
+    if (accountId === p.account) throw new Error("the anchor asked us to pay our own account");
+    out.accountId = accountId;
+    const memo = parseWithdrawMemo(raw.memo, raw.memo_type);
+    if (memo) out.memo = memo;
   }
-  if (accountId === p.account) throw new Error("the anchor asked us to pay our own account");
-  const out: WithdrawInstructions = { id: safeId(raw.id, "withdrawal order id"), accountId };
-  const memo = parseWithdrawMemo(raw.memo, raw.memo_type);
-  if (memo) out.memo = memo;
   const min = num(raw.min_amount);
   if (min !== undefined) out.minAmount = min;
   const max = num(raw.max_amount);
@@ -280,10 +285,13 @@ export async function startWithdraw(
   if (eta !== undefined) out.eta = eta;
   // The memo value still goes on chain exactly as the anchor sent it; only the echo is sanitised.
   const memoEcho = out.memo ? sanitizeAnchorText(out.memo.value, 28) ?? "?" : undefined;
+  const payTo = out.accountId
+    ? ` and told us to pay ${shortKey(out.accountId)}` +
+      `${out.memo ? ` with ${out.memo.type} memo ${out.memo.type === "hash" ? shortKey(out.memo.value) : memoEcho}` : ", with no memo"}`
+    : "; it will give us the payout account once the order's KYC is complete";
   ctx.explain.record(
     "sep6.withdraw",
-    `SEP-6: asked the anchor to cash out ${p.amount} ${p.assetCode}. It created order ${out.id} and told us to pay ${shortKey(accountId)}` +
-      `${out.memo ? ` with ${out.memo.type} memo ${out.memo.type === "hash" ? shortKey(out.memo.value) : memoEcho}` : ", with no memo"}.`,
+    `SEP-6: asked the anchor to cash out ${p.amount} ${p.assetCode}. It created order ${out.id}${payTo}.`,
     "The memo is a reference number: it is how the anchor matches our on-chain payment to this order, so it must be included exactly.",
   );
   return out;
@@ -438,8 +446,12 @@ export function classifyStatus(status: TxStatus): StatusClass {
     case "pending_transaction_info_update":
       return "needs_info";
     case "pending_user":
-    case "incomplete":
       return "needs_user";
+    case "incomplete":
+      // SEP-6 "incomplete" means the anchor is still missing information and the
+      // order has not started; the SDF test anchor briefly reports it before
+      // moving to pending_customer_info_update. Keep polling instead of stopping.
+      return "in_progress";
     case "pending_user_transfer_start":
       return "waiting_user_transfer";
     default:
@@ -627,6 +639,9 @@ export class TransactionInfoRequiredError extends Error {
 
 export type PollOutcome = "completed" | "failed" | "stopped";
 
+/** How many times a poll hands a `pending_customer_info_update` to the KYC hook before giving up. */
+export const MAX_CUSTOMER_INFO_ATTEMPTS = 6;
+
 export interface PollOptions {
   intervalMs?: number;
   timeoutMs?: number;
@@ -634,6 +649,13 @@ export interface PollOptions {
   stopAt?: readonly TxStatus[];
   /** Called (once per poll loop) when the anchor reports pending_trust; should fix the trustline. */
   onPendingTrust?: (tx: AnchorTransaction) => Promise<void>;
+  /**
+   * Called when the anchor pauses the order for per-transaction KYC
+   * (`pending_customer_info_update`); should submit the SEP-12 fields, after which
+   * polling resumes. The order's status can lag, so it is called a few bounded
+   * times. Without it the poll stops with `TransactionInfoRequiredError`.
+   */
+  onCustomerInfoRequired?: (tx: AnchorTransaction) => Promise<void>;
   onUpdate?: (tx: AnchorTransaction) => void;
   /** Consecutive transient failures tolerated before giving up (default 3). */
   maxTransientFailures?: number;
@@ -657,9 +679,11 @@ function isTransient(e: unknown): boolean {
  * the anchor needs input from us. Emits one explain record per status CHANGE.
  *
  *  - `pending_trust`: `onPendingTrust` runs once; without a handler the poll stops.
- *  - `pending_customer_info_update` / `pending_transaction_info_update`: throws
- *    `TransactionInfoRequiredError` with the missing field names (never spins).
- *  - `pending_user` / `incomplete`: stops with outcome "stopped".
+ *  - `pending_customer_info_update`: `onCustomerInfoRequired` runs (SEP-12
+ *    per-transaction KYC, a few bounded times as the status can lag), then polling
+ *    resumes; without a handler it throws `TransactionInfoRequiredError`.
+ *  - `pending_transaction_info_update`: throws `TransactionInfoRequiredError`.
+ *  - `pending_user`: stops with outcome "stopped" (we cannot supply what it wants).
  *  - a few consecutive network/5xx errors are retried; then `PollInterruptedError`.
  *  - throws `PollTimeoutError` on timeout.
  */
@@ -676,6 +700,7 @@ export async function pollTransaction(
   const started = ctx.now().getTime();
   const history: TxStatus[] = [];
   let trustHandled = false;
+  let customerInfoAttempts = 0;
   let failures = 0;
   let last: AnchorTransaction | undefined;
   for (;;) {
@@ -710,6 +735,15 @@ export async function pollTransaction(
     if (cls === "failed") return { tx, outcome: "failed", history };
     if (opts.stopAt?.includes(tx.status)) return { tx, outcome: "stopped", history };
     if (cls === "needs_info") {
+      // Per-transaction KYC: hand it to the caller (it submits SEP-12 with the
+      // order's `transaction_id`), then keep polling. The transaction status can
+      // lag the customer record, so allow a few bounded attempts.
+      if (tx.status === "pending_customer_info_update" && opts.onCustomerInfoRequired && customerInfoAttempts < MAX_CUSTOMER_INFO_ATTEMPTS) {
+        customerInfoAttempts++;
+        await opts.onCustomerInfoRequired(tx);
+        await ctx.sleep(interval);
+        continue;
+      }
       let fields = tx.requiredInfoUpdates ?? [];
       if (tx.status === "pending_customer_info_update" && toml.kycServer) {
         try {

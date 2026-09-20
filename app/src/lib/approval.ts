@@ -19,10 +19,36 @@ export type ApprovalMode = "touch_id" | "wallet_only";
 /** The lifecycle of one pending approval, as the Rust store reports it. */
 export type ApprovalState = "pending" | "authorized" | "denied" | "expired" | "consumed";
 
+/** One numbered line of a batch approval: a title, an optional one-line detail. */
+export interface ApprovalBatchStep {
+  index: number;
+  title: string;
+  detail?: string;
+  /**
+   * The gate's id for this step (W15g). The Rust snapshot carries `id`, so the
+   * overlay can deny the whole batch through one step id; optional so callers
+   * that only render titles are unaffected.
+   */
+  id?: string;
+}
+
+/**
+ * A batch approval (W11b): ONE Touch ID authorises every owner transaction the
+ * auto-pay setup needs. It carries only titles and a count — never an XDR.
+ */
+export interface ApprovalBatchSnapshot {
+  title: string;
+  steps: ApprovalBatchStep[];
+  count: number;
+}
+
 /**
  * Everything the card needs to render one approval. Deliberately **never**
  * carries the unsigned XDR — the card shows the decoded summary only, and the
  * XDR stays in Rust until a real gesture authorises it.
+ *
+ * `batch` (W11b) is present when the pending request is a batch; the panel then
+ * renders the numbered batch card and authorises it with ONE Touch ID.
  */
 export interface ApprovalSnapshot {
   id: string;
@@ -33,6 +59,8 @@ export interface ApprovalSnapshot {
   state: ApprovalState;
   /** Unix epoch milliseconds; the card marks the request expired at this instant. */
   expiresAtMs: number;
+  /** Present iff this pending request is a batch. */
+  batch?: ApprovalBatchSnapshot;
 }
 
 /**
@@ -124,6 +152,8 @@ export interface ApprovalCommands {
   current: () => Promise<ApprovalSnapshot | null>;
   /** Shows the real Touch ID prompt and resolves to the authorised snapshot. */
   authorize: (id: string) => Promise<ApprovalSnapshot>;
+  /** Authorises a batch with ONE Touch ID (W11b); absent on older builds. */
+  authorizeBatch?: (batchId: string) => Promise<ApprovalSnapshot>;
   deny: (id: string) => Promise<ApprovalSnapshot>;
 }
 
@@ -198,11 +228,24 @@ export async function approvalDeny(
   }
 }
 
+/** `approval_authorize_batch({ batchId })` — ONE Touch ID authorises every item. */
+export async function approvalAuthorizeBatch(
+  batchId: string,
+  invokeImpl: InvokeFn = invoke,
+): Promise<ApprovalSnapshot> {
+  try {
+    return await invokeImpl<ApprovalSnapshot>("approval_authorize_batch", { batchId });
+  } catch (error) {
+    throw toApprovalError(error);
+  }
+}
+
 /** Binds the real Tauri commands. Demo mode builds its own via `createDemoCommands`. */
 export function createApprovalCommands(invokeImpl: InvokeFn = invoke): ApprovalCommands {
   return {
     current: () => approvalCurrent(invokeImpl),
     authorize: (id) => approvalAuthorize(id, invokeImpl),
+    authorizeBatch: (batchId) => approvalAuthorizeBatch(batchId, invokeImpl),
     deny: (id) => approvalDeny(id, invokeImpl),
   };
 }

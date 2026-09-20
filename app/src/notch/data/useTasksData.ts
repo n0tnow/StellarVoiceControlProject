@@ -4,30 +4,35 @@
  * The page renders only [`TaskRow`]s; this hook adapts the real `listUpcoming`
  * view models (via `@/lib/schedules`) into that shape. The mock rows in
  * `@/lib/mockData` are an explicit **demo** fallback, used only when the app is
- * not inside Tauri or when `stellar_config` has no owner address. A real read
- * failure is surfaced as an error with a Retry — never silently replaced by
- * mock data.
+ * not inside Tauri (the browser preview). A real read failure — including a
+ * missing owner — is surfaced as an error with a Retry, never mock data.
  *
- * Cancel is the only value-moving action here: it builds the unsigned
- * `cancel_schedule` (`@/lib/schedulesLive`) and pushes it through the shared
- * `@/lib/useTxRun` pipeline (approval card → Touch ID → Freighter → submit),
- * exactly like the Schedules panel. Nothing else on the page moves value.
+ * Cancel and create are the only value-moving actions here: each builds an
+ * unsigned `@/lib/schedulesLive` call and pushes it through the shared
+ * `@/lib/useTxRun` pipeline (approval card → Touch ID → wallet signing →
+ * submit). Nothing else on the page moves value.
+ *
+ * Performance: the last successful read is kept in an **owner-scoped** cache
+ * (`tasksCache`, keyed by `ownerAddress|networkPassphrase`) and concurrent
+ * mounts share one in-flight load. A remount therefore paints the previous
+ * rows immediately and revalidates in the background — it never blocks the
+ * first frame on the chain read, and never fires a second identical read. The
+ * key means a snapshot is never seeded or served after the active wallet
+ * account changes; the cache is cleared on that edge and the effect refetches.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { isTauri } from "@tauri-apps/api/core";
 
 import type { Intent } from "@polaris/interfaces";
 import type { schedule } from "@polaris/stellar";
 
-import {
-  deviceTimeZone,
-  keeperStatus,
-  toScheduleRows,
-  type KeeperStatus,
-} from "../../lib/schedules.ts";
+import { buildScheduleForm, deviceTimeZone, toScheduleRows, type ScheduleForm } from "../../lib/schedules.ts";
 import { MOCK_SCHEDULED_TASKS, formatNextRun, type ScheduledTask } from "../../lib/mockData.ts";
 import { useTxRun, type UseTxRun } from "../../lib/useTxRun.ts";
 import type { TxRunOutcome } from "../../lib/txPipeline.ts";
+import { walletSessionStore } from "../../lib/walletSessionLive.ts";
+
+import { createSnapshotCache, type SnapshotLoad } from "./snapshotCache.ts";
 
 /** One row the Tasks page renders (the hook boundary adapts every source). */
 export interface TaskRow {
@@ -84,12 +89,16 @@ export function rowsFromMock(tasks: readonly ScheduledTask[]): TaskRow[] {
 }
 
 /**
- * Which source the page uses: real data only inside Tauri with an owner
- * address; anything else is the explicit demo fallback. Pure so the rule is
- * tested without a runtime.
+ * Which source the page uses: real data inside Tauri with an owner address;
+ * inside Tauri without an owner there is no real source (an honest empty +
+ * error, never mock); outside Tauri the browser preview uses the labelled demo.
+ * Pure so the rule is tested without a runtime.
  */
-export function tasksSource(input: { inTauri: boolean; ownerAddress: string | null }): "demo" | "live" {
-  return input.inTauri && input.ownerAddress ? "live" : "demo";
+export function tasksSource(
+  input: { inTauri: boolean; ownerAddress: string | null },
+): "demo" | "live" | "unconfigured" {
+  if (!input.inTauri) return "demo";
+  return input.ownerAddress ? "live" : "unconfigured";
 }
 
 /** The `cancel_schedule` intent for a cancellable row, or `null` for demo rows. */
@@ -104,16 +113,6 @@ export function cancelIntentFor(row: TaskRow): Intent | null {
   };
 }
 
-/** Seconds until the earliest upcoming run across rows, or `null` if none. */
-function nextDueSeconds(rows: readonly TaskRow[]): number | null {
-  let earliest = Number.POSITIVE_INFINITY;
-  for (const row of rows) {
-    const ms = Date.parse(row.nextRunUtc);
-    if (Number.isFinite(ms)) earliest = Math.min(earliest, ms);
-  }
-  return Number.isFinite(earliest) ? Math.floor(earliest / 1000) : null;
-}
-
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -124,32 +123,98 @@ interface TasksLoad {
   error: string | null;
 }
 
+/* ------------------------------------------------------------------ *
+ * Owner-scoped snapshot cache
+ * ------------------------------------------------------------------ */
+
+/** The cache key for the browser preview (no owner). */
+const PREVIEW_KEY = "preview";
+
+/** Separator between the owner and the network in a scope key. */
+const KEY_SEPARATOR = "|";
+
+/** The scope key a snapshot is read for: `ownerAddress|networkPassphrase`. */
+function scopeKey(owner: string, network: string): string {
+  return `${owner}${KEY_SEPARATOR}${network}`;
+}
+
+/** The owner half of a scope key. */
+function scopeOwner(key: string): string {
+  const end = key.indexOf(KEY_SEPARATOR);
+  return end === -1 ? key : key.slice(0, end);
+}
+
+/** The active wallet account, or `null` when locked/absent or in the preview. */
+function useActiveOwner(): string | null {
+  const read = (): string | null => walletSessionStore.getSnapshot().session?.active?.address ?? null;
+  return useSyncExternalStore(walletSessionStore.subscribe, read, read);
+}
+
+/** The last successful read, shared across mounts of the page. */
+const tasksCache = createSnapshotCache<TasksLoad>(loadTasks);
+
 /**
- * Loads the list: demo fallback outside Tauri / without an owner, real
- * `listUpcoming` otherwise. Never throws — a read failure is returned as the
- * `error` so the page can show it with a Retry.
+ * The cached snapshot's key, but only when it belongs to `owner`; `null`
+ * otherwise. A network change also changes the key, so it can never seed.
  */
-async function loadTasks(timeZone: string): Promise<TasksLoad> {
+function seedKeyFor(owner: string | null): string | null {
+  const stored = tasksCache.cachedKey();
+  if (stored === null) return null;
+  if (owner === null) return stored === PREVIEW_KEY ? PREVIEW_KEY : null;
+  return scopeOwner(stored) === owner ? stored : null;
+}
+
+/** Which body the page renders, derived from the load state. Pure. */
+export type TasksViewState = "skeleton" | "error" | "empty" | "rows";
+
+/**
+ * The page's body is never blank: while the first read is in flight it shows a
+ * skeleton, a failed read shows the error, and a successful empty read shows
+ * the empty state. Cached rows always win, so a background refresh never
+ * collapses the list back to a skeleton.
+ */
+export function tasksViewState(input: {
+  loading: boolean;
+  error: string | null;
+  count: number;
+}): TasksViewState {
+  if (input.count > 0) return "rows";
+  if (input.loading) return "skeleton";
+  if (input.error !== null) return "error";
+  return "empty";
+}
+
+/**
+ * Loads the list: the labelled demo outside Tauri, real `listUpcoming` inside
+ * Tauri. Never throws — a read failure (or a missing owner) comes back as
+ * `{ ok: false }` so the cache can keep the last good snapshot; mock rows never
+ * appear once a real runtime is available.
+ */
+async function loadTasks(_key: string): Promise<SnapshotLoad<TasksLoad>> {
   if (!isTauri()) {
-    return { rows: rowsFromMock(MOCK_SCHEDULED_TASKS), demo: true, error: null };
+    return {
+      ok: true,
+      key: PREVIEW_KEY,
+      value: { rows: rowsFromMock(MOCK_SCHEDULED_TASKS), demo: true, error: null },
+    };
   }
 
-  let ownerAddress: string | null = null;
   try {
     const { getStellarConfig } = await import("@/lib/stellarConfig");
-    ownerAddress = (await getStellarConfig()).ownerAddress;
-  } catch (failure) {
-    return { rows: [], demo: false, error: messageOf(failure) };
-  }
-  if (tasksSource({ inTauri: true, ownerAddress }) === "demo") {
-    return { rows: rowsFromMock(MOCK_SCHEDULED_TASKS), demo: true, error: null };
-  }
-
-  try {
+    const config = await getStellarConfig();
+    if (tasksSource({ inTauri: true, ownerAddress: config.ownerAddress }) === "unconfigured") {
+      return { ok: false, error: "POLARIS_OWNER_ADDRESS is not set" };
+    }
+    const owner = config.ownerAddress as string;
+    const key = scopeKey(owner, config.networkPassphrase);
     const { loadUpcoming } = await import("@/lib/schedulesLive");
-    return { rows: rowsFromUpcoming(await loadUpcoming(timeZone)), demo: false, error: null };
+    return {
+      ok: true,
+      key,
+      value: { rows: rowsFromUpcoming(await loadUpcoming(deviceTimeZone())), demo: false, error: null },
+    };
   } catch (failure) {
-    return { rows: [], demo: false, error: messageOf(failure) };
+    return { ok: false, error: messageOf(failure) };
   }
 }
 
@@ -157,17 +222,21 @@ async function loadTasks(timeZone: string): Promise<TasksLoad> {
 export interface TasksData {
   rows: TaskRow[];
   loading: boolean;
+  /** True while a background revalidation runs over already-shown rows. */
+  refreshing: boolean;
   /** Human read error from the last load, or `null`. */
   error: string | null;
+  /** A failed background revalidation's message, while the last good rows stay. */
+  refreshError: string | null;
   /** True when the rows are the demo fallback, not real chain data. */
   demo: boolean;
-  /** Keeper strip facts: whether a keeper is needed and how to start one. */
-  keeper: KeeperStatus;
   timeZone: string;
   refresh: () => void;
   /** Runs the row's cancel through the shared tx pipeline; never throws. */
   cancel: (row: TaskRow) => Promise<TxRunOutcome | null>;
-  /** Short human error from the last cancel (build/approval/sign), or `null`. */
+  /** Creates a schedule through the shared tx pipeline; never throws. */
+  create: (form: ScheduleForm) => Promise<TxRunOutcome | null>;
+  /** Short human error from the last cancel/create (build/approval/sign), or `null`. */
   actionError: string | null;
   tx: UseTxRun;
 }
@@ -177,30 +246,84 @@ export interface TasksData {
  * chain access is in `@/lib/schedulesLive`; this hook only holds React state.
  */
 export function useTasksData(): TasksData {
-  const timeZone = deviceTimeZone();
-  const [rows, setRows] = useState<TaskRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [demo, setDemo] = useState(false);
+  // The IANA zone cannot change while the panel is open, so resolve it once.
+  const timeZone = useMemo(() => deviceTimeZone(), []);
+  const owner = useActiveOwner();
+  const seed = tasksCache.peek(seedKeyFor(owner));
+  const [rows, setRows] = useState<TaskRow[]>(seed?.rows ?? []);
+  /** The owner the current rows were read for; gates the first frame after a switch. */
+  const [rowsOwner, setRowsOwner] = useState<string | null>(owner);
+  const [loading, setLoading] = useState(seed === null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(seed?.error ?? null);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
+  const [demo, setDemo] = useState(seed?.demo ?? false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
   const tx = useTxRun();
   const run = tx.run;
+  const firstRun = useRef(true);
+  const previousOwner = useRef<string | null | undefined>(undefined);
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
-    loadTasks(timeZone).then((load) => {
+    const first = firstRun.current;
+    firstRun.current = false;
+    const ownerChanged = !first && previousOwner.current !== owner;
+    previousOwner.current = owner;
+    if (ownerChanged) {
+      // The active account changed: no snapshot from the previous owner may be
+      // seeded or served again.
+      tasksCache.clear();
+      setRefreshError(null);
+    }
+
+    const seedKey = seedKeyFor(owner);
+    const cached = tasksCache.peek(seedKey);
+    if (ownerChanged) {
+      setRows(cached?.rows ?? []);
+      setRowsOwner(owner);
+      setDemo(cached?.demo ?? false);
+      setError(cached?.error ?? null);
+      setLoading(cached === null);
+      setRefreshing(false);
+    } else if (cached === null) {
+      // Cached rows paint immediately; only the very first read blocks on the
+      // chain. A revalidation after that is a quiet background refresh.
+      setLoading(true);
+    } else {
+      setRefreshing(true);
+    }
+
+    const requestedKey = seedKey ?? (owner === null ? PREVIEW_KEY : `${owner}${KEY_SEPARATOR}`);
+    tasksCache.load(requestedKey, { force: !first }).then((read) => {
       if (cancelled) return;
-      setRows(load.rows);
-      setDemo(load.demo);
-      setError(load.error);
+      setRowsOwner(owner);
+      if (read.value === null) {
+        // A failed first read is an honest error, never stale mock data.
+        setRows([]);
+        setDemo(false);
+        setError(read.error);
+        setRefreshError(null);
+      } else if (read.stale) {
+        // A failed revalidation keeps the last good rows and only hints.
+        setRows(read.value.rows);
+        setDemo(read.value.demo);
+        setError(read.value.error);
+        setRefreshError(read.error);
+      } else {
+        setRows(read.value.rows);
+        setDemo(read.value.demo);
+        setError(read.value.error);
+        setRefreshError(null);
+      }
       setLoading(false);
+      setRefreshing(false);
     });
     return () => {
       cancelled = true;
     };
-  }, [timeZone, nonce]);
+  }, [timeZone, nonce, owner]);
 
   const refresh = useCallback(() => setNonce((value) => value + 1), []);
 
@@ -232,11 +355,44 @@ export function useTasksData(): TasksData {
     [run, refresh],
   );
 
-  const keeper = keeperStatus({
-    hasSchedules: rows.length > 0,
-    nextDueSeconds: nextDueSeconds(rows),
-    nowSeconds: Math.floor(Date.now() / 1000),
-  });
+  const create = useCallback(
+    async (form: ScheduleForm): Promise<TxRunOutcome | null> => {
+      setActionError(null);
+      const built = buildScheduleForm(form);
+      if (!built.ok) {
+        setActionError(built.error);
+        return null;
+      }
+      const label = `Schedule ${form.amount} ${form.asset} to ${form.recipient}`;
+      try {
+        const { scheduleChainTool } = await import("@/lib/schedulesLive");
+        const result = await scheduleChainTool(built.intent);
+        const [outcome] = await run([{ result, intent: built.intent, label }]);
+        if (outcome?.status === "submitted") refresh();
+        else setActionError(outcome?.detail ?? "The schedule was not created.");
+        return outcome ?? null;
+      } catch (failure) {
+        const detail = messageOf(failure);
+        setActionError(detail);
+        return { status: "failed", label, detail, atMs: Date.now() };
+      }
+    },
+    [run, refresh],
+  );
 
-  return { rows, loading, error, demo, keeper, timeZone, refresh, cancel, actionError, tx };
+  return {
+    // Gate the first frame after an account switch: never paint another owner's rows.
+    rows: rowsOwner === owner ? rows : [],
+    loading,
+    refreshing,
+    error,
+    refreshError,
+    demo,
+    timeZone,
+    refresh,
+    cancel,
+    create,
+    actionError,
+    tx,
+  };
 }

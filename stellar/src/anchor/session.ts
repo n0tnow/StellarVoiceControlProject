@@ -15,14 +15,16 @@ import { parseHomeDomain } from "./net.ts";
 import { buildTrustlineTx, inspectAccount, preflight, type AccountState, type PreflightOptions, type PreflightResult } from "./preflight.ts";
 import { authenticate, completeChallenge, isExpired, requestChallenge } from "./sep10.ts";
 import { discoverAnchor, findAsset } from "./sep1.ts";
-import { ensureCustomer, type CustomerInfo } from "./sep12.ts";
+import { ensureCustomer, ensureTransactionCustomer, type CustomerInfo } from "./sep12.ts";
 import { getPrice } from "./sep38.ts";
 import { sanitizeAnchorText } from "./text.ts";
 import {
   buildWithdrawPayment,
+  classifyStatus,
   getInfo,
   getTransaction,
   listTransactions,
+  parseWithdrawMemo,
   pollTransaction,
   startDeposit,
   startWithdraw,
@@ -53,6 +55,16 @@ export interface AnchorSessionConfig {
   homeDomain?: string;
   /** On-chain asset code to move. Default USDC. */
   assetCode?: string;
+  /**
+   * Off-chain currency used for SEP-38 quotes (e.g. "USD" for the SDF test
+   * anchor). Defaults to the asset's `anchor_asset` from the toml, else "TRY".
+   */
+  fiatCode?: string;
+  /**
+   * SEP-38 delivery method for quotes (e.g. "bank_account"). Omit for anchors
+   * that quote without one (the SDF test anchor rejects "bank_account").
+   */
+  sep38DeliveryMethod?: string;
   fetch?: FetchLike;
   horizonUrl?: string;
   friendbotUrl?: string;
@@ -66,6 +78,12 @@ export interface AnchorSessionConfig {
   allowInsecure?: boolean;
   /** Extra hosts (besides the home domain and its subdomains) toml endpoints may use. */
   allowedEndpointHosts?: readonly string[];
+  /**
+   * SEP-12 fields to send when the anchor asks for them (e.g. the clearly-fake
+   * SDF demo customer). Any requested field NOT present here stops the flow with
+   * `KycRequiredError` — the session never invents personal data.
+   */
+  customerFields?: Record<string, string>;
 }
 
 /** Strips the bearer credential: step results may only show who we logged in as. */
@@ -81,6 +99,9 @@ export class AnchorSession {
   readonly homeDomain: string;
   readonly assetCode: string;
   private readonly signer: Signer;
+  private readonly customerFields: Record<string, string>;
+  private readonly fiatCode: string | undefined;
+  private readonly sep38DeliveryMethod: string | undefined;
   private tomlCache: Promise<AnchorToml> | undefined;
   private tokenCache: AuthToken | undefined;
   private customerOk = false;
@@ -91,8 +112,11 @@ export class AnchorSession {
 
   constructor(config: AnchorSessionConfig) {
     this.signer = config.signer;
+    this.customerFields = config.customerFields ?? {};
     this.homeDomain = parseHomeDomain(config.homeDomain ?? DEFAULT_HOME_DOMAIN, { allowInsecure: config.allowInsecure });
     this.assetCode = config.assetCode ?? DEFAULT_ASSET_CODE;
+    this.fiatCode = config.fiatCode;
+    this.sep38DeliveryMethod = config.sep38DeliveryMethod;
     this.explain = config.explain ?? new ExplainLog(config.now);
     this.ctx = {
       fetch: config.fetch ?? ((input, init) => fetch(input, init)),
@@ -141,7 +165,12 @@ export class AnchorSession {
   }
 
   private async fiat(): Promise<string> {
-    return (await this.asset()).fiat ?? "TRY";
+    return this.fiatCode ?? (await this.asset()).fiat ?? "TRY";
+  }
+
+  /** SEP-38 delivery method, or undefined when this anchor quotes without one. */
+  private deliveryMethod(): string | undefined {
+    return this.sep38DeliveryMethod;
   }
 
   private async token(): Promise<AuthToken> {
@@ -153,9 +182,50 @@ export class AnchorSession {
 
   private async kyc(): Promise<CustomerInfo | undefined> {
     if (this.customerOk) return undefined;
-    const info = await ensureCustomer(this.ctx, await this.toml(), await this.token());
+    const info = await ensureCustomer(this.ctx, await this.toml(), await this.token(), this.customerFields);
     this.customerOk = true;
     return info;
+  }
+
+  /** SEP-12 per-transaction KYC for one paused order (`pending_customer_info_update`). */
+  private async kycForTransaction(id: string): Promise<void> {
+    await ensureTransactionCustomer(this.ctx, await this.toml(), await this.token(), id, this.customerFields);
+  }
+
+  /**
+   * Fills in the payout account/memo an anchor DEFERRED on `startWithdraw` (the
+   * SDF test anchor returns only `{id}` at first). Runs the order's SEP-12 KYC,
+   * then reads the transaction for the account and memo the anchor now expects.
+   */
+  private async resolveDeferredWithdraw(base: WithdrawInstructions): Promise<WithdrawInstructions> {
+    const toml = await this.toml();
+    const token = await this.token();
+    await this.kycForTransaction(base.id);
+    // The anchor fills in the payout account asynchronously after the KYC, so poll
+    // the order (same 2 s cadence as the main poll) until it names one.
+    const deadline = this.ctx.now().getTime() + 60_000;
+    for (;;) {
+      const tx = await getTransaction(this.ctx, toml, token, base.id);
+      const accountId = tx.withdrawAnchorAccount;
+      if (accountId) {
+        if (accountId === (await this.signer.publicKey())) throw new Error("the anchor asked us to pay our own account");
+        const out: WithdrawInstructions = { ...base, accountId };
+        const memo = parseWithdrawMemo(tx.withdrawMemo, tx.withdrawMemoType);
+        if (memo) out.memo = memo;
+        this.explain.record(
+          "sep6.withdraw_account",
+          `SEP-6: after the order's KYC, the anchor gave us its payout account ${shortKey(accountId)} for order ${base.id}.`,
+          "A withdrawal only names the account to pay once the anchor has the identity data it needs for that order.",
+        );
+        return out;
+      }
+      if (tx.status === "pending_customer_info_update") await this.kycForTransaction(base.id);
+      else if (classifyStatus(tx.status) === "failed") throw new Error(`withdrawal ${base.id} ended as ${tx.status} before naming a payout account`);
+      if (this.ctx.now().getTime() >= deadline) {
+        throw new Error(`the anchor has not provided a payout account for withdrawal ${base.id} yet (status ${tx.status})`);
+      }
+      await this.ctx.sleep(2000);
+    }
   }
 
   // ---- steps the agent can call ----
@@ -247,10 +317,11 @@ export class AnchorSession {
     return this.step(async () => {
       assertAmount(amountFiat, "deposit amount");
       const [toml, asset, fiat] = await Promise.all([this.toml(), this.asset(), this.fiat()]);
+      const deliveryMethod = this.deliveryMethod();
       return getPrice(
         this.ctx,
         toml,
-        { sellAsset: fiatAssetId(fiat), buyAsset: stellarAssetId(asset), sellAmount: amountFiat, deliveryMethod: "bank_account" },
+        { sellAsset: fiatAssetId(fiat), buyAsset: stellarAssetId(asset), sellAmount: amountFiat, ...(deliveryMethod ? { deliveryMethod } : {}) },
         `if you deposit ${amountFiat} ${fiat}, how much ${asset.code} would you get?`,
       );
     });
@@ -261,10 +332,11 @@ export class AnchorSession {
     return this.step(async () => {
       assertAmount(amountAsset, "withdraw amount");
       const [toml, asset, fiat] = await Promise.all([this.toml(), this.asset(), this.fiat()]);
+      const deliveryMethod = this.deliveryMethod();
       return getPrice(
         this.ctx,
         toml,
-        { sellAsset: stellarAssetId(asset), buyAsset: fiatAssetId(fiat), sellAmount: amountAsset, deliveryMethod: "bank_account" },
+        { sellAsset: stellarAssetId(asset), buyAsset: fiatAssetId(fiat), sellAmount: amountAsset, ...(deliveryMethod ? { deliveryMethod } : {}) },
         `if you cash out ${amountAsset} ${asset.code}, how much ${fiat} would you get?`,
       );
     });
@@ -293,11 +365,13 @@ export class AnchorSession {
     return this.step(async () => {
       assertAmount(amountAsset, "withdraw amount");
       await this.kyc();
-      const instructions = await startWithdraw(this.ctx, await this.toml(), await this.token(), {
+      let instructions = await startWithdraw(this.ctx, await this.toml(), await this.token(), {
         assetCode: this.assetCode,
         account: await this.signer.publicKey(),
         amount: amountAsset,
       });
+      // Some anchors defer the payout account until the order's KYC is complete.
+      if (!instructions.accountId) instructions = await this.resolveDeferredWithdraw(instructions);
       // Bind the order to THIS session: payWithdrawal only ever pays what the anchor
       // told us in this response, never an object a caller hands it.
       this.withdrawRequest = { instructions, amount: amountAsset };
@@ -326,6 +400,7 @@ export class AnchorSession {
       throw new Error(`not enough ${asset.code}: have ${have}, need ${amountAsset}`);
     }
     const w = request.instructions;
+    if (!w.accountId) throw new Error("this withdrawal has no payout account yet; the anchor must complete its KYC first");
     const xdr = buildWithdrawPayment({
       sourceAccount: account,
       sequence: acct.sequence,
@@ -375,7 +450,7 @@ export class AnchorSession {
       const memoText = memo ? ` with ${memo.type} memo ${memo.type === "hash" ? shortKey(memo.value) : memoEcho}` : ", with no memo";
       this.explain.record(
         "withdraw.pay",
-        `Sent ${amountAsset} ${asset.code} to the anchor's account ${shortKey(instructions.accountId)}${memoText} ` +
+        `Sent ${amountAsset} ${asset.code} to the anchor's account ${shortKey(instructions.accountId ?? "?")}${memoText} ` +
           `(transaction ${out.hash.slice(0, 8)}...).`,
         "This on-chain payment is the anchor's trigger: when it sees the tokens and memo it pays out the local currency to your bank.",
       );
@@ -398,6 +473,14 @@ export class AnchorSession {
             "Once the trustline exists the anchor's pending payment can go through — no need to start over.",
           );
           await preflight(this.ctx, this.signer, await this.asset());
+        },
+        onCustomerInfoRequired: async (tx) => {
+          this.explain.record(
+            "sep6.kyc_required",
+            `Order ${id} is paused for per-transaction KYC, so we are sending the anchor the fields it asked for.`,
+            "A single transfer can need extra identity data; we only ever send the fields the anchor requests and that this scenario is allowed to provide.",
+          );
+          await this.kycForTransaction(tx.id);
         },
       }),
     );

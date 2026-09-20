@@ -44,6 +44,17 @@ export {
   type PaymentRefusalCode,
   type PaymentRoute,
 } from "./sendPayment.ts";
+export {
+  buildTrustlineSummary,
+  createAddTrustline,
+  defaultTrustlineAssets,
+  resolveTrustlineAsset,
+  TESTNET_SRT_ISSUER,
+  TrustlineRefusal,
+  type BuiltTrustlineSummary,
+  type TrustlineDeps,
+  type TrustlineRefusalCode,
+} from "./trustline.ts";
 
 import { Horizon } from "@stellar/stellar-sdk";
 import type { ChainTool } from "@polaris/interfaces";

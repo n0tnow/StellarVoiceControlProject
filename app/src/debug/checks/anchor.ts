@@ -6,7 +6,7 @@
  * needs? The read is the standard SEP-1 discovery, so it is safe to run
  * automatically — it never signs, submits or moves funds.
  *
- * Challenge signing is feature-detected at use time (`bridge_sign_challenge`,
+ * Challenge signing is feature-detected at use time (`wallet_sign_challenge`,
  * W5a); it is not probed here because even an invalid probe would invoke the
  * signer. The panel reports that as `unknown` until the command merges.
  */

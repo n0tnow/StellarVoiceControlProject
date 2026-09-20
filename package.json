@@ -25,7 +25,7 @@
     "e2e:prompt": "node --env-file-if-exists=.env scripts/e2e-prompt-eval.mjs",
     "e2e:build-xdr": "node --env-file-if-exists=.env scripts/e2e-build-xdr.mjs",
     "p2p:live": "node --env-file-if-exists=.env scripts/p2p-live-read.mjs",
-    "bridge:fixture": "node --env-file-if-exists=.env scripts/bridge-fixture.mjs"
+    "e2e:autopay": "node scripts/e2e-autopay.mjs"
   },
   "devDependencies": {
     "typescript": "7.0.2"

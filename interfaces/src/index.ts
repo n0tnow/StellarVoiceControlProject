@@ -34,6 +34,25 @@ export type IntentKind =
   | "p2p_cancel"
   | "p2p_reclaim";
 
+/**
+ * A spending rule spoken by the user (`set_approval_rule`, voice-dialog). It is
+ * attached to a `guard_policy` intent as a **proposal only**: the executor does
+ * not apply it in this build (it answers "Autonomous rules aren't enabled in this
+ * build yet"), and a weakening change is never applied silently by voice.
+ * Amounts are decimal strings, never floats. Mirrors `guardState.ts`'s fields.
+ */
+export interface ApprovalRulePayload {
+  mode: "always_ask" | "auto_under_limit";
+  /** Biggest single unattended payment; required for `auto_under_limit`. */
+  autoApproveLimit?: string;
+  /** Asset the limits apply to; absent means the user's ambiguity was not resolved. */
+  asset?: string;
+  perTxLimit?: string;
+  dailyLimit?: string;
+  /** When true the agent may only pay addresses in the owner's alias book. */
+  knownRecipientsOnly?: boolean;
+}
+
 export interface Intent {
   kind: IntentKind;
   /** e.g. "USDC" (testnet) */
@@ -69,6 +88,17 @@ export interface Intent {
   priceTry?: string;
   /** P2P accept/confirm only: the on-chain offer id spoken by the user. */
   offerId?: number;
+  /**
+   * `guard_policy` voice proposal only (`set_approval_rule`). Present iff the rule
+   * came from a spoken command; the Security panel builds its own `guard_policy`
+   * intents without it, so the executor can tell the two apart.
+   */
+  rule?: ApprovalRulePayload;
+  /**
+   * `sell`/`buy` voice hint: which ramp the user chose. Display/telemetry only;
+   * the executor dispatches on `kind` (withdraw/deposit/p2p_offer/p2p_accept).
+   */
+  route?: "anchor" | "p2p";
 }
 
 /* ------------------------------------------------------------------ *
@@ -290,6 +320,13 @@ export type PolarisEvent =
       approved: boolean;
     }
   | { type: "tx_submitted"; hash: string; explorerUrl: string }
+  /**
+   * Wallet session transitions (step W13a). Emitted on the shared event channel
+   * whenever login/logout/auto-lock changes the session; the payload is the
+   * same `WalletSession` shape the `wallet_session` command returns, plus the
+   * `type` tag.
+   */
+  | ({ type: "wallet_session_changed" } & WalletSession)
   | { type: "error"; message: string };
 
 /**
@@ -339,11 +376,136 @@ export interface StellarConfig {
   horizonUrl: string;
   networkPassphrase: string;
   ownerAddress: string | null;
+  /**
+   * Which signer the shell uses (step W10): always `embedded`, the in-app
+   * wallet. This field is kept on the wire for compatibility.
+   */
+  signer: "embedded";
   aliases: Record<string, string>;
   guardContractId: string | null;
   /** `POLARIS_P2P_CONTRACT_ID`; the deployed `polaris_p2p_escrow` id, or null. */
   p2pContractId: string | null;
 }
+
+/* ------------------------------------------------------------------ *
+ * 7b. Embedded wallet (step W10)
+ * ------------------------------------------------------------------ */
+
+/**
+ * `wallet_status` result. `store` is `keychain`, `file (testnet only,
+ * plaintext)` (only with `POLARIS_WALLET_ALLOW_FILE_STORE=1`), or
+ * `keychain unavailable` (no seed can be written or read).
+ */
+export interface WalletStatus {
+  signer: "embedded";
+  /** The active account, or null when no wallet exists yet. */
+  active: { address: string; label: string } | null;
+  /** How many accounts the metadata file holds. */
+  count: number;
+  store: string;
+}
+
+/** One account in `wallet_list`; metadata only, never a secret. */
+export interface WalletAccount {
+  address: string;
+  label: string;
+  /** Milliseconds since the Unix epoch. */
+  createdAt: number;
+  active: boolean;
+}
+
+/** `wallet_create` result: the address plus the one-time recovery phrase. */
+export interface WalletCreateOutcome {
+  address: string;
+  /** The 24-word BIP-39 phrase; show once, then discard. */
+  recoveryPhrase: string;
+}
+
+/** `wallet_import_preview`/`wallet_import`/select/rename/remove result. */
+export interface WalletAddressOutcome {
+  address: string;
+}
+
+/** The failure categories the wallet commands reject with. */
+export type WalletErrorKind =
+  | "exists"
+  | "invalid"
+  | "notFound"
+  | "cancelled"
+  | "keychain"
+  | "file"
+  | "unauthorized"
+  // Step W13a: the session is locked, so no secret-touching action is allowed.
+  | "locked";
+
+/* ------------------------------------------------------------------ *
+ * 7c. Wallet session (step W13a: login / logout / auto-lock)
+ * ------------------------------------------------------------------ */
+
+/** `none` = no wallet stored; `locked` = wallets exist, nobody logged in. */
+export type WalletSessionState = "none" | "locked" | "unlocked";
+
+/**
+ * The wallet session snapshot returned by `wallet_session` and carried on the
+ * `wallet_session_changed` event. `active` is `null` unless unlocked.
+ */
+export interface WalletSession {
+  state: WalletSessionState;
+  active: { address: string; label: string } | null;
+  count: number;
+  /** Wall-clock ms when the session was unlocked, or `null`. */
+  unlockedAt: number | null;
+  /** Idle auto-lock timeout in minutes; `0` means "never". */
+  autoLockMinutes: number;
+}
+
+/** The typed rejection shape of the wallet commands. */
+export interface WalletCommandError {
+  kind: WalletErrorKind;
+  message: string;
+}
+
+/* ------------------------------------------------------------------ *
+ * 7d. Autopay executor (step W11a)
+ *
+ * The on-chain autonomy path: the owner registers a separate executor key, and
+ * payments inside the rule are signed by that key with `pay_executor` — no
+ * approval card, no Touch ID. Rust decodes the transaction and signs ONLY that
+ * one call shape; the `ExecutorSignOutcome` union is the whole contract.
+ * ------------------------------------------------------------------ */
+
+/** `executor_status`: whether the active owner has an executor key. */
+export interface ExecutorStatus {
+  exists: boolean;
+  /** The executor's public `G…` address, or null. */
+  address: string | null;
+  /**
+   * Always null from Rust: funding needs a network read, which the Debug check
+   * performs over Horizon.
+   */
+  funded: boolean | null;
+}
+
+/** `executor_create` result. The seed never leaves Rust. */
+export interface ExecutorAddress {
+  address: string;
+}
+
+/** Why `executor_sign_pay` refused to sign. */
+export type ExecutorSignCode =
+  | "locked"
+  | "no_executor"
+  | "not_pay_executor"
+  | "wrong_source"
+  | "wrong_contract"
+  | "over_hard_cap"
+  | "invalid"
+  | "error";
+
+/** `executor_sign_pay`'s typed union: a signed XDR, or a coded refusal. */
+export type ExecutorSignOutcome =
+  | { ok: true; signedXdr: string; txHash: string }
+  | { ok: false; code: ExecutorSignCode; message: string };
 
 /* ------------------------------------------------------------------ *
  * 8. Approval gate (step W3)
@@ -394,6 +556,11 @@ export interface ApprovalSnapshot {
   mode: ApprovalMode;
   state: ApprovalState;
   expiresAtMs: number;
+  /**
+   * Step W11a: present only while a **batch** is the current request. It
+   * carries step ids, titles and states — never any XDR.
+   */
+  batch?: ApprovalBatchSnapshot;
 }
 
 /** What `approval_status` returns, including why a request was denied. */
@@ -414,7 +581,9 @@ export type ApprovalErrorKind =
   | "unavailable"
   | "timeout"
   | "expired"
-  | "notPending";
+  | "notPending"
+  // Step W13a: the wallet session is locked, so the approval path is refused.
+  | "locked";
 
 /**
  * The typed rejection shape of the approval commands. `approval_authorize` and
@@ -424,6 +593,42 @@ export type ApprovalErrorKind =
 export interface ApprovalCommandError {
   kind: ApprovalErrorKind;
   message: string;
+}
+
+/* ------------------------------------------------------------------ *
+ * 8b. Approval batch (step W11a)
+ *
+ * Enabling auto-pay is several transactions (`set_rule` → `set_executor` →
+ * `set_alias`…). A batch lets ONE Touch ID authorise them together, while each
+ * step keeps its own digest binding and is released once by `wallet_sign(id)`.
+ * ------------------------------------------------------------------ */
+
+/** One step of an approval batch: id, title and state only — never any XDR. */
+export interface ApprovalBatchStep {
+  id: string;
+  title: string;
+  state: ApprovalState;
+}
+
+/** The batch half of an `ApprovalSnapshot`. */
+export interface ApprovalBatchSnapshot {
+  batchId: string;
+  title: string;
+  count: number;
+  state: ApprovalState;
+  steps: ApprovalBatchStep[];
+  expiresAtMs: number;
+}
+
+/** `approval_begin_batch` result: the batch id and each step's request id. */
+export interface ApprovalBatchBegin {
+  batchId: string;
+  ids: string[];
+}
+
+/** `approval_authorize_batch` result: every step id the one prompt authorised. */
+export interface ApprovalBatchAuthorized {
+  authorized: string[];
 }
 
 /* ------------------------------------------------------------------ *

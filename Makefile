@@ -1,4 +1,4 @@
-# Polaris — developer entry points.
+# Autonomy — developer entry points.
 #
 # Everything long-running goes through `caffeinate -i` (AGENTS.md §4); the heavy
 # lifting lives in scripts/ so the same commands work from any shell.
@@ -7,7 +7,7 @@ SHELL := /bin/bash
 
 APP_MANIFEST := app/src-tauri/Cargo.toml
 CHAIN_MANIFEST := contracts/Cargo.toml
-APP_BIN := app/src-tauri/target/release/bundle/macos/Polaris.app/Contents/MacOS/polaris-app
+APP_BIN := app/src-tauri/target/release/bundle/macos/Autonomy.app/Contents/MacOS/polaris-app
 
 .PHONY: help setup icons check check-chain check-contracts dev agent build run build-contracts contracts-test clean
 

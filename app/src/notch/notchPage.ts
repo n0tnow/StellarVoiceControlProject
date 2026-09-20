@@ -1,7 +1,7 @@
 /**
  * The notch panel's page routing — the seam voice commands will later trigger.
  *
- * The panel has four pages (History / Tasks / Rules / Wallet). Which page is
+ * The panel has six pages (History / Tasks / Rules / Wallet / Trade / Settings). Which page is
  * shown is a single string; today only the in-panel nav calls
  * [`useNotchPage`]'s setter, but the follow-up voice-wiring task only needs to
  * call `setNotchPage("history")` (from "geçmişi aç" etc.) — nothing else about
@@ -12,10 +12,10 @@
  * `shellState.ts` is split out of `useShellState.ts`.
  */
 
-/** The four panel pages. `"history"` is the default when the panel opens. */
-export type NotchPage = "history" | "tasks" | "rules" | "wallet";
+/** The six panel pages. `"history"` is the default when the panel opens. */
+export type NotchPage = "history" | "tasks" | "rules" | "wallet" | "trade" | "settings";
 
-export const NOTCH_PAGES: readonly NotchPage[] = ["history", "tasks", "rules", "wallet"];
+export const NOTCH_PAGES: readonly NotchPage[] = ["history", "tasks", "rules", "wallet", "trade", "settings"];
 
 export const DEFAULT_NOTCH_PAGE: NotchPage = "history";
 

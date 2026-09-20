@@ -56,6 +56,19 @@ export interface TurnLogEntry {
   /** Public transaction hash; never the XDR. */
   txHash: string | null;
   explorerUrl: string | null;
+  /**
+   * History-view metadata, all optional and additive (older rows simply lack it).
+   * `kind`/`route`/`approvalMode`/`asset`/`amount`/`counterparty` feed the History
+   * page's icon, filters and signed amount; `counterpartyNickname` is the contact
+   * name a value-moving turn resolved. None of these is secret.
+   */
+  kind?: string;
+  route?: string;
+  approvalMode?: string;
+  asset?: string;
+  amount?: string;
+  counterparty?: string;
+  counterpartyNickname?: string;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -80,6 +93,15 @@ function toEntry(value: unknown): TurnLogEntry | null {
   if (typeof id !== "string" || id.length === 0) return null;
   if (typeof timestampMs !== "number" || !Number.isFinite(timestampMs)) return null;
   if (typeof transcript !== "string") return null;
+  // Optional metadata keys are only added when present, so a parsed entry is
+  // deep-equal to the original when it carried none of them.
+  const kind = asOptionalText(value.kind);
+  const route = asOptionalText(value.route);
+  const approvalMode = asOptionalText(value.approvalMode);
+  const asset = asOptionalText(value.asset);
+  const amount = asOptionalText(value.amount);
+  const counterparty = asOptionalText(value.counterparty);
+  const counterpartyNickname = asOptionalText(value.counterpartyNickname);
   return {
     id,
     timestampMs,
@@ -88,6 +110,13 @@ function toEntry(value: unknown): TurnLogEntry | null {
     outcome: asText(outcome, MAX_OUTCOME) || "in_progress",
     txHash: asOptionalText(value.txHash),
     explorerUrl: asOptionalText(value.explorerUrl),
+    ...(kind !== null ? { kind } : {}),
+    ...(route !== null ? { route } : {}),
+    ...(approvalMode !== null ? { approvalMode } : {}),
+    ...(asset !== null ? { asset } : {}),
+    ...(amount !== null ? { amount } : {}),
+    ...(counterparty !== null ? { counterparty } : {}),
+    ...(counterpartyNickname !== null ? { counterpartyNickname } : {}),
   };
 }
 
@@ -222,6 +251,39 @@ export function recordTurnOutcome(
     outcome: outcome.label.slice(0, MAX_OUTCOME),
     txHash: outcome.txHash ?? entry.txHash,
     explorerUrl: outcome.explorerUrl ?? entry.explorerUrl,
+  }));
+}
+
+/** The optional History-view metadata one turn may carry. */
+export interface TurnLogMeta {
+  kind?: string;
+  route?: string;
+  approvalMode?: string;
+  asset?: string;
+  amount?: string;
+  counterparty?: string;
+  counterpartyNickname?: string;
+}
+
+/**
+ * Records the History-view metadata (kind/route/approval/asset/amount/
+ * counterparty) on a turn. Additive: fields already present are not cleared by
+ * an omitted one, so the flows can patch metadata as they learn it.
+ */
+export function recordTurnMeta(id: string, meta: TurnLogMeta): void {
+  const text = (value: string | undefined): string | undefined =>
+    value && value.length > 0 ? value.slice(0, MAX_OUTCOME) : undefined;
+  updateTurn(id, (entry) => ({
+    ...entry,
+    ...(text(meta.kind) !== undefined ? { kind: text(meta.kind) } : {}),
+    ...(text(meta.route) !== undefined ? { route: text(meta.route) } : {}),
+    ...(text(meta.approvalMode) !== undefined ? { approvalMode: text(meta.approvalMode) } : {}),
+    ...(text(meta.asset) !== undefined ? { asset: text(meta.asset) } : {}),
+    ...(text(meta.amount) !== undefined ? { amount: text(meta.amount) } : {}),
+    ...(text(meta.counterparty) !== undefined ? { counterparty: text(meta.counterparty) } : {}),
+    ...(text(meta.counterpartyNickname) !== undefined
+      ? { counterpartyNickname: text(meta.counterpartyNickname) }
+      : {}),
   }));
 }
 

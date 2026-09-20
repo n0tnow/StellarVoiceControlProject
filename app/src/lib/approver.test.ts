@@ -61,7 +61,7 @@ function mockInvoke(handler: (command: string, args?: Record<string, unknown>) =
   return { invoke, calls };
 }
 
-/** Lets queued microtasks run, so async setup (begin/open/first poll) completes. */
+/** Lets queued microtasks run, so async setup (begin/first poll) completes. */
 async function flush(): Promise<void> {
   for (let i = 0; i < 10; i += 1) await Promise.resolve();
 }
@@ -93,12 +93,8 @@ test("approved: the gate reports authorized and the approver approves", async ()
   );
   const events = fakeEvents();
   const timers = fakeTimers();
-  const opened: string[] = [];
   const deps: ApproverDeps = {
     invoke,
-    open: async (name) => {
-      opened.push(name);
-    },
     subscribe: events.subscribe,
     ...timers,
   };
@@ -107,7 +103,6 @@ test("approved: the gate reports authorized and the approver approves", async ()
 
   assert.equal(decision.approved, true);
   assert.equal(decision.approvalId, "apr_1");
-  assert.deepEqual(opened, ["approval"]);
   // The begin carried the exact blob and hash the card will show.
   const begin = calls.find((call) => call.command === "approval_begin");
   assert.deepEqual(begin?.args, {
@@ -129,7 +124,6 @@ test("denied: the gate reports denied and the approver refuses", async () => {
   const timers = fakeTimers();
   const decision = await createTouchIdApprover({
     invoke,
-    open: async () => {},
     subscribe: events.subscribe,
     ...timers,
   }).approve(REQUEST);
@@ -146,7 +140,6 @@ test("expired: the gate reports expired and the approver refuses", async () => {
   const timers = fakeTimers();
   const decision = await createTouchIdApprover({
     invoke,
-    open: async () => {},
     subscribe: events.subscribe,
     ...timers,
   }).approve(REQUEST);
@@ -163,35 +156,12 @@ test("timeout: no terminal status before the deadline is a fail-closed refusal",
   const timers = fakeTimers();
   const promise = createTouchIdApprover({
     invoke,
-    open: async () => {},
     subscribe: events.subscribe,
     ...timers,
   }).approve(REQUEST);
 
-  // Let begin/open/first-poll run, then push past the 130 s deadline; the
-  // pending answer never arrives.
-  await flush();
-  timers.advance(131_000);
-  const decision = await promise;
-
-  assert.equal(decision.approved, false);
-  assert.match(decision.reason ?? "", /timed out/);
-});
-
-test("a hanging open cannot unbind the wait: the deadline still fires", async () => {
-  const { invoke } = mockInvoke((command) =>
-    command === "approval_begin" ? "apr_1" : status("pending"),
-  );
-  const events = fakeEvents();
-  const timers = fakeTimers();
-  const promise = createTouchIdApprover({
-    invoke,
-    // The card opener never resolves; the approval must not wait on it.
-    open: () => new Promise<never>(() => {}),
-    subscribe: events.subscribe,
-    ...timers,
-  }).approve(REQUEST);
-
+  // Let begin/first-poll run, then push past the 130 s deadline; the pending
+  // answer never arrives.
   await flush();
   timers.advance(131_000);
   const decision = await promise;
@@ -210,7 +180,6 @@ test("approval takes 90 s: the gate still decides, the deadline does not fire", 
   const timers = fakeTimers();
   const promise = createTouchIdApprover({
     invoke,
-    open: async () => {},
     subscribe: events.subscribe,
     ...timers,
   }).approve(REQUEST);
@@ -237,8 +206,7 @@ test("begin failure: a rejected approval_begin propagates (fail closed)", async 
   await assert.rejects(
     createTouchIdApprover({
       invoke,
-      open: async () => {},
-      subscribe: events.subscribe,
+        subscribe: events.subscribe,
       ...timers,
     }).approve(REQUEST),
     (error: unknown) => {
@@ -263,7 +231,6 @@ test("event-before-subscribe race: a decision that lands before the poll is stil
   const timers = fakeTimers();
   const promise = createTouchIdApprover({
     invoke,
-    open: async () => {},
     subscribe: events.subscribe,
     ...timers,
   }).approve(REQUEST);
@@ -287,7 +254,6 @@ test("an approval_result event for another payload is ignored", async () => {
   const timers = fakeTimers();
   const promise = createTouchIdApprover({
     invoke,
-    open: async () => {},
     subscribe: events.subscribe,
     ...timers,
   }).approve(REQUEST);
@@ -314,7 +280,6 @@ test("a matching event triggers a gate re-read that decides", async () => {
   const timers = fakeTimers();
   const promise = createTouchIdApprover({
     invoke,
-    open: async () => {},
     subscribe: events.subscribe,
     ...timers,
   }).approve(REQUEST);
@@ -334,28 +299,9 @@ test("a subscription failure leaves the poll to decide", async () => {
   const timers = fakeTimers();
   const decision = await createTouchIdApprover({
     invoke,
-    open: async () => {},
     subscribe: async () => {
       throw new Error("no event bus");
     },
-    ...timers,
-  }).approve(REQUEST);
-
-  assert.equal(decision.approved, true);
-});
-
-test("a failed open does not stop the wait", async () => {
-  const { invoke } = mockInvoke((command) =>
-    command === "approval_begin" ? "apr_1" : status("authorized"),
-  );
-  const events = fakeEvents();
-  const timers = fakeTimers();
-  const decision = await createTouchIdApprover({
-    invoke,
-    open: async () => {
-      throw new Error("window failed");
-    },
-    subscribe: events.subscribe,
     ...timers,
   }).approve(REQUEST);
 

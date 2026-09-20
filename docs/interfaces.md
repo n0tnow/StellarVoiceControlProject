@@ -286,8 +286,8 @@ export interface ApprovalCommandError { kind: ApprovalErrorKind; message: string
   `unavailable`, elapsed TTL → `expired`, unknown/wrong-state request →
   `notPending`, everything else → `failed` (fail-closed).
 - `take_authorized(id)` is **in-process Rust only** (`pub(crate)`) and is never a
-  Tauri command; the Freighter bridge (W4) calls it to release the XDR. It
-  returns the payload once, then marks the request `consumed`.
+  Tauri command; the embedded wallet (`wallet_sign`, W10) calls it to release the
+  XDR. It returns the payload once, then marks the request `consumed`.
 - **`wallet_only` is unreachable from the webview.** `approval_begin` rejects it
   unconditionally; the only way to create such a request is the in-process
   `begin_wallet_only`, and the webview `approval_authorize` refuses to authorize

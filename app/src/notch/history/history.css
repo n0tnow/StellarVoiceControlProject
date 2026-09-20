@@ -1,0 +1,317 @@
+/*
+ * History page styles (HISTORY-UI). Kept next to the page's modules so the
+ * shared `index.css` is not touched; the notch's own colours, radii and motion
+ * are reused (accent = --color-notch-accent).
+ */
+
+.history-page .history-toolbar {
+  gap: 2px;
+}
+
+/* --- search + filter chips --- */
+.history-search {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 10px;
+  border-radius: 9px;
+  background: #ffffff0d;
+  color: var(--color-notch-muted);
+}
+
+.history-search svg {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+}
+
+.history-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-notch-text);
+  font: inherit;
+  font-size: 12px;
+  outline: none;
+}
+
+.history-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.history-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  border: 1px solid #ffffff14;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--color-notch-muted);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease, border-color 140ms ease;
+}
+
+.history-filter:hover {
+  color: var(--color-notch-text);
+  background: #ffffff0d;
+}
+
+.history-filter.is-active {
+  border-color: var(--color-notch-accent);
+  color: var(--color-notch-text);
+  background: color-mix(in srgb, var(--color-notch-accent) 18%, transparent);
+}
+
+.history-filter-count {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.7;
+}
+
+/* --- timeline --- */
+.history-day + .history-day {
+  margin-top: 6px;
+}
+
+.history-day-header {
+  position: sticky;
+  top: -12px;
+  z-index: 1;
+  margin: 0 0 4px;
+  padding: 4px 2px 5px;
+  background: linear-gradient(to bottom, #000000f2 70%, transparent);
+  color: var(--color-notch-muted);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.history-kind {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  margin-top: 1px;
+  color: var(--color-notch-muted);
+}
+
+.history-kind.is-sent,
+.history-kind.is-anchor_withdraw {
+  color: var(--color-polaris-danger);
+}
+
+.history-kind.is-received,
+.history-kind.is-anchor_deposit {
+  color: var(--color-polaris-ok);
+}
+
+.history-kind.is-p2p {
+  color: var(--color-notch-accent);
+}
+
+.history-page .history-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.history-nick {
+  overflow: hidden;
+  color: var(--color-notch-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-amount {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-notch-muted);
+}
+
+.history-amount.is-out {
+  color: #fca5a5;
+}
+
+.history-amount.is-in {
+  color: var(--color-polaris-ok);
+}
+
+/* --- status chip --- */
+.history-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: #ffffff12;
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  color: var(--color-notch-muted);
+}
+
+.history-chip svg {
+  width: 10px;
+  height: 10px;
+}
+
+.history-chip.is-confirmed {
+  color: var(--color-polaris-ok);
+  background: color-mix(in srgb, var(--color-polaris-ok) 15%, transparent);
+}
+
+.history-chip.is-pending {
+  color: var(--color-polaris-warn);
+  background: color-mix(in srgb, var(--color-polaris-warn) 15%, transparent);
+}
+
+.history-chip.is-pending svg {
+  animation: page-spin 1.2s linear infinite;
+}
+
+.history-chip.is-failed {
+  color: var(--color-polaris-danger);
+  background: color-mix(in srgb, var(--color-polaris-danger) 15%, transparent);
+}
+
+.history-chip.is-cancelled {
+  color: var(--color-notch-muted);
+}
+
+.history-chip.is-auto_approved {
+  color: var(--color-notch-accent);
+  background: color-mix(in srgb, var(--color-notch-accent) 15%, transparent);
+}
+
+/* --- detail drawer --- */
+.history-detail-line {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 6px;
+}
+
+.history-detail-line .history-hash {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-detail-label {
+  margin: 0 0 1px;
+  color: var(--color-notch-muted);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.history-detail-value {
+  margin: 0;
+  color: var(--color-notch-text);
+}
+
+.history-facts {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 10px;
+  margin: 6px 0;
+}
+
+.history-fact dt {
+  color: var(--color-notch-muted);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.history-fact dd {
+  margin: 0;
+  font-size: 11.5px;
+}
+
+.history-voice + .history-voice,
+.history-facts + .history-voice {
+  margin-top: 6px;
+}
+
+/* --- states --- */
+.history-skeleton {
+  height: 40px;
+  border-radius: 10px;
+  background: linear-gradient(90deg, #ffffff08 25%, #ffffff14 37%, #ffffff08 63%);
+  background-size: 400% 100%;
+  animation: history-shimmer 1.4s ease infinite;
+}
+
+@keyframes history-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: 0 0;
+  }
+}
+
+.history-empty {
+  padding: 18px 10px;
+  text-align: center;
+  color: var(--color-notch-muted);
+}
+
+.history-empty-hint {
+  margin-top: 4px;
+  font-size: 11.5px;
+}
+
+.history-notice {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 0;
+  color: var(--color-notch-muted);
+  font-size: 11.5px;
+}
+
+.history-notice svg {
+  width: 12px;
+  height: 12px;
+}
+
+.history-notice.is-error {
+  color: var(--color-polaris-danger);
+}
+
+.history-load-more {
+  align-self: center;
+  padding: 5px 14px;
+  border: 1px solid #ffffff1f;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--color-notch-text);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.history-load-more:hover:not(:disabled) {
+  background: #ffffff0d;
+}
+
+.history-load-more:disabled {
+  color: var(--color-notch-muted);
+  cursor: default;
+}

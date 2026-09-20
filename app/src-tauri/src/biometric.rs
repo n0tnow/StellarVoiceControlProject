@@ -1,9 +1,9 @@
 //! The macOS device-owner authentication used by the approval gate (step W3).
 //!
-//! Polaris is a wallet whose keys live in the user's Freighter wallet, not in
-//! the app. The only thing the Touch ID prompt has to prove is that **a human is
-//! present at this Mac right now** before the gate releases an unsigned XDR to
-//! the bridge. That is exactly the property `LAContext` with
+//! Polaris is a wallet whose keys live in the app's embedded wallet, protected
+//! by the OS keychain. The only thing the Touch ID prompt has to prove is that
+//! **a human is present at this Mac right now** before the gate releases an
+//! unsigned XDR to the signer. That is exactly the property `LAContext` with
 //! [`LAPolicy::DeviceOwnerAuthentication`] provides: Touch ID first, and the
 //! device password as the documented fallback when no biometrics are available
 //! (lid closed, no finger enrolled, Touch ID locked out). The fallback is a
@@ -49,7 +49,7 @@ pub const DEFAULT_REASON: &str = "Approve this action";
 
 /// The reason the Debug panel's self-test passes to the real prompt. The W3
 /// debug contract requires the string to state plainly that no funds move.
-pub const SELFTEST_REASON: &str = "Polaris self-test — no funds are moved";
+pub const SELFTEST_REASON: &str = "Autonomy self-test — no funds are moved";
 
 /// Why an authentication did not succeed. Kept close to how the UI wants to
 /// talk about it: cancelled is the user's choice, the rest are failures.
