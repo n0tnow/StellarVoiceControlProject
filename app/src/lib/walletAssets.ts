@@ -194,6 +194,50 @@ export function accountStatusLabel(result: HorizonAccountResult): "Funded" | "No
 }
 
 /* ------------------------------------------------------------------ *
+ * "Add asset" catalog (task W18)
+ * ------------------------------------------------------------------ */
+
+/**
+ * The assets the Wallet's "Add asset" list offers. Display-only: the issuer
+ * pins (Circle's USDC, the SDF test anchor's SRT) live in `@polaris/stellar`.
+ */
+export const TRUSTLINE_ASSETS: readonly { code: string; label: string }[] = [
+  { code: "USDC", label: "USDC — Circle testnet" },
+  { code: "SRT", label: "SRT — SDF test anchor" },
+];
+
+/** Circle's testnet USDC faucet; opened through the allow-listed `open_external`. */
+export const USDC_FAUCET_URL = "https://faucet.circle.com/";
+
+/** The one-line hint shown once USDC is enabled on the account. */
+export const USDC_FAUCET_HINT =
+  "Get test USDC: copy your address and request it at faucet.circle.com";
+
+/** One asset row on the wallet: its code/label and whether the trustline exists. */
+export interface TrustlineRow {
+  code: string;
+  label: string;
+  added: boolean;
+}
+
+/** True when a credit trustline for `code` is already present. */
+export function hasTrustline(detail: HorizonAccountDetail | null, code: string): boolean {
+  if (!detail) return false;
+  const wanted = code.trim().toUpperCase();
+  return detail.balances.some(
+    (balance) => !balance.native && balance.code.toUpperCase() === wanted,
+  );
+}
+
+/** The catalog annotated with the account's current trustline state. */
+export function trustlineRows(detail: HorizonAccountDetail | null): TrustlineRow[] {
+  return TRUSTLINE_ASSETS.map((asset) => ({
+    ...asset,
+    added: hasTrustline(detail, asset.code),
+  }));
+}
+
+/* ------------------------------------------------------------------ *
  * Testnet funding (task W15b)
  * ------------------------------------------------------------------ */
 

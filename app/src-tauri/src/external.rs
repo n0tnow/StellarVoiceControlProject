@@ -1,13 +1,17 @@
-//! Opens a block-explorer link in the default browser.
+//! Opens an allow-listed external link in the default browser.
 //!
 //! The one place the app hands a URL to the OS. The allow-list is a fixed set of
-//! testnet explorer prefixes, so a compromised webview cannot make the shell open
-//! an arbitrary page or a non-http scheme.
+//! testnet explorer prefixes plus Circle's test USDC faucet, so a compromised
+//! webview cannot make the shell open an arbitrary page or a non-http scheme.
 
 use std::process::Command;
 
 /// The only URL prefixes the shell will open.
-const ALLOWED_PREFIXES: &[&str] = &["https://stellar.expert/explorer/testnet/"];
+const ALLOWED_PREFIXES: &[&str] = &[
+    "https://stellar.expert/explorer/testnet/",
+    // Circle's testnet USDC faucet, linked once the wallet trusts USDC.
+    "https://faucet.circle.com/",
+];
 
 /// The longest URL accepted (an account or transaction link is well under this).
 const MAX_URL_LEN: usize = 200;
@@ -47,10 +51,17 @@ mod tests {
     }
 
     #[test]
+    fn the_circle_usdc_faucet_is_allowed() {
+        assert!(is_allowed("https://faucet.circle.com/"));
+    }
+
+    #[test]
     fn everything_else_is_refused() {
         assert!(!is_allowed("http://stellar.expert/explorer/testnet/tx/abc"));
         assert!(!is_allowed("https://stellar.expert/explorer/public/tx/abc"));
         assert!(!is_allowed("https://evil.example/https://stellar.expert/explorer/testnet/"));
+        assert!(!is_allowed("https://faucet.circle.com.evil.example/"));
+        assert!(!is_allowed("http://faucet.circle.com/"));
         assert!(!is_allowed("file:///etc/passwd"));
         assert!(!is_allowed("https://stellar.expert/explorer/testnet/tx/a b"));
         assert!(!is_allowed("https://stellar.expert/explorer/testnet/tx/a\nb"));

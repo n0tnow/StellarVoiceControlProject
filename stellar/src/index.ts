@@ -52,15 +52,21 @@ export { sendPayment } from "./payments/index.ts";
 export { payloadHashOf } from "./payments/index.ts";
 export {
   configurePayments,
+  createAddTrustline,
   defaultAssetRegistry,
   defaultPaymentDeps,
+  defaultTrustlineAssets,
   parseAliasBook,
+  resolveTrustlineAsset,
   toSdkAsset,
   PaymentRefusal,
+  TrustlineRefusal,
+  TESTNET_SRT_ISSUER,
   type AliasBook,
   type AssetRegistry,
   type AssetSpec,
   type PaymentDeps,
+  type TrustlineDeps,
 } from "./payments/index.ts";
 export const swap = todo("swap");
 export const guardPolicy = todo("guardPolicy");

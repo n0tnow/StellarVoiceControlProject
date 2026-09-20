@@ -20,6 +20,7 @@ import { shortAddress } from "@/lib/address";
 import committedAliases from "../../../../stellar/config/aliases.json";
 
 import { AccountsSection, type AddAccountMode } from "./AccountsSection";
+import { AddAsset } from "./AddAsset";
 import { CreateWallet } from "./CreateWallet";
 import { ImportWallet } from "./ImportWallet";
 import { QrCode } from "./QrCode";
@@ -171,6 +172,7 @@ export function WalletDashboard({
                 ))}
               </div>
             ) : null}
+            <AddAsset detail={wallet.accountDetail} address={owner} onAdded={wallet.refresh} />
           </div>
         ) : null}
       </section>
