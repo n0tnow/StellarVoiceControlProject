@@ -120,3 +120,58 @@ export async function ensureCustomer(
   );
   return info;
 }
+
+/**
+ * Per-transaction SEP-12 (SEP-6 `pending_customer_info_update`). The anchor asks
+ * `GET /customer?transaction_id=` for fields specific to ONE order; we send back
+ * ONLY the requested fields the caller supplied (clearly-fake test data for the
+ * SDF test anchor) and bind them with `transaction_id`. Any other requested field
+ * stops with `KycRequiredError` — we never invent personal data.
+ */
+export async function ensureTransactionCustomer(
+  ctx: AnchorContext,
+  toml: AnchorToml,
+  token: AuthToken,
+  transactionId: string,
+  fields: Record<string, string> = {},
+): Promise<CustomerInfo> {
+  const server = kycServer(toml);
+  let info = await getCustomer(ctx, toml, token, { transactionId });
+  let sent = false;
+  // The anchor can ask for more fields in several rounds; keep supplying what it
+  // requests and we know, up to a small bound (never spins on an unmet field).
+  for (let round = 0; round < 5 && info.status !== "ACCEPTED"; round++) {
+    const requested = info.missingFields;
+    const unknown = requested.filter((f) => !(f in fields));
+    if (unknown.length > 0) {
+      throw new KycRequiredError(
+        `anchor KYC for order ${transactionId} needs customer fields this project does not supply: ${unknown.join(", ")}`,
+        info.status,
+        unknown,
+      );
+    }
+    const provided: Record<string, string> = {};
+    for (const f of requested) provided[f] = fields[f] as string;
+    await requestJson(ctx, `${server}/customer`, {
+      method: "PUT",
+      bearer: token.jwt,
+      json: { account: token.account, transaction_id: transactionId, ...provided },
+    });
+    sent = true;
+    info = await getCustomer(ctx, toml, token, { transactionId });
+  }
+  if (info.status !== "ACCEPTED") {
+    throw new KycRequiredError(
+      `anchor KYC for order ${transactionId} is ${info.status}${info.missingFields.length ? `; needs: ${info.missingFields.join(", ")}` : ""}`,
+      info.status,
+      info.missingFields,
+    );
+  }
+  if (!sent) return info;
+  ctx.explain.record(
+    "sep12.transaction",
+    `SEP-12: supplied the per-order customer details the anchor asked for on order ${transactionId} (clearly-fake test data only).`,
+    "A single transfer can need extra identity data beyond the account-level KYC; SEP-12 is where that per-order information is submitted.",
+  );
+  return info;
+}

@@ -17,7 +17,7 @@ export {
   requestChallenge,
   validateChallenge,
 } from "./sep10.ts";
-export { ensureCustomer, getCustomer, KycRequiredError, type CustomerInfo, type CustomerStatus } from "./sep12.ts";
+export { ensureCustomer, ensureTransactionCustomer, getCustomer, KycRequiredError, type CustomerInfo, type CustomerStatus } from "./sep12.ts";
 export { getPrice, QuoteError, type PriceRequest } from "./sep38.ts";
 export {
   buildWithdrawPayment,

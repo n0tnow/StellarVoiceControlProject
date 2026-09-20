@@ -156,12 +156,12 @@ On mainnet the zero-XLM user needs sponsored reserves / fee bumps instead of Fri
   flips it to `ACCEPTED`.
 * SEP-10 challenges carry a `web_auth_domain` operation; our validation requires it.
 
-`testanchor.stellar.org` (SDF) also works as a second home domain for SEP-1/10/6
-discovery and info (assets SRT/USDC/native, amounts 1-10). Its SEP-12 customer is
-auto-filled with **clearly-fake demo data** (`Demo` / `User` / `demo@polaris.invalid`,
-`SDF_DEMO_CUSTOMER` in `scenarios.ts`); any other required field stops with
-`KycRequiredError` and is never invented. Live endpoints, statuses, timings and
-gotchas are documented in `docs/anchor-sdf-flow.md`.
+`testanchor.stellar.org` (SDF) is a full second home domain: SEP-1/10/6, SEP-12 and
+SEP-38, assets SRT/USDC/native (amounts 1-10, quotes in USD). Its SEP-12 uses ONLY
+**clearly-fake TEST data** (`SDF_DEMO_CUSTOMER` in `scenarios.ts`): the base customer
+plus the per-transaction identity/bank fields the anchor requests on an order; any
+field we do not know still stops with `KycRequiredError`. The full deposit AND
+withdraw loop is verified live (USD<->SRT); see `docs/anchor-sdf-flow.md`.
 
 SEP-10 challenge validity is bounded by the challenge's **own** window
 (`maxTime - minTime`, `MAX_CHALLENGE_WINDOW_SECONDS`), not by `maxTime - now`.
@@ -223,9 +223,9 @@ npm run anchor:check -w @polaris/stellar -- --live --home-domain testanchor.stel
 | | Primary — TR path | Fallback — NON-TR test scenario |
 |---|---|---|
 | Home domain | `tr-mock-anchor.fly.dev` | `testanchor.stellar.org` |
-| Label (travels with every result) | "TR path — SEP-6 only (SEP-24 prohibited in Turkey)" | "NON-TR test scenario (Stellar SDF test anchor) — discovery + SEP-10 login + SEP-6 info + SEP-12 demo KYC; deposit stops at the anchor's per-transaction identity fields" |
-| What it proves | The Turkish path's SEP-1 discovery, SEP-6 `/info` and SEP-10 login work; a full demo also does SEP-6 deposit/withdraw | A second, independent anchor's SEP-1 discovery, SEP-6 `/info` and SEP-10 login work, plus SEP-12 base KYC with demo data |
-| What it does NOT prove | Nothing about a real Turkish anchor (this is a mock); no mainnet route | Nothing about the Turkish path. It is a comparison only. A deposit stops at the anchor's per-transaction identity KYC (address, birth_date, id_type, id_country_code, id_issue_date, id_expiration_date, id_number), which is never fabricated; SDF also quotes USD/CAD, not TRY |
+| Label (travels with every result) | "TR path — SEP-6 only (SEP-24 prohibited in Turkey)" | "NON-TR test scenario (Stellar SDF test anchor) — full SEP-6 deposit/withdraw loop with clearly-fake SEP-12 demo KYC (USD/SRT)" |
+| What it proves | The Turkish path's SEP-1 discovery, SEP-6 `/info` and SEP-10 login work; a full demo also does SEP-6 deposit/withdraw | A second, independent anchor's SEP-1 discovery, SEP-6 `/info`, SEP-10 login, SEP-12 KYC and a full USD<->SRT deposit/withdraw loop, all with clearly-fake test data |
+| What it does NOT prove | Nothing about a real Turkish anchor (this is a mock); no mainnet route | Nothing about the Turkish path. It is a comparison only. It uses the anchor's requested per-transaction identity fields as clearly-fake TEST data; SDF also quotes USD/CAD, not TRY |
 | SEP-24 | Prohibited (MASAK) and never used | Never used |
 
 Honest limits: the fallback is **not** a Turkish solution and must never be
