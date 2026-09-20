@@ -178,10 +178,10 @@
 - [ ] **V1. (PROPOSED)** Merge order of the `interfaces/src/index.ts` branches: `a0` → `a1-stt` → `a1-ondevice` → `a2` → `a3` → `docs/rule-types-and-decisions` (freeze the seam after `a0`)
 - [ ] **V2.** Merge A0 (+ A1): `make dev` runs, hold hotkey → `transcript` event
 - [ ] **V3.** Text-input dev path calling `runAgentTurn(text)` → `Intent` in `AgentTrace`
-- [ ] **V4.** Approval card component renders the summary + Approve/Deny
+- [x] **V4.** Approval card component renders the summary + Approve/Deny — (2026-09-20, verified on `main` in `feat/touchid-approval`) `app/src/panels/ApprovalPanel.tsx` + `app/src/panels/approval/ApprovalCard.tsx` render the decoded summary lines, hash fingerprint, mode label, countdown, Approve (Touch ID)/Deny; demo fixtures excluded from real mode — `backlog/touchid-approval.md`
 - [ ] **V5.** Submit path: sign in TS, `submitSignedTx(signedXdr, unsignedXdr)`, emit `tx_submitted`
 - [ ] **V6.** Replace text input with the merged voice path
-- [ ] **V7. (stretch)** Touch ID (LocalAuthentication) behind the approval gate
+- [x] **V7. (stretch)** Touch ID (LocalAuthentication) behind the approval gate — (2026-09-20, verified on `main` in `feat/touchid-approval`) `biometric.rs` (`LAContext`, password fallback) + the `approval_*` gate commands; cargo 317 green; **manual on-device Touch ID verification still pending** — `backlog/touchid-approval.md`
 - [x] **F2.** Real assistant system prompt: `capabilities.ts` (role/behaviour + tool-registry capability list + config account table + few-shot examples), pure `accountRefs.ts` normalisation before the model and at validation, `app/src/lib/agent.ts` config wiring, live `npm run e2e:prompt` eval (31/31 = 100%) — `backlog/f2-assistant-prompt.md`
 - [x] (2026-09-20, branch `feat/t1-asset-defaults`) **T1-defaults.** `send_payment` asks instead of defaulting a missing asset, read-only `get_balance` with a deterministic spoken sentence (`toSpeech` in the loop, Horizon reader injected from `stellar_config`), PGUSD added to the chain asset registry — `backlog/t1-asset-defaults.md`
 - [x] (2026-09-20, branch `feat/nw1-wallet-page`) **NW1.** Notch Wallet page on real data: `notch/data/useWalletData.ts` (stellar_config + Horizon balances/payments + alias book + session `tx_submitted` latest tx), mock import removed from `WalletPage.tsx`; check/tests (301 pass)/build green — `backlog/nw-wallet.md`

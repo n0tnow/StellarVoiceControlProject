@@ -895,3 +895,11 @@
 - **BUG-2:** the voice-strip transition (`width` + `border-radius`, 470 ms, `cubic-bezier(0.32,0.72,0,1)`, `will-change: width`, ear fade, no height tween) is taken from `main` verbatim; the new `panel`/`prompt` states add the height tween in their own rule.
 - **Pointer:** `backlog/2026-09-20-notch-shell-port.md`; `app/src-tauri/src/notch.rs`; `app/src/index.css`.
 - **Status:** decided (BUG-1 "after" recording still pending — machine screen locked mid-verification)
+
+## 2026-09-20 — App-Side USD Approval Threshold (Local, Stricter-Only)
+- **Idea:** The owner can set a local `approvalThresholdUsd` in the Settings panel; a USD-stablecoin payment **strictly below** it skips the Touch ID card. Default `0` = always ask (D10).
+- **Finding:** The Touch ID gate + approval card + sign/submit pipeline had already landed on `main` via the wallet/UI integration (#25); the only missing piece of the approval feature was this local preference. Implemented as a pure policy (`approvalPolicy.ts`) over a fail-closed localStorage store (`preferences.ts`), wrapped around the gate approver (`thresholdApprover.ts`).
+- **Precedence (documented in code):** the chain's `Approval card required: yes` always wins (D10c — app can only be stricter); non-USD assets (XLM) have no price oracle and always ask; *at* the threshold still asks (stricter than D10b's "at or below").
+- **Decision:** No new freestanding `authenticate_touch_id` Rust command — the existing `approval_authorize(id)` binds the gesture to one hash-verified XDR, which an unbound yes/no oracle never could.
+- **Pointer:** `backlog/touchid-approval.md`; `app/src/lib/approvalPolicy.ts`.
+- **Status:** decided

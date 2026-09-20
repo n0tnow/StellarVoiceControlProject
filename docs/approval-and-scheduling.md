@@ -77,6 +77,15 @@ app preference may refuse or ask for more than the chain allows (e.g. an app-sid
 it must never allow something the chain rule forbids. The chain is the last defence against a
 compromised agent.
 
+**App-side USD threshold (implemented, 2026-09-20, `feat/touchid-approval`).** The owner can set a
+local `approvalThresholdUsd` in the Settings panel; a USD-stablecoin payment (`USDC`/`PGUSD`/`USD`,
+treated 1:1 — no price oracle) **strictly below** it skips the Touch ID card entirely. The default is
+`0` = always ask (D10). The chain's own `Approval card required: yes` summary line always wins over the
+preference, and non-USD assets (e.g. XLM) always ask because their USD value is unknown. Being *at* the
+threshold still asks — deliberately stricter than D10b's "at or below". The skip is a webview-side
+convenience in front of the Rust gate; the gate itself is unchanged and fail-closed. Details and code
+pointers: `backlog/touchid-approval.md`, `app/src/lib/approvalPolicy.ts`.
+
 **Normative rule — `daily_limit` is the mandate.** The UI must present `daily_limit` as "how much the
 agent may spend per day unattended", and `auto_approve_limit` only as "how big one unattended payment
 may be". This wording comes from `contracts/DEPLOYED.md` ("What the rule actually promises").
