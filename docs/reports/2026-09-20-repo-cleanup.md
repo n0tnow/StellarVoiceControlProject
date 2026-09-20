@@ -62,18 +62,16 @@ source can only serve the repository root or `/docs`, never an arbitrary subdire
 | Repository | Pages source | Status |
 |---|---|---|
 | `fthsrbst/StellarVoiceControlProject` (fork) | GitHub Actions | **live** — <https://fthsrbst.github.io/StellarVoiceControlProject/> |
-| `n0tnow/StellarVoiceControlProject` (origin) | GitHub Actions | workflow in #44; **needs an admin** to set Settings → Pages → Source to "GitHub Actions" — `POST /repos/.../pages` returns 404 without admin |
+| `n0tnow/StellarVoiceControlProject` (origin) | GitHub Actions | **live** — <https://n0tnow.github.io/StellarVoiceControlProject/> (workflow merged in #44; the Pages source was switched to "GitHub Actions" by a repo admin, which a non-admin token cannot do — `POST /repos/.../pages` returns 404) |
 
-Verified on the live fork deployment: `/` and `/style.css` both return HTTP 200, and the
-served page renders identically to the local `python3 -m http.server` preview.
+Verified on both live deployments: `/` and `/style.css` return HTTP 200 (6433 B and 12027 B),
+and the served page renders identically to the local `python3 -m http.server` preview.
 
 ## 5. Deleted branches
 
-The 49 branches below were deleted from `origin` on 2026-09-20. Two branches were left
-in place because their pull requests were still open at the time of the cleanup:
-`chore/pages-deploy` (#44) and `docs/repo-cleanup` (#45, this report).
-
-Every branch below was deleted on 2026-09-20. "Commits ahead" counts commits
+The 49 branches below were deleted from `origin` in the first pass on 2026-09-20. Three more
+were deleted in a second pass once their pull requests landed: `chore/pages-deploy` (#44),
+`chore/release-0.2.1-signing` (#47) and `docs/repo-cleanup` (#45, this report) — 52 in total. "Commits ahead" counts commits
 not reachable from `main`; a squash-merged branch shows a non-zero count even though its
 *content* is already on `main`, which is why this table records the SHA rather than a
 merged/unmerged verdict.
@@ -153,9 +151,17 @@ scratch tags were removed:
 
 ## 7. What `main` looks like afterwards
 
-- One branch: `main`, once #44 and #45 are merged and their branches deleted.
+- One branch: `main`.
 - Three tags: `v0.1.0`, `v0.2.0`, `v0.2.1`.
 - No open pull requests. #29 and #8 were closed as superseded (see §3); #41, #32 and #31
   were merged (see §2).
-- `landing/` published to GitHub Pages through `.github/workflows/pages.yml`.
+- `landing/` published to GitHub Pages through `.github/workflows/pages.yml`, live on both
+  remotes.
 - Local `.worktrees/` removed.
+
+### Known loose end
+
+The `v0.2.1` tag points at `c56df23`, but the commit that actually sets `VERSION` to `0.2.1`
+is `52efb77` ("chore(release): 0.2.1", merged as #47 after the tag was cut). The tag is one
+release commit behind what it names. Re-pointing it is a release decision, so it was left
+alone here rather than moved silently.
