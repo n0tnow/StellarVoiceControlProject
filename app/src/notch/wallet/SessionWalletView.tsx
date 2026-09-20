@@ -122,6 +122,7 @@ export function SessionWalletView() {
           busy={busy}
           error={error}
           onUnlock={(address) => void onUnlock(address)}
+          onConnectAnother={() => setMode("import")}
         />
       </div>
     );

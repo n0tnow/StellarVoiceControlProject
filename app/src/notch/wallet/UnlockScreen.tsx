@@ -21,9 +21,18 @@ export interface UnlockScreenProps {
   busy: boolean;
   error: string | null;
   onUnlock: (address?: string) => void;
+  /** Opens the Connect-existing-wallet flow without logging in first. */
+  onConnectAnother: () => void;
 }
 
-export function UnlockScreen({ entries, activeAddress, busy, error, onUnlock }: UnlockScreenProps) {
+export function UnlockScreen({
+  entries,
+  activeAddress,
+  busy,
+  error,
+  onUnlock,
+  onConnectAnother,
+}: UnlockScreenProps) {
   const [selected, setSelected] = useState<string | null>(activeAddress ?? entries[0]?.address ?? null);
   const multiple = entries.length > 1;
 
@@ -73,6 +82,14 @@ export function UnlockScreen({ entries, activeAddress, busy, error, onUnlock }: 
         <Fingerprint aria-hidden="true" className="h-4 w-4" />
         {busy ? "Waiting for Touch ID…" : "Unlock with Touch ID"}
       </Button>
+      <button
+        type="button"
+        className="self-start text-[11px] text-[var(--color-notch-muted)] hover:text-[var(--color-notch-text)]"
+        disabled={busy}
+        onClick={onConnectAnother}
+      >
+        Use a different wallet
+      </button>
     </section>
   );
 }
