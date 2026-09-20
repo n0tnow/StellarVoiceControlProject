@@ -12,6 +12,7 @@ import { useReducer, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { walletEngine } from "@/lib/wallet";
 import {
+  CONNECT_COPY,
   initialImportState,
   parseImportIndex,
   reduceImport,
@@ -19,7 +20,7 @@ import {
   validateImportValue,
 } from "@/lib/walletFlows";
 
-import { ACTIONS, CARD, ERROR, FIELD, HINT } from "./styles";
+import { ACTIONS, CARD, ERROR, FIELD } from "./styles";
 
 export interface ImportWalletProps {
   onDone: (address: string) => void;
@@ -72,11 +73,11 @@ export function ImportWallet({ onDone, onCancel }: ImportWalletProps) {
   if (state.step === "preview") {
     return (
       <section className={CARD}>
-        <p className={HINT}>This is the account that will be imported:</p>
+        <h2 className="text-sm font-semibold">{CONNECT_COPY.previewHeading}</h2>
         <code className="wallet-key-value selectable">{state.address}</code>
         <div className={ACTIONS}>
           <Button size="sm" onClick={() => void confirm()}>
-            Confirm and store
+            {CONNECT_COPY.confirm}
           </Button>
           <Button size="sm" variant="ghost" onClick={() => dispatch({ type: "back" })}>
             Back
@@ -88,7 +89,8 @@ export function ImportWallet({ onDone, onCancel }: ImportWalletProps) {
 
   return (
     <section className={CARD}>
-      <div className={ACTIONS} role="group" aria-label="Import type">
+      <h2 className="text-sm font-semibold">{CONNECT_COPY.importHeading}</h2>
+      <div className={ACTIONS} role="group" aria-label="Connect type">
         <Button
           size="sm"
           variant={state.mode === "secret" ? "secondary" : "ghost"}

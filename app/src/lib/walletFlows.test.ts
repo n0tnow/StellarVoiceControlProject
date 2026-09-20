@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  CONNECT_COPY,
   initialCreateState,
   initialImportState,
   parseImportIndex,
@@ -97,4 +98,26 @@ test("the optional account index must be a whole number", () => {
   assert.match(validateImportIndex("1.5") ?? "", /whole number/);
   assert.equal(parseImportIndex(""), undefined);
   assert.equal(parseImportIndex("12"), 12);
+});
+
+test("connect: the secret key is the default mode and survives a reset", () => {
+  assert.equal(initialImportState.mode, "secret", "the secret-key mode must be first");
+  assert.equal(reduceImport(initialImportState, { type: "reset" }).mode, "secret");
+  assert.equal(reduceImport(initialImportState, { type: "back" }).mode, "secret");
+});
+
+test("connect: user-facing copy says Connect, never Import", () => {
+  const labels = [
+    CONNECT_COPY.screenTitle,
+    CONNECT_COPY.connectExisting,
+    CONNECT_COPY.createNew,
+    CONNECT_COPY.importHeading,
+    CONNECT_COPY.previewHeading,
+    CONNECT_COPY.confirm,
+  ];
+  for (const label of labels) {
+    assert.doesNotMatch(label, /import/i, `"${label}" must not say Import`);
+  }
+  assert.equal(CONNECT_COPY.connectExisting, "Connect existing wallet");
+  assert.equal(CONNECT_COPY.confirm, "Connect and store in Keychain");
 });
