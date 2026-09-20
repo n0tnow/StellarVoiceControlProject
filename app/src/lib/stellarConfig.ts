@@ -11,18 +11,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { StellarConfig } from "@polaris/interfaces";
 
-import { resolveWalletSigner } from "./wallet.ts";
-
 /** Reads the non-secret chain configuration from the Rust shell. */
 export async function getStellarConfig(): Promise<StellarConfig> {
   return invoke<StellarConfig>("stellar_config");
-}
-
-/**
- * The configured signer (step W10): `embedded` (the in-app wallet, the default)
- * or `freighter` (the optional browser bridge). Delegates to the one shared
- * resolver, so a failed read can never disagree with the signing path.
- */
-export async function getSigner(): Promise<"embedded" | "freighter"> {
-  return resolveWalletSigner(invoke);
 }

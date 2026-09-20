@@ -7,8 +7,7 @@
  *
  * * **SEP-10 login challenge** (a transaction with sequence number 0 that can
  *   never be applied on-chain) is signed **wallet-only**, without Touch ID, by
- *   `wallet_sign_challenge` (embedded) or `bridge_sign_challenge` (freighter).
- *   It proves key ownership and moves no funds.
+ *   `wallet_sign_challenge`. It proves key ownership and moves no funds.
  * * **Every other anchor transaction** (the USDC trustline `changeTrust`, the
  *   withdrawal payment) goes through the shared approval pipeline
  *   (`@/lib/txPipeline` → Touch ID card → the configured signer). The pipeline
@@ -31,14 +30,13 @@ import { runTx, type TxPipelineDeps, type TxRunMeta } from "./txPipeline.ts";
 import {
   defaultSigningDeps,
   isBridgeSigned,
-  resolveSigner,
   signAndSubmit,
   type BridgeOutcome,
   type SigningDeps,
   type SubmittedOutcome,
 } from "./signing.ts";
 
-/** Thrown when the Rust `bridge_sign_challenge` command is not on this build. */
+/** Thrown when the Rust `wallet_sign_challenge` command is not on this build. */
 export class AnchorSigningUnavailableError extends Error {
   constructor(message: string) {
     super(message);
@@ -125,7 +123,7 @@ export function anchorTxHash(
 export interface AnchorSignerDeps {
   /** The owner `G...` address (read from `stellar_config`). */
   owner: () => Promise<string>;
-  /** Wallet-only challenge signing (`wallet_sign_challenge` / `bridge_sign_challenge`). */
+  /** Wallet-only challenge signing (`wallet_sign_challenge`). */
   signChallenge: (xdr: string) => Promise<BridgeOutcome>;
   /** Touch ID + configured-signer signing of a non-challenge envelope; returns the signed XDR. */
   signViaPipeline: (
@@ -143,7 +141,7 @@ export interface AnchorPipelineDeps {
   approver?: TxPipelineDeps["approver"];
   /** Injectable clock; defaults to `Date.now`. */
   now?: () => number;
-  /** The Freighter bridge invoke; defaults to the real Tauri command. */
+  /** The embedded wallet invoke; defaults to the real Tauri command. */
   invoke?: SigningDeps["invoke"];
   /** Override the inner signer (tests only); defaults to the real `signAndSubmit` capture. */
   sign?: TxPipelineDeps["sign"];
@@ -159,12 +157,9 @@ async function defaultOwner(): Promise<string> {
   return config.ownerAddress;
 }
 
-/** Default challenge signer: `wallet_sign_challenge` (embedded) or the W5a
- * `bridge_sign_challenge` (freighter), chosen from `stellar_config` and
- * feature-detected. */
+/** Default challenge signer: `wallet_sign_challenge`, feature-detected. */
 async function defaultSignChallenge(xdr: string): Promise<BridgeOutcome> {
-  const signer = await resolveSigner(invoke);
-  const command = signer === "embedded" ? "wallet_sign_challenge" : "bridge_sign_challenge";
+  const command = "wallet_sign_challenge";
   try {
     return await invoke<BridgeOutcome>(command, { xdr });
   } catch (error) {
@@ -179,7 +174,7 @@ async function defaultSignChallenge(xdr: string): Promise<BridgeOutcome> {
 
 /**
  * Signs a non-challenge envelope through the shared pipeline. `runTx` shows the
- * Touch ID card and signs via the Freighter bridge; its submit step is replaced
+ * Touch ID card and signs via the embedded wallet; its submit step is replaced
  * with a pure capture, because an `AnchorSession` owns submission for the
  * transactions it builds (the trustline in `preflight`, the payment in
  * `payWithdrawal`) and a second Horizon call here would double-submit.
@@ -225,7 +220,7 @@ export async function defaultSignViaPipeline(
 /**
  * Builds the injected `Signer`. The `signTransaction` routing is the product
  * signing policy: sequence 0 is the wallet-only login challenge, everything else
- * is the Touch ID + Freighter pipeline.
+ * is the Touch ID + embedded-wallet pipeline.
  */
 export function createAnchorSigner(overrides: Partial<AnchorSignerDeps> = {}): anchor.Signer {
   const owner = overrides.owner ?? defaultOwner;
@@ -289,9 +284,9 @@ export interface AnchorFlowDeps {
  * Voice deposit/withdraw (M1): drives the same `AnchorSession` flow the panel
  * uses, so the voice path follows the panel's signer routing instead of pushing
  * a raw tool XDR into `signAndSubmit`. Auth is the SEP-10 challenge (sequence
- * 0), signed wallet-only by `bridge_sign_challenge`; the trustline and the
+ * 0), signed wallet-only by `wallet_sign_challenge`; the trustline and the
  * withdrawal payment move value, so the session's signer routes them through the
- * Touch ID + Freighter pipeline. Never throws: a failure at any step is a
+ * Touch ID + embedded-wallet pipeline. Never throws: a failure at any step is a
  * labelled outcome.
  *
  * A deposit stops at the anchor's bank instructions (the bank transfer is a

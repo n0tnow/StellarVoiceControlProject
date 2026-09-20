@@ -1,8 +1,8 @@
 /**
  * Pure view model for the Settings panel (T1).
  *
- * Flattens the read-only diagnostics the shell already exposes — `voice_health`,
- * `stellar_config` and `bridge_health` — into sections of setting rows, each with
+ * Flattens the read-only diagnostics the shell already exposes — `voice_health`
+ * and `stellar_config` — into sections of setting rows, each with
  * a value, a status badge and the `.env` variable that changes it. It imports no
  * React and no Tauri, so the mapping is unit-tested with `node:test`.
  *
@@ -60,7 +60,6 @@ export interface SettingsInput {
   voice: VoiceFacts | null;
   chain: ChainFacts | null;
   agentModel: string;
-  bridge: { status: SettingStatus; detail: string } | null;
 }
 
 /** Shortens a 56-char address/contract id to `head…tail` for the compact rows. */
@@ -156,7 +155,7 @@ function idRow(
 
 /** Builds every section the panel renders, in display order. */
 export function buildSettingsView(input: SettingsInput): SettingSection[] {
-  const { voice, chain, bridge } = input;
+  const { voice, chain } = input;
 
   return [
     {
@@ -241,15 +240,6 @@ export function buildSettingsView(input: SettingsInput): SettingSection[] {
         idRow("stellar.owner", "Owner address", chain, chain?.ownerAddress, "POLARIS_OWNER_ADDRESS"),
         idRow("stellar.guard", "Guard contract", chain, chain?.guardContractId, "GUARD_CONTRACT_ID"),
         idRow("stellar.p2p", "P2P contract", chain, chain?.p2pContractId, "POLARIS_P2P_CONTRACT_ID"),
-      ],
-    },
-    {
-      id: "signing",
-      title: "Signing bridge",
-      rows: [
-        bridge
-          ? { id: "signing.browser", label: "Browser", value: bridge.detail, status: bridge.status, envVar: "POLARIS_BRIDGE_BROWSER" }
-          : { id: "signing.browser", label: "Browser", value: "not reported by this build", status: "unknown", envVar: "POLARIS_BRIDGE_BROWSER" },
       ],
     },
   ];

@@ -2,9 +2,8 @@
 //!
 //! Polaris' signer is a wallet **inside the app**: the user creates a BIP-39
 //! recovery phrase or imports an existing `S…` seed / phrase, and a single Tauri
-//! command signs the approved XDR. No browser and no Freighter extension are
-//! involved. The optional Freighter bridge stays available only as
-//! `POLARIS_SIGNER=freighter`.
+//! command signs the approved XDR. No browser and no browser extension are
+//! involved.
 //!
 //! ## What is and is not stored
 //!
@@ -172,8 +171,8 @@ impl WalletError {
         }
     }
 
-    /// The `bridge_sign` failure code this error maps to, so `wallet_sign` keeps
-    /// the same `BridgeOutcome` vocabulary the shell already labels.
+    /// The failure code this error maps to, so `wallet_sign` reports the same
+    /// `BridgeOutcome` vocabulary the shell already labels.
     pub fn bridge_code(&self) -> &'static str {
         match self {
             Self::Integrity(_) => "integrity",
@@ -364,7 +363,8 @@ pub struct ActiveWallet {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WalletStatus {
-    /// `"embedded"` or `"freighter"`.
+    /// The active signer; always `"embedded"` now that the in-app wallet is the
+    /// only signer.
     pub signer: String,
     /// The active account, or `None` when no wallet exists.
     pub active: Option<ActiveWallet>,
@@ -457,10 +457,9 @@ impl WalletService {
         !self.lock().meta.accounts.is_empty()
     }
 
-    /// The signer the shell should use: an explicit `POLARIS_SIGNER`, else
-    /// `embedded` (the in-app wallet is the default).
+    /// The signer the shell should use: always the in-app `embedded` wallet.
     pub fn signer(&self) -> String {
-        crate::stellar_config::resolve_signer(crate::env::var("POLARIS_SIGNER").as_deref())
+        crate::stellar_config::SIGNER_EMBEDDED.to_string()
     }
 
     /// `wallet_status`.
@@ -805,7 +804,7 @@ mod tests {
         0xe0, 0x5c, 0x3c, 0x1a, 0x37, 0x1d, 0xbe, 0x45, 0x93, 0x0e, 0xf9, 0xb7, 0x61, 0xf7, 0xa7,
         0x46, 0x91,
     ];
-    /// The bridge fixture rewritten to the wallet's source key and sequence 1,
+    /// The XDR fixture rewritten to the wallet's source key and sequence 1,
     /// produced by the Node one-off in the report; the hash and signed envelope
     /// are what `@stellar/stellar-sdk` `Keypair.verify` accepted.
     const VECTOR_UNSIGNED: &str = "AAAAAgAAAADjcmgwoLYMtfUshEz/zU7tZeulwVXomyZBFWJyTnHlRAAAAGQAAAAAAAAAAQAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAQAAAAB12BBgnCJAQgcNtjAZbs7JSMucpHJJ3WuJHvwK+gBE6AAAAAAAAAAAAJiWgAAAAAAAAAAA";
@@ -1010,7 +1009,7 @@ mod tests {
     fn sign_refuses_a_tampered_or_foreign_transaction() {
         let (wallet, _store) = service();
         install_seed(&wallet, &VECTOR_SEED);
-        // The bridge fixture is sourced by a different account.
+        // The XDR fixture is sourced by a different account.
         assert!(matches!(
             wallet.sign(fixtures::FIXTURE_XDR, PASSPHRASE),
             Err(WalletError::SignerChanged)

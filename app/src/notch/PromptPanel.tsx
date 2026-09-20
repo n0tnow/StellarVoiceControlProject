@@ -144,7 +144,7 @@ export function PromptPanel({ onContentHeight, onDismiss, voiceStage }: PromptPa
         speakTurnResult(spoken);
       }
       // A produced intent is not merely described: it runs the shared execution
-      // seam, so the Touch ID approval gate and the Freighter bridge are always
+      // seam, so the Touch ID approval gate and the wallet signing are always
       // in the path. The outcome is shown inline instead of spoken.
       if (run.ok && run.outcome.intent) {
         try {

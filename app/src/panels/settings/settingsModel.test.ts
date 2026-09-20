@@ -36,7 +36,6 @@ function input(overrides: Partial<SettingsInput> = {}): SettingsInput {
       p2pContractId: null,
     },
     agentModel: "glm-5.3-flash",
-    bridge: { status: "ok", detail: "Loopback signing is ready for G...; Freighter must be in the default browser." },
     ...overrides,
   };
 }
@@ -123,13 +122,4 @@ test("a missing chain source makes every chain row unknown", () => {
   const sections = buildSettingsView(input({ chain: null }));
   assert.equal(find(sections, "stellar.owner").status, "unknown");
   assert.equal(find(sections, "stellar.network").status, "unknown");
-});
-
-test("the bridge row carries the health detail and browser env name", () => {
-  const sections = buildSettingsView(input());
-  const row = find(sections, "signing.browser");
-  assert.equal(row.status, "ok");
-  assert.match(row.value, /Freighter/);
-  assert.equal(row.envVar, "POLARIS_BRIDGE_BROWSER");
-  assert.equal(find(buildSettingsView(input({ bridge: null })), "signing.browser").status, "unknown");
 });

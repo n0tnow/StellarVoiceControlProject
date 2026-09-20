@@ -25,7 +25,7 @@ const STATUS_STYLES: Record<SppStatusSummary["status"], string> = {
  *
  * Read-only by construction. The full SPP client is the upstream **Rust** SDK
  * and every `transact` needs a Soroban auth-entry signature in addition to the
- * envelope signature; Polaris' Freighter bridge signs only an envelope, so no
+ * envelope signature; Polaris' wallet signs only an envelope, so no
  * value-moving form exists here yet. Deposit / private transfer / withdraw are
  * shown disabled, with the reason, rather than shipped half-wired.
  */
@@ -127,7 +127,7 @@ export function PrivacyPanel() {
           </h2>
           <p className="text-xs leading-5 text-polaris-muted">
             Deposit, private transfer and withdraw become available once the SPP
-            signer is wired to the wallet bridge. Proving takes ~10–15 s per
+            signer is wired to the wallet. Proving takes ~10–15 s per
             operation. The upstream client is the Rust SDK and needs a Soroban
             auth-entry signature on top of the envelope signature.
           </p>

@@ -250,7 +250,7 @@ export async function executeApprovedIntent(
   // W5b/M1: deposit/withdraw are multi-step anchor flows, not one tool XDR.
   // Drive the same `AnchorSession` the panel uses, so the SEP-10 challenge is
   // signed wallet-only and every value-moving step goes through the Touch ID
-  // pipeline. This also keeps a sequence-0 challenge out of `bridge_sign`.
+  // pipeline. This also keeps a sequence-0 challenge out of `wallet_sign`.
   if (intent.kind === "deposit" || intent.kind === "withdraw") {
     // BANK-SIM: deposit/withdraw now drive the demo bank ↔ anchor automation,
     // which includes the on-chain steps (through the same Touch ID pipeline).

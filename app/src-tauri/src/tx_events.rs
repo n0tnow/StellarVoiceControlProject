@@ -1,7 +1,7 @@
 //! Emitting the `tx_submitted` event from the webview (step W4b).
 //!
 //! The value-moving path ends in the webview (`app/src/lib/signing.ts`): after
-//! the Freighter bridge signs and `submitSignedTx` submits, the shell wants to
+//! the embedded wallet signs and `submitSignedTx` submits, the shell wants to
 //! record the exact transaction hash and explorer link on the typed event
 //! stream. The webview cannot emit a typed `polaris-event` itself — only Rust
 //! can — so this module is the one narrow command that lets it.

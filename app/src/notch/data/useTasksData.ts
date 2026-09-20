@@ -10,7 +10,7 @@
  *
  * Cancel is the only value-moving action here: it builds the unsigned
  * `cancel_schedule` (`@/lib/schedulesLive`) and pushes it through the shared
- * `@/lib/useTxRun` pipeline (approval card → Touch ID → Freighter → submit),
+ * `@/lib/useTxRun` pipeline (approval card → Touch ID → wallet signing → submit),
  * exactly like the Schedules panel. Nothing else on the page moves value.
  */
 import { useCallback, useEffect, useState } from "react";

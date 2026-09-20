@@ -2,16 +2,22 @@
 
 > How Polaris holds and uses a wallet. Testnet only; no mainnet path exists.
 
-## 1.1 Signer decision (step W10, 2026-09-20)
+## 1.1 Signer decision (steps W4b/W10, 2026-09-20)
 
-The default signer is a **wallet inside the app**. The earlier Freighter bridge
-needed three approval surfaces (approval card + Touch ID, a browser tab, and the
-Freighter popup) plus a browser with the extension installed. The owner rejected
-that as the main flow: *“approve once, the wallet signs, no web page.”*
+The signer is a **wallet inside the app**. A Freighter bridge was built and
+reviewed first (a one-shot loopback Rust server plus a browser page signing
+through the extension), but it needed three approval surfaces — approval card +
+Touch ID, a browser tab, and the Freighter popup — plus a browser with the
+extension installed. The owner rejected that as the main flow: *“approve once,
+the wallet signs, no web page.”* Task W12 then **removed the bridge entirely**
+(server, page, Wallets Kit dependency, the `bridge_*` commands) in favour of the
+embedded wallet, keeping the reusable XDR verification helpers
+(`bridge/verify.rs`, `bridge/strkey.rs`).
 
 * **Create** generates a BIP-39 24-word phrase (OS entropy) and derives the
-  Ed25519 seed via SEP-5 `m/44'/148'/0'` (SLIP-0010), so the same phrase works in
-  Freighter/Lobstr. The phrase is shown **once**; only the seed is stored.
+  Ed25519 seed via SEP-5 `m/44'/148'/0'` (SLIP-0010), so the same phrase can be
+  restored in any Stellar wallet. The phrase is shown **once**; only the seed is
+  stored.
 * **Import** accepts an `S…` Stellar secret or a 12/24-word phrase (optional
   account index). The derived address is shown before storing; the secret never
   reaches the agent, logs, URL or localStorage, and Rust zeroizes its buffers.
@@ -23,8 +29,8 @@ that as the main flow: *“approve once, the wallet signs, no web page.”*
   `keychain` error and reports `store: "keychain unavailable"`; only with
   `POLARIS_WALLET_ALLOW_FILE_STORE=1` does it use a `0600` file store and report
   `store: "file (testnet only, plaintext)"`.
-* `POLARIS_SIGNER` defaults to `embedded`; `POLARIS_SIGNER=freighter` keeps the
-  browser bridge as an advanced, documented option.
+* The embedded wallet is the **only** signer; `POLARIS_SIGNER` no longer selects a
+  path.
 
 Data-protection / biometric Keychain ACLs need entitlements an ad-hoc dev build
 lacks, so the item is a plain generic password. The first time a rebuild reads an

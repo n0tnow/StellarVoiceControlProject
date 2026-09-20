@@ -262,6 +262,7 @@
 
 ## Milestone 4 — Delivery / Presentation 🔲
 > Deadline: 20 Sep 12:00. Bonuses (passkey wallet, P2P escrow, developer mode) ONLY after M4 items are done.
+- [x] (2026-09-20, branch `chore/remove-freighter-bridge`) **W12.** Removed the Freighter bridge entirely (Rust server/launcher/commands + `tiny_http`, bridge page/`app/src/bridge`/Wallets Kit dep/fixture/docs, `POLARIS_SIGNER`/`bridge_sign` branches); kept `verify.rs`/`strkey.rs` + `bridge/outcome.rs`; embedded wallet is the only signer — all checks/tests/build/cargo/clippy green, no wallets-kit chunk in `dist`
 - [x] README refreshed to reflect current codebase (constitution requirement)
 - [ ] Demo video recorded + pitch deck; demo script + pitch text written (`docs/demo-script.md`, `docs/pitch.md`, T1-demo)
 - [ ] Docs synced: notes.md, backlog reports, docs/reports/INDEX.md, sprints.md all up to date

@@ -4,7 +4,7 @@
 //!   as a 24-word BIP-39 English recovery phrase. The phrase is shown once, then
 //!   only the derived seed is kept (step W10's product decision).
 //! * **Import** accepts either a 12/24-word BIP-39 phrase or a Stellar `S…`
-//!   secret seed, so the same phrase works in Freighter/Lobstr.
+//!   secret seed, so the same phrase can be restored in any Stellar wallet.
 //! * Derivation is SEP-5: SLIP-0010 ed25519 on the path `m/44'/148'/index'`. The
 //!   32-byte child key is the Ed25519 seed. No derivation crate is used: the
 //!   hardened-only ed25519 derivation is a few lines of HMAC-SHA512.

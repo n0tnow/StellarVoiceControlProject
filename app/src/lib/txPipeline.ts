@@ -5,7 +5,7 @@
  * and then `signAndSubmit`. Panels (Security, Schedules, P2P, Anchor) already
  * build unsigned transactions with the `@polaris/stellar` builders and must push
  * them through the *same* approval pipeline — the Touch ID gate, then the
- * Freighter bridge, then Horizon. This module factors that path out once so a
+ * wallet signing, then Horizon. This module factors that path out once so a
  * panel never re-implements it (and never gets it subtly wrong).
  *
  * It composes, and never re-implements, the real seams:
@@ -13,7 +13,7 @@
  *   does, so the card and the gate bind the same blob.
  * - the Touch ID approver (`createTouchIdApprover`) registers the request and is
  *   fail-closed — a deny, expiry, timeout or throw is never an approval.
- * - `signAndSubmit` releases the approved XDR through the Freighter bridge and
+ * - `signAndSubmit` releases the approved XDR to the wallet and
  *   submits it, returning a labelled outcome instead of throwing.
  *
  * `runTx` never throws: every path resolves to a discriminated `TxRunOutcome`,
@@ -50,7 +50,7 @@ export type TxRunOutcome =
 /**
  * The injected seams. Tests pass fakes; `runTx` fills any missing piece from the
  * real shell lazily (same pattern as `@/lib/chain.ts`), so a panel that never
- * runs a transaction pays for neither the approver nor the bridge.
+ * runs a transaction pays for neither the approver nor the wallet.
  */
 export interface TxPipelineDeps {
   approver: IntentApprover;

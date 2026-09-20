@@ -6,7 +6,7 @@
 > This README is refreshed by a dedicated agent at the end of every milestone
 > (see `AGENTS.md` §6). It describes the codebase as of **v0.1.0** on `integration/wallet`:
 > the voice pipeline, chain lane and wallet UI are wired end to end (hotkey → STT → agent →
-> spoken answer; approval → Touch ID → Freighter → submit). Live runs need a human on a Mac.
+> spoken answer; approval → Touch ID → embedded wallet → submit). Live runs need a human on a Mac.
 
 Polaris is a voice-controlled Stellar assistant: hold a global hotkey, speak, and it
 answers and can act on Stellar — pay, schedule payments, move between TRY and USDC
@@ -127,7 +127,7 @@ Details, verified live anchor behaviour, safety hardening and the mock-vs-mainne
 
 `make setup` installs deps and `.env`; `make dev` runs the shell. There is no Dock icon — the
 menu-bar **tray** opens the panels and the **Debug panel** runs per-feature checks. See
-`docs/ui-panels.md`; the fail-closed signing path is `docs/freighter-bridge.md`.
+`docs/ui-panels.md`; the fail-closed signing path is `docs/wallet-track.md`.
 
 ## Setup and checks
 
@@ -177,12 +177,12 @@ long operations run under `caffeinate -i` per `AGENTS.md` §4. The desktop shell
   **Control+Option** to record (`control+option+space` also works), release to stop; `cpal` writes a 16-bit PCM WAV and
   microphone/permission failures surface as the overlay `error` state. Release never sends.
 - The **voice pipeline** (hold-to-talk, STT, agent loop, spoken read-back) and the
-  **approval → signing path** (Touch ID gate, Freighter bridge, `tx_submitted` + explorer link).
+  **approval → signing path** (Touch ID gate, embedded wallet, `tx_submitted` + explorer link).
 - `app_info`; `polaris_guard` on testnet, the keeper, the SEP-6 anchor client, P2P client and
   the read-only SPP panel.
 
 **Not wired yet:** screen reading (`A4`), the live protocol integration, value-moving SPP; live
-mic/Touch ID/Freighter and the P2P contract need a human/deployment.
+mic/Touch ID and the P2P contract need a human/deployment.
 
 ## Security & secrets
 

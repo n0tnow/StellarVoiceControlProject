@@ -6,7 +6,7 @@
  * guard client, and it calls the approval builders to produce **unsigned** step
  * plans. Nothing is signed or submitted here — the panel pushes every plan
  * through `@/lib/txPipeline` (`runTxSequence`), which owns the approval card,
- * Touch ID and the Freighter bridge.
+ * Touch ID and the wallet signing.
  *
  * The contract id, owner and network come from the read-only `stellar_config`
  * command (`@/lib/stellarConfig`); a missing guard id is a `warn`, never a

@@ -17,7 +17,7 @@ use super::session::SessionStore;
 use super::{AddressOutcome, CreateOutcome, WalletError, WalletService, WalletStatus};
 use crate::approval::ApprovalStore;
 use crate::biometric::Authenticator;
-use crate::bridge::commands::BridgeOutcome;
+use crate::bridge::outcome::BridgeOutcome;
 use crate::health::FeatureHealth;
 use crate::stellar_config;
 use std::sync::Arc;

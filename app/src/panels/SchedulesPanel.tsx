@@ -17,7 +17,7 @@ import { useTxRun } from "@/lib/useTxRun";
  * Lists the owner's on-chain schedules (next run local **and** UTC) with a
  * Cancel button, and a New-schedule form. Every create/cancel is an unsigned
  * XDR built by `@polaris/stellar` and pushed through the shared
- * `useTxRun`/`runTx` pipeline (Touch ID → Freighter → submit); this panel never
+ * `useTxRun`/`runTx` pipeline (Touch ID → wallet signing → submit); this panel never
  * signs, never holds a key and never starts the keeper.
  */
 export function SchedulesPanel() {

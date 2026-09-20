@@ -31,7 +31,7 @@
  *   start**. A synthesis-only wait can therefore never show "Speaking".
  * - `awaiting_approval` / `signing` / `submitting` — the value-moving path (F1),
  *   reported by `onStage` at the real boundaries (approval requested, wallet
- *   bridge, submit). See below.
+ *   signing, submit). See below.
  * - `done` / `error` — the two terminal stages. Collapsing is only ever allowed
  *   from here (or from an already-idle `null`), which is the invariant the F1
  *   bug was about: the notch used to shrink while the model, the approval card
@@ -41,7 +41,7 @@
  *
  * `executeApprovedIntent`/`signAndSubmit`/the Touch ID approver invoke an
  * additive `onStage` callback at their boundaries, and the shell folds those
- * into the same session. Because the approval card and the Freighter round trip
+ * into the same session. Because the approval card and the signing round trip
  * can each take far longer than the old 60 s `thinking` watchdog, a pending
  * payment now owns the notch: a new hotkey press is refused with a soft notice
  * instead of superseding (and thereby hiding) it. The watchdogs below give every
@@ -307,7 +307,7 @@ const STAGE_LABELS: Record<TurnStage, { en: string; tr: string }> = {
   thinking: { en: "Thinking", tr: "Düşünüyorum" },
   speaking: { en: "Speaking", tr: "Konuşuyorum" },
   awaiting_approval: { en: "Approve in Polaris", tr: "Polaris'te onayla" },
-  signing: { en: "Waiting for Freighter", tr: "Freighter bekleniyor" },
+  signing: { en: "Signing", tr: "İmzalanıyor" },
   submitting: { en: "Sending", tr: "Gönderiliyor" },
   done: { en: "Done", tr: "Tamam" },
   error: { en: "Error", tr: "Hata" },
