@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { contactsSynced, ruleIntent, rulesFormFromState, rulesView } from "./rulesModel.ts";
+import {
+  contactsSynced,
+  normalizeForm,
+  ruleIntent,
+  ruleSummary,
+  rulesFormFromState,
+  rulesView,
+} from "./rulesModel.ts";
 import type { SecurityState } from "@/lib/guardState";
 
 const OWNER = "GARXWVNCJ22U2OR23LAB5Z5RWI2XFIJZA2R3TRPFUKKY65JQZZOEWWCO";
@@ -61,6 +68,23 @@ test("ruleIntent builds the spoken rule payload", () => {
     "rules page",
   );
   assert.deepEqual(off.rule, { mode: "always_ask" });
+});
+
+test("normalizeForm turns a blank or zero threshold into always_ask", () => {
+  const base = { mode: "auto_under_limit", threshold: "", perTx: "20", daily: "100", knownRecipientsOnly: true } as const;
+  assert.equal(normalizeForm({ ...base, threshold: "" }).mode, "always_ask");
+  assert.equal(normalizeForm({ ...base, threshold: "0" }).mode, "always_ask");
+  assert.equal(normalizeForm({ ...base, threshold: "  " }).mode, "always_ask");
+  assert.equal(normalizeForm({ ...base, threshold: "10" }).mode, "auto_under_limit");
+});
+
+test("ruleSummary speaks the live rule in plain language", () => {
+  assert.equal(ruleSummary(state(), "XLM"), "Payments under 10 XLM are sent without asking. Everything else needs Touch ID.");
+  assert.match(ruleSummary(state({ rule: null, executor: null }), "XLM"), /No spending rule yet/);
+  assert.match(
+    ruleSummary(state({ rule: { ...state().rule!, auto_approve_limit: 0n } }), "XLM"),
+    /Every payment needs your Touch ID/,
+  );
 });
 
 test("contactsSynced counts matching alias+address on-chain entries", () => {

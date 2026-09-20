@@ -290,6 +290,7 @@
 - [x] **W6c** Wallet/Suggestions panels; **NOTCH-CLIP** pinning fix (`feat/w6c-wallet-suggestions`, `fix/notch-panel-clipped`).
 - [x] Chain track: **ANCHOR-SDF/BANK-SIM** (SDF anchor + demo bank, both directions live), **W8a/W8b** P2P escrow contract + client/panel, **W9** SPP read-only.
 - [x] **W11a** executor key + `executor_sign_pay` → [x] **W11b** autonomous payments UI (`e2e:autopay` live) → [x] **W12** remove the Freighter bridge → **MERGE-FINAL**.
+- [x] (2026-09-20, branch `feat/w15e-rules`) **W15e.** Notch Rules/Tasks redesign: one-control Rules page with live summary + Advanced (auto-pay batch save) and a compact New-schedule reveal on Tasks; check clean, app 442/0 — `backlog/w15e-rules.md`
 - [ ] **Open / honest:** SPP **value-moving** integration (needs wallet `signAuthEntry`); **Trade page**; CT (confidential tokens) spike/integration; protocol integration (Soroswap swap **or** DeFindex, not both); **A4 screen reading**; developer mode; MPP; passkey wallet.
 - **Human-verification list (unverified by automation):** real mic + STT, real Touch ID (create/sign/unlock/batch), real Keychain first-access, live anchor payout leg, live `pay_executor`, real notch windows/hover/pin, Friendbot.
 
