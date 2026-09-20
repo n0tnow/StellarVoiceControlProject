@@ -176,12 +176,87 @@ test("a non-executed outcome passes through unchanged", async () => {
   assert.deepEqual(calls.submit, []);
 });
 
-test("an executed outcome without an approvalId is not signed", async () => {
+// PR #29 review, CRITICAL-1: a gateless approval (no `approvalId`) must NEVER
+// settle as a bare `executed` with no txHash — that is how a threshold-skipped
+// payment used to vanish (no `tx_submitted`, no stage callbacks). It is now a
+// clearly-labelled non-executed outcome that tells the user to approve via the
+// card (the executor route that could sign it is not wired yet).
+test("an executed outcome without an approvalId is an honest labelled failure", async () => {
   const { deps: d, calls } = deps({ bridge: signed });
-  const outcome = await signAndSubmit(executed({ approvalId: undefined }), d);
-  assert.equal(outcome.status, "executed");
+  const stages: string[] = [];
+  const outcome = await signAndSubmit(executed({ approvalId: undefined }), {
+    ...d,
+    onStage: (stage) => stages.push(stage),
+  });
+  assert.equal(outcome.status, "failed");
+  assert.equal(outcome.label, "Approval required");
+  assert.match(outcome.detail ?? "", /approval card/i);
   assert.equal(outcome.txHash, undefined);
   assert.deepEqual(calls.submit, []);
+  assert.deepEqual(calls.emitted, []);
+  assert.deepEqual(stages, []);
+});
+
+// The full honest path (PR #29 review, CRITICAL-1): a below-threshold request
+// goes through the threshold approver, `executeIntent` and `signAndSubmit` and
+// MUST come out the other end as a real, submitted transaction — an `executed`
+// outcome with no `txHash` can never occur again on this path.
+test("integration: threshold approver -> executeIntent -> signAndSubmit signs and submits", async () => {
+  const { executeIntent } = await import("@polaris/agent");
+  const { createThresholdApprover } = await import("./thresholdApprover.ts");
+  const { PREFERENCES_STORAGE_KEY } = await import("./preferences.ts");
+
+  const intent = { kind: "send", asset: "USDC", amount: "10", recipient: "acc2" } as const;
+  const data = new Map<string, string>([
+    [PREFERENCES_STORAGE_KEY, JSON.stringify({ approvalThresholdUsd: 25 })],
+  ]);
+  const inner = {
+    calls: 0,
+    async approve() {
+      this.calls += 1;
+      return { approved: true, approvalId: "apr_1" };
+    },
+  };
+  const approver = createThresholdApprover(inner, {}, {
+    getItem: (key: string) => (data.has(key) ? (data.get(key) as string) : null),
+    setItem: (key: string, value: string) => {
+      data.set(key, value);
+    },
+  });
+
+  const outcome = await executeIntent(intent, {
+    approver,
+    chainTools: {
+      send: async () => ({
+        unsignedXdr: UNSIGNED,
+        summary: {
+          title: "Send 10 USDC",
+          // Even the executor-route "no card" line may not drop the gate.
+          lines: ["to acc2", "Approval card required: no"],
+          estimatedFee: "0.00001 XLM",
+        },
+      }),
+    },
+    xdrDigest: () => "digest-1",
+  });
+  // The payment was below the threshold, but interim behaviour routes it to
+  // the gate anyway, so the gate's approval id is what reaches the sign leg.
+  assert.equal(inner.calls, 1);
+  assert.equal(outcome.status, "executed");
+  assert.equal(outcome.approvalId, "apr_1");
+
+  const { deps: d, calls } = deps({ bridge: signed });
+  const stages: string[] = [];
+  const submitted = await signAndSubmit(outcome, {
+    ...d,
+    onStage: (stage) => stages.push(stage),
+  });
+  assert.equal(submitted.status, "executed");
+  assert.equal(submitted.txHash, TX_HASH);
+  assert.equal(submitted.explorerUrl, EXPLORER);
+  assert.deepEqual(calls.submit, [SIGNED]);
+  assert.deepEqual(calls.emitted, [{ hash: TX_HASH, url: EXPLORER }]);
+  assert.deepEqual(stages, ["signing", "submitting"]);
 });
 
 test("a failed tx_submitted emit does not fail a successful submission", async () => {

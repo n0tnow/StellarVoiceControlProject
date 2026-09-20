@@ -51,7 +51,7 @@ export function SettingsPanel() {
     setThresholdHint(
       stored === 0
         ? "Saved. Every payment asks (D10 default)."
-        : `Saved. USD payments below $${stored} skip the card.`,
+        : `Saved. USD payments below $${stored} skip the card once automatic payments land; today they still ask.`,
     );
   }, [thresholdDraft]);
 
@@ -128,9 +128,10 @@ export function SettingsPanel() {
           </h2>
           <p className="text-xs text-polaris-muted">
             USD-stablecoin payments <span className="font-medium">strictly below</span> this
-            amount skip the Touch ID card. <span className="font-medium">0 = always ask</span>{" "}
-            (default, D10). A payment the chain flags as “Approval card required: yes” always
-            asks, and non-USD assets (e.g. XLM) always ask — there is no price oracle.
+            amount are eligible to skip the Touch ID card once automatic payments land
+            (the executor route is not wired yet — today every payment still asks).{" "}
+            <span className="font-medium">0 = always ask</span> (default, D10). Non-USD assets
+            (e.g. XLM) always ask — there is no price oracle.
           </p>
           <div className="flex items-center gap-2">
             <label htmlFor="approval-threshold-usd" className="text-xs text-polaris-muted">

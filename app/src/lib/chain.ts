@@ -27,10 +27,14 @@
  * The approver is **fail-closed by default**. In a real Tauri runtime the Touch
  * ID gate (W3) is selected: it registers the exact blob and returns a decision
  * only when the gate reports `authorized`. In front of it sits the local
- * `approvalThresholdUsd` preference (`thresholdApprover`): a USD-stablecoin
- * payment strictly below the owner's threshold skips the card entirely — but
- * only when the chain did not demand one (`Approval card required: yes` always
- * wins, D10c) and never for a non-USD asset (no price oracle → always ask).
+ * `approvalThresholdUsd` preference (`thresholdApprover`): it can only ever
+ * *log* that a payment was below the owner's threshold — the card still shows,
+ * because an approvalId-less approval could never be signed and the executor
+ * route that could sign it is not wired yet (PR #29 review, CRITICAL-1). The
+ * `Approval card required: yes` summary line is also fail-closed plumbing, not
+ * a chain safety net: today it is on every guarded payment, because the
+ * `always_ask` profile forces `pay_owner`, and `pay_owner` skips the on-chain
+ * `auto_approve_limit` by design (PR #29 review, MAJOR-2).
  * Outside Tauri, the loud auto-approval
  * placeholder is reachable only with `POLARIS_ALLOW_AUTO_APPROVE=1` (the
  * CLI/demo path); everything else is the deny-all gate. In the app the biometric
@@ -88,8 +92,9 @@ async function resolveRuntimeApprover(
 ): Promise<IntentApprover> {
   if (isTauri()) {
     const deps: ApproverDeps = await defaultApproverDeps(onStage);
-    // The local threshold wraps the gate: it can only skip the card for a
-    // payment the chain itself did not flag; it can never force one open.
+    // The local threshold wraps the gate, but auto-execution is not wired
+    // (CRITICAL-1): an `auto` decision is only logged; the Touch ID card still
+    // shows for every payment. See `thresholdApprover.ts`.
     return createThresholdApprover(createTouchIdApprover(deps));
   }
   if (import.meta.env.POLARIS_ALLOW_AUTO_APPROVE === "1") {

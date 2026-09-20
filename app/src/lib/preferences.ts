@@ -5,22 +5,34 @@
  * Today there is exactly one preference: `approvalThresholdUsd`, the
  * **app-side** auto-approval ceiling in USD (decision D10's "always ask"
  * default is `0`). It is deliberately a *client convenience*, not a security
- * boundary: it can only skip the local Touch ID card for small USD-stablecoin
- * payments. The precedence is:
+ * boundary: today it only *logs* that a payment was below the threshold — the
+ * Touch ID card still shows, because an approvalId-less approval cannot be
+ * signed and the executor route that could sign it is not wired yet (PR #29
+ * review, CRITICAL-1; see `thresholdApprover.ts`). The precedence is:
  *
  * 1. **The chain always wins.** A summary line `Approval card required: yes`
  *    from the guard/contract overrides the threshold — the app can only be
- *    stricter than the chain, never looser (D10c).
+ *    stricter than the chain, never looser (D10c). Caveat (MAJOR-2): that line
+ *    is emitted for the `pay_owner` route, which *skips* the on-chain
+ *    `auto_approve_limit`; it is fail-closed plumbing, not a chain veto of
+ *    auto-approval.
  * 2. **Non-USD assets always ask.** `XLM` has no price oracle here, so its USD
  *    value is unknown and unknown means "ask" (fail-closed).
  *
- * Parsing is fail-closed too: a NaN/negative/huge amount, an unreadable stored
- * value, or an absent store all resolve to "always ask", never to a silent
- * approval.
+ * Parsing is fail-closed too: a non-strict-decimal amount, a NaN/negative/huge
+ * amount, an unreadable stored value, or an absent store all resolve to "always
+ * ask", never to a silent approval.
  */
 
-/** Asset codes treated as 1:1 with USD (the registry in `stellar/src/payments/`). */
-export const USD_STABLE_ASSETS: readonly string[] = ["USDC", "PGUSD", "USD"];
+/** Asset codes treated as 1:1 with USD, aligned with the chain asset registry
+ * (`stellar/src/payments/assets.ts`), which pins exactly USDC + PGUSD (+ native
+ * XLM, deliberately absent here: no price oracle). Assumptions, mirrored from
+ * the chain layer: each listed code is USD-pegged 1:1 and uses 7 decimals
+ * (`stellar/src/guard/amount.ts` `TOKEN_DECIMALS`), so display dollars compare
+ * directly against this threshold. A bare "USD" code is NOT pinned by the
+ * registry and would be refused by the chain tool long before this list is
+ * consulted (PR #29 review, MAJOR-3). */
+export const USD_STABLE_ASSETS: readonly string[] = ["USDC", "PGUSD"];
 
 /** Largest storable threshold; anything bigger is nonsense, not a preference. */
 export const MAX_THRESHOLD_USD = 1_000_000;

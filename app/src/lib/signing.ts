@@ -156,17 +156,33 @@ export function explorerTxUrl(hash: string): string {
  * the original `intent` intact so the shell can settle the turn.
  *
  * `outcome` must be an `executed` outcome carrying an `approvalId` and the
- * unsigned XDR; anything else is returned unchanged (it is already a labelled
- * failure, and there is nothing to sign).
+ * unsigned XDR. A non-executed outcome is returned unchanged (it is already a
+ * labelled failure, and there is nothing to sign). An `executed` outcome
+ * **without** an `approvalId` is the broken auto-approval shape: nothing here
+ * can sign it (`bridge_sign` only accepts a gate-registered `Authorized` id),
+ * so it is converted into a clearly-labelled, non-executed failure instead of
+ * being returned as a transaction-free "success" (PR #29 review, CRITICAL-1).
+ * The honest auto path is the `pay_executor` route signed by the registered
+ * executor key — until that leg is wired, every approval must come from the
+ * Touch ID gate and therefore carry an id.
  */
 export async function signAndSubmit(
   outcome: ExecutionOutcome,
   deps: SigningDeps = defaultSigningDeps,
 ): Promise<SubmittedOutcome> {
+  if (outcome.status !== "executed") {
+    return outcome;
+  }
   const unsignedXdr = outcome.result?.unsignedXdr;
   const approvalId = outcome.approvalId;
-  if (outcome.status !== "executed" || !unsignedXdr || !approvalId) {
-    return outcome;
+  if (!unsignedXdr || !approvalId) {
+    return fail(
+      outcome,
+      "Approval required",
+      "this payment has no gate-registered approval, so it cannot be signed " +
+        "(automatic payments are not available yet — approve it via the card, " +
+        "or lower the amount)",
+    );
   }
 
   // F1: the approved blob is handed to the wallet; the shell shows the Freighter

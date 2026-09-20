@@ -44,13 +44,26 @@ function fakeInner(decision = true): IntentApprover & { calls: number } {
   };
 }
 
-test("below the threshold approves without touching the gate (no card, no id)", async () => {
+// PR #29 review, CRITICAL-1: an approvalId-less `approved: true` could never be
+// signed (`bridge_sign` needs a gate-registered id), so until the executor
+// route is wired an `auto` decision logs and defers to the card — it never
+// skips the gate.
+test("below the threshold still reaches the gate (interim: executor route not wired)", async () => {
   const inner = fakeInner();
   const approver = createThresholdApprover(inner, {}, fakeStore(25));
   const decision = await approver.approve(REQUEST);
+  assert.equal(inner.calls, 1);
   assert.equal(decision.approved, true);
-  assert.equal(decision.approvalId, undefined);
-  assert.equal(inner.calls, 0);
+  assert.equal(decision.approvalId, "apr_1");
+});
+
+test("a threshold skip can never leak an approvalId-less approval", async () => {
+  const inner = fakeInner();
+  const approver = createThresholdApprover(inner, {}, fakeStore(1000));
+  const decision = await approver.approve(REQUEST);
+  if (decision.approved === true) {
+    assert.equal(typeof decision.approvalId, "string");
+  }
 });
 
 test("at or above the threshold defers to the gate approver", async () => {
