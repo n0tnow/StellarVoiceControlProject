@@ -7,13 +7,94 @@
  * actually validated — never at shell startup.
  */
 import { invoke } from "@tauri-apps/api/core";
+import type { ContactStore, RemoveContactResult, SaveContactResult } from "@polaris/agent";
 
-import { createContactsClient } from "./contactsModel.ts";
+import {
+  ContactsClientError,
+  createContactsClient,
+  normalizeNickname,
+  validateNickname,
+  type ContactsClient,
+} from "./contactsModel.ts";
 
 export const contactsClient = createContactsClient((command, args) => invoke(command, args));
 
 /** Rust broadcasts this when the recipient book changes. */
 export const CONTACTS_CHANGED_EVENT = "contacts_changed";
+
+/**
+ * Cross-worker DOM signal (W15): dispatched after any add/remove from the agent
+ * path so a notch view showing contacts reloads. The Rust `contacts_changed`
+ * Tauri event still drives `useContacts`; this is the in-webview equivalent.
+ */
+export const CONTACTS_CHANGED_DOM_EVENT = "polaris:contacts-changed";
+
+function announceContactsChanged(): void {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent(CONTACTS_CHANGED_DOM_EVENT));
+}
+
+/** Injectable edges of the agent store, so the rules are unit-testable. */
+export interface AgentContactStoreDeps {
+  client?: ContactsClient;
+  isValidAddress?: (address: string) => Promise<boolean>;
+  announce?: () => void;
+}
+
+/**
+ * The agent's address-book store (W15f), backed by the same `contacts_*`
+ * commands and the same StrKey checksum as the Wallet page. It validates the
+ * name and the address before the round trip and never overwrites a name that
+ * already maps to a different address.
+ */
+export function createAgentContactStore(deps: AgentContactStoreDeps = {}): ContactStore {
+  const client = deps.client ?? contactsClient;
+  const isValidAddress = deps.isValidAddress ?? isValidStellarAddress;
+  const announce = deps.announce ?? announceContactsChanged;
+  return {
+    async save(nickname, address): Promise<SaveContactResult> {
+      const normalized = normalizeNickname(nickname);
+      if (validateNickname(normalized) !== null) return { status: "invalidName" };
+      const trimmed = address.trim();
+      if (!(await isValidAddress(trimmed))) return { status: "invalidAddress" };
+      try {
+        const existing = await client.list();
+        const match = existing.find((contact) => contact.nickname === normalized);
+        if (match) {
+          return match.address === trimmed
+            ? { status: "alreadySaved", nickname: normalized }
+            : { status: "nameTaken", nickname: normalized };
+        }
+        const saved = await client.add(normalized, trimmed);
+        announce();
+        return { status: "saved", nickname: saved.nickname, address: saved.address };
+      } catch (error) {
+        // A race with another writer can still return `exists`; fail closed and
+        // never overwrite, exactly as the pre-check does.
+        if (error instanceof ContactsClientError && error.kind === "exists") {
+          return { status: "nameTaken", nickname: normalized };
+        }
+        if (error instanceof ContactsClientError && error.kind === "invalid") {
+          return { status: "invalidAddress" };
+        }
+        return { status: "unavailable" };
+      }
+    },
+    list: () => client.list(),
+    async remove(nickname): Promise<RemoveContactResult> {
+      try {
+        const removed = await client.remove(normalizeNickname(nickname));
+        announce();
+        return { status: "removed", nickname: removed.nickname };
+      } catch (error) {
+        return {
+          status:
+            error instanceof ContactsClientError && error.kind === "notFound" ? "missing" : "unavailable",
+        };
+      }
+    },
+  };
+}
 
 /**
  * Checks a `G...` address by StrKey checksum, not by shape. A missing SDK or a

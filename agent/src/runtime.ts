@@ -18,6 +18,7 @@ import { AnthropicLlm } from "./llm/anthropic.ts";
 import { OpenAiCompatibleLlm } from "./llm/openai.ts";
 import { depositTool, withdrawTool } from "./tools/anchor.ts";
 import { getBalanceTool } from "./tools/balance.ts";
+import { deleteContactTool, listContactsTool, saveContactTool } from "./tools/contact.ts";
 import { navigateTool } from "./tools/navigate.ts";
 import { sendPaymentTool } from "./tools/payment.ts";
 import { setApprovalRuleTool } from "./tools/rule.ts";
@@ -38,6 +39,8 @@ import { createToolRegistry, type ToolRegistry } from "./tools/registry.ts";
  * `get_balance` (T1) is the one read-only tool: it returns balances, never an
  * `Intent`, and the loop speaks its `toSpeech` sentence. `navigate` (NAV) is the
  * other read-only tool: it returns a `NavigationRequest`, never an `Intent`.
+ * W15f adds the contact tools (`save_contact`, `list_contacts`,
+ * `delete_contact`): read-only, no approval, no intent.
  */
 export function createDefaultRegistry(): ToolRegistry {
   return createToolRegistry()
@@ -56,7 +59,12 @@ export function createDefaultRegistry(): ToolRegistry {
     // existing withdraw/p2p_offer/deposit/p2p_accept executors.
     .register(setApprovalRuleTool)
     .register(sellAssetTool)
-    .register(buyAssetTool);
+    .register(buyAssetTool)
+    // W15f: the address book by voice or typed prompt. All read-only (no
+    // approval, no intent); the shell injects `ToolContext.contacts`.
+    .register(saveContactTool)
+    .register(listContactsTool)
+    .register(deleteContactTool);
 }
 
 export interface AgentRuntime {

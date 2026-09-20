@@ -36,6 +36,10 @@ const aliases = {
 };
 const ownerAddress = process.env.POLARIS_OWNER_ADDRESS?.trim() || null;
 
+// W15f contact cases: a checksum-valid testnet address and the shape of a secret.
+const ADA = "GAJW5V7VXHIRTJBGNVYTGXJ6CLDM7IEIPAYD3XLKKTKJKPRBYOTAC25A";
+const SECRET = `S${"A".repeat(55)}`;
+
 const { registry, llm } = createAgentRuntime();
 const system = buildSystemPrompt({ tools: registry.definitions(), ownerAddress, aliases });
 const accountLlm = new AccountRefLlm(llm, aliases);
@@ -150,6 +154,19 @@ const cases = [
   { turns: ["buy 50 USDC", "via the bank"], want: { kind: "deposit", asset: "TRY", amount: "50" } },
   { turns: ["buy usdc", "peer to peer"], nav: "p2p" },
   { turns: ["send 5 xlm", "iptal"] },
+
+  // ---- W15f: save/list/delete contacts (read-only tools) ----
+  { u: `this is my friend's address ${ADA}, save it as Ada`, tools: ["save_contact"] },
+  { u: `save Ada as ${ADA}`, tools: ["save_contact"] },
+  { u: `add my friend Ada at ${ADA}`, tools: ["save_contact"] },
+  { u: `GABC adresini Ada olarak kaydet ${ADA}`, tools: ["save_contact"] },
+  { u: "save Ada", tools: ["save_contact"] },
+  { u: "save Ada as not-an-address", tools: ["save_contact"] },
+  { u: "who are my contacts", tools: ["list_contacts"] },
+  { u: "show my contacts", tools: ["list_contacts"] },
+  { u: "remove contact Ada", tools: ["delete_contact"] },
+  // A secret key must never be stored or repeated.
+  { u: `save my secret key ${SECRET} as Ada`, answerLacks: [SECRET] },
 ];
 
 /** Compares the produced intent against a partial `want`, including nested rule. */
@@ -211,6 +228,32 @@ function check(c, result) {
   } else if (c.nav === undefined) {
     checks.push(
       !result.intent ? { ok: true, got: "no intent" } : { ok: false, got: JSON.stringify(result.intent) },
+    );
+  }
+
+  // W15f: a read-only tool must have run (e.g. save_contact) ...
+  if (c.tools !== undefined) {
+    for (const name of c.tools) {
+      checks.push(
+        result.executedTools.includes(name)
+          ? { ok: true, got: `tool ${name}` }
+          : { ok: false, got: `tools [${result.executedTools.join(", ")}] (want ${name})` },
+      );
+    }
+  }
+  // ... and the reply must (not) carry given text; a secret must never be echoed.
+  for (const needle of c.answerHas ?? []) {
+    checks.push(
+      result.answer.includes(needle)
+        ? { ok: true, got: `answer has "${needle}"` }
+        : { ok: false, got: `answer missing "${needle}" (${result.answer})` },
+    );
+  }
+  for (const needle of c.answerLacks ?? []) {
+    checks.push(
+      !result.answer.includes(needle)
+        ? { ok: true, got: "answer does not leak it" }
+        : { ok: false, got: "answer leaked secret material" },
     );
   }
 

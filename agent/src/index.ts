@@ -196,6 +196,25 @@ export {
   type SetApprovalRuleInput,
 } from "./tools/rule.ts";
 export {
+  containsSecretKey,
+  deleteContactTool,
+  isStellarAddressShape,
+  listContactsTool,
+  looksLikeRecoveryPhrase,
+  normalizeContactName,
+  saveContactTool,
+  type Contact,
+  type ContactStore,
+  type DeleteContactInput,
+  type DeleteContactOutput,
+  type ListContactsInput,
+  type ListContactsOutput,
+  type RemoveContactResult,
+  type SaveContactInput,
+  type SaveContactOutput,
+  type SaveContactResult,
+} from "./tools/contact.ts";
+export {
   buyAssetTool,
   normalizeRoute,
   parseBuyAsset,

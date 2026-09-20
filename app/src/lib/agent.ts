@@ -26,6 +26,7 @@ import {
   type BalanceReader,
 } from "@polaris/agent";
 import type { AgentStage, Intent, NavigationRequest } from "@polaris/interfaces";
+import { createAgentContactStore } from "@/lib/contacts";
 import { markTurnPhase } from "@/lib/polaris";
 import { getStellarConfig } from "@/lib/stellarConfig";
 import committedAliases from "../../../stellar/config/aliases.json";
@@ -122,6 +123,12 @@ const bus = createEventBus();
  * completes the earlier request. In memory only, never persisted, no secrets.
  */
 const dialog = new DialogMemory();
+/**
+ * The address book handed to `save_contact`/`list_contacts`/`delete_contact`
+ * (W15f). It reuses the Wallet page's store client and StrKey checksum, so a
+ * contact saved by voice or typed prompt is identical to one saved in the UI.
+ */
+const contactStore = createAgentContactStore();
 
 /** Drops the conversation memory (e.g. when the shell session resets). */
 export function resetAgentDialog(): void {
@@ -296,6 +303,7 @@ export async function runAgentTurn(
       dialog,
       toolContext: {
         aliases: { ...accounts.aliases },
+        contacts: contactStore,
         ...(readBalances ? { readBalances } : {}),
       },
       ...(transcriptLanguage ? { transcriptLanguage } : {}),
