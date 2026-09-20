@@ -1582,9 +1582,13 @@
   background: #000;
 }
 
+/* The creature peaks at about 42% of the clip's height, so this is the size
+   that lands it at a comfortable ~105px — large enough to be a portrait rather
+   than an icon, small enough that the headline underneath is still the thing
+   the eye settles on. */
 .ob-media-hero {
-  width: 380px;
-  height: 214px;
+  width: 448px;
+  height: 252px;
 }
 
 .ob-media-keys {
@@ -1895,9 +1899,13 @@
   left: 50%;
   translate: -50% 0;
   background: #000;
-  box-shadow: inset 0 0 0 1px var(--ob-line-strong);
-  /* Square at the top edge (it meets the bezel), rounded below — the notch's
-     own silhouette. */
+  /* Three sides, not an inset ring. The notch's top edge *is* the lid's top
+     edge, so a hairline there would sit on top of `.ob-display`'s own and read
+     as one doubled, thicker line — which is exactly the seam a real notch does
+     not have. Square at the top for the same reason, rounded below. */
+  box-sizing: border-box;
+  border: 1px solid var(--ob-line-strong);
+  border-top: 0;
   border-radius: 0 0 9px 9px;
   display: flex;
   align-items: center;

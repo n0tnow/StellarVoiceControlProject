@@ -13,6 +13,7 @@
  */
 import { Clip } from "../Clip.tsx";
 import heroPoster from "@/assets/onboarding/blob-hero-poster.jpg";
+import heroStill from "@/assets/onboarding/blob-hero-still.png";
 import heroVideo from "@/assets/onboarding/blob-hero.mp4";
 
 export interface WelcomePageProps {
@@ -22,7 +23,17 @@ export interface WelcomePageProps {
 export function WelcomePage({ onAdvance }: WelcomePageProps) {
   return (
     <>
-      <Clip className="ob-media-hero" video={heroVideo} poster={heroPoster} />
+      {/* The clip materialises the creature out of nothing, so its first frame
+          is very nearly an empty black rectangle — a correct poster (it matches
+          what the video starts with, so there is no jump) and a useless still.
+          `blob-hero-still.png` is a frame from the middle of the clip, where the
+          creature is fully formed, and it is what a reduced-motion user sees. */}
+      <Clip
+        className="ob-media-hero"
+        video={heroVideo}
+        poster={heroPoster}
+        still={heroStill}
+      />
       <h1 className="ob-title">Meet Polaris</h1>
       <p className="ob-body">
         Polaris lives in the notch. Hold two keys, say what you want, and let go —
