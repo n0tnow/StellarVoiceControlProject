@@ -276,13 +276,57 @@
   }
 }
 
+/* The right ear's contents: Polaris' face followed by the indicator dots.
+   The dots keep the ear's trailing edge (and therefore the purple wash's
+   anchor) exactly where they were before the face existed; the face is laid
+   out to their left, inside the same ear, so nothing moved. */
+.notch-trail {
+  display: flex;
+  align-items: center;
+  grid-column: 3;
+  justify-self: end;
+  gap: 10px;
+}
+
+/* The blobatar. Fixed box so the strip's row height never depends on whether a
+   face is mounted — the shell's height comes from the Rust state table, and a
+   content-driven row here would fight it. */
+.notch-face {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  /* The creature opens with the strip rather than appearing fully formed at the
+     end of the shell tween. Same curve as `.notch-content`'s fade, one beat
+     later, so it reads as arriving *with* the notch. */
+  animation: notch-face-in var(--shell-motion) var(--shell-ease) both;
+}
+
+/* A faint halo in the accent colour, so a pale creature does not float on pure
+   black with no relation to the indicator wash beside it. */
+.notch-face > svg {
+  overflow: visible;
+  filter: drop-shadow(0 0 6px #f05adc4d);
+}
+
+@keyframes notch-face-in {
+  from {
+    opacity: 0;
+    transform: scale(0.72);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
 .notch-indicator {
   position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
-  grid-column: 3;
-  justify-self: end;
   gap: 4px;
   width: 26px;
   height: 20px;
@@ -1200,7 +1244,10 @@
 
   .notch-label.is-current,
   .notch-label.is-leaving,
-  .notch-prompt {
+  .notch-prompt,
+  /* The blobatar's own loops are already dropped by `blobatar/motion.css`,
+     which honours the same query; this is only our entrance animation. */
+  .notch-face {
     animation: none;
   }
 

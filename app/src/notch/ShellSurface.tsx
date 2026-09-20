@@ -13,6 +13,12 @@
  * voice turn can still be live underneath it, so [`PromptPanel`] carries the
  * turn's stage as a small inline indicator (see `inlineVoiceStage`). The panel
  * placeholder remains for the menus we design later.
+ *
+ * The strip's right ear also carries Polaris' face ([`BlobatarFace`]) — the
+ * assistant's visible identity, posed from the same voice stage the indicator
+ * dots animate on. It is mounted on the state boundary only (`shouldRenderFace`)
+ * so the collapsed shell stays faceless and the pose morph survives a stage
+ * change.
  */
 import { useCallback, useEffect, useState, type CSSProperties } from "react";
 
@@ -20,6 +26,8 @@ import type { NavigationRequest, ShellGeometry } from "@polaris/interfaces";
 
 import { StageLabel } from "@/components/StageLabel";
 import { notchPageFor } from "@/lib/navigation";
+import { BlobatarFace } from "./BlobatarFace";
+import { shouldRenderFace } from "./faceState";
 import { MoreMenu } from "./MoreMenu";
 import { NotchPanel } from "./NotchPanel";
 import { PromptPanel } from "./PromptPanel";
@@ -159,6 +167,10 @@ export function ShellSurface({
   // prompt on top). Because the strip is not rendered in `prompt`, the turn's
   // stage travels into the prompt as this inline stage instead.
   const voiceStage = inlineVoiceStage(visual);
+  // Polaris' face rides the strip's right ear. Gated on the applied *state*
+  // only: the collapsed shell is the camera cutout and must stay faceless, and
+  // the prompt state has no strip to ride in.
+  const showFace = shouldRenderFace(applied);
 
   // A content-driven state (the prompt) uses its measured, Rust-clamped height;
   // every other state uses the table value.
@@ -204,10 +216,19 @@ export function ShellSurface({
           </div>
           {/* The camera housing: no pixels exist here, so it stays empty. */}
           <span className="notch-gap" aria-hidden="true" />
-          <div className="notch-indicator" aria-hidden="true">
-            <span />
-            <span />
-            <span />
+          {/* The right ear: Polaris' face, then the indicator dots at the very
+              edge (the dots keep the purple wash anchored where it has always
+              been). The face is mounted per *state*, never per stage — see
+              `BlobatarFace` for why a remount would kill the pose morph — and
+              is absent while collapsed, where there are no pixels to draw it
+              on (`shouldRenderFace`). */}
+          <div className="notch-trail">
+            {showFace ? <BlobatarFace stage={voiceStage} /> : null}
+            <div className="notch-indicator" aria-hidden="true">
+              <span />
+              <span />
+              <span />
+            </div>
           </div>
         </div>
       ) : null}
