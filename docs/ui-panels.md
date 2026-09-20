@@ -215,11 +215,11 @@ calm hint.
 commands and shows a mandatory “DEMO — nothing is signed” banner; real mode
 (`#/approval` with no `demo`) never uses a fixture.
 
-## 9. Signing flow (`#/approval` → Freighter → submit)
+## 9. Signing flow (`#/approval` → signer → submit)
 
-> Step W4b. How an approved card becomes a signed, submitted transaction, and
-> where the gate sits. Rust owns the gate and the bridge; the webview only
-> orchestrates and announces the result.
+> Step W4b, updated W10. How an approved card becomes a signed, submitted
+> transaction, and where the gate sits. Rust owns the gate and the signer; the
+> webview only orchestrates and announces the result.
 
 The value-moving path is one chain of typed seams, each of which fails closed:
 
@@ -234,11 +234,14 @@ The value-moving path is one chain of typed seams, each of which fails closed:
    `authorized`; denied, expired, timed-out, superseded and errored are all
    `false`. `chain.ts` selects it when a Tauri runtime is present;
    `POLARIS_ALLOW_AUTO_APPROVE` stays opt-in and only applies outside Tauri.
-3. **Sign.** `app/src/lib/signing.ts` calls `bridge_sign(id)`. Rust takes the
-   XDR from the gate via `take_authorized(id)` — the only path by which XDR
-   leaves the gate — mints a one-time loopback token, opens the user's browser at
-   the bridge page, and waits for the wallet. Rust independently verifies the
-   returned envelope before reporting `ok`.
+3. **Sign.** `app/src/lib/signing.ts` reads the signer from `stellar_config`.
+   Embedded (the default, W10): it calls `wallet_sign(id)`; Rust takes the XDR
+   from the gate via `take_authorized(id)` — the only path by which XDR leaves
+   the gate — signs the transaction hash with the Keychain-stored seed and
+   independently verifies the envelope. **No browser opens.** Freighter
+   (`POLARIS_SIGNER=freighter`): it calls `bridge_sign(id)`, which mints a
+   one-time loopback token, opens the browser at the bridge page and waits for
+   the wallet. Either way Rust re-verifies before reporting `ok`.
 4. **Submit.** `submitSignedTx(signedXdr, unsignedXdr)` submits over Horizon. The
    returned hash must equal the `txHash` Rust computed; a mismatch is a labelled
    failure, never a silent success.
@@ -254,9 +257,10 @@ and settles the turn — nothing throws and the notch never sticks.
 
 **Debug checks** (`docs/debug-panel.md`): `network.ts` (config, testnet, owner,
 alias, Horizon balance), `approval.ts` (`biometric_health` + a “Test Touch ID”
-action), `bridge.ts` (`bridge_health` + a “Test Freighter signing (no funds)”
-action that builds an owner→owner 1 XLM payment with sequence 0), `submit.ts`
-(static importability only).
+action), `wallet.ts` (`wallet_status` + the active account's testnet balance;
+warns when no wallet exists), `bridge.ts` (`bridge_health` + a “Test Freighter
+signing (no funds)” action that builds an owner→owner 1 XLM payment with
+sequence 0), `submit.ts` (static importability only).
 
 ## 10. Running a transaction from a panel
 
