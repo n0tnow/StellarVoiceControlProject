@@ -26,7 +26,12 @@
  *
  * The approver is **fail-closed by default**. In a real Tauri runtime the Touch
  * ID gate (W3) is selected: it registers the exact blob and returns a decision
- * only when the gate reports `authorized`. Outside Tauri, the loud auto-approval
+ * only when the gate reports `authorized`. In front of it sits the local
+ * `approvalThresholdUsd` preference (`thresholdApprover`): a USD-stablecoin
+ * payment strictly below the owner's threshold skips the card entirely — but
+ * only when the chain did not demand one (`Approval card required: yes` always
+ * wins, D10c) and never for a non-USD asset (no price oracle → always ask).
+ * Outside Tauri, the loud auto-approval
  * placeholder is reachable only with `POLARIS_ALLOW_AUTO_APPROVE=1` (the
  * CLI/demo path); everything else is the deny-all gate. In the app the biometric
  * gate always wins, so no value can move without a real gesture; see
@@ -51,6 +56,7 @@ import {
   p2pReclaimTool,
 } from "@/lib/p2p";
 import { createTouchIdApprover, defaultApproverDeps, type ApproverDeps } from "@/lib/approver";
+import { createThresholdApprover } from "@/lib/thresholdApprover";
 import {
   defaultSigningDeps,
   signAndSubmit,
@@ -82,7 +88,9 @@ async function resolveRuntimeApprover(
 ): Promise<IntentApprover> {
   if (isTauri()) {
     const deps: ApproverDeps = await defaultApproverDeps(onStage);
-    return createTouchIdApprover(deps);
+    // The local threshold wraps the gate: it can only skip the card for a
+    // payment the chain itself did not flag; it can never force one open.
+    return createThresholdApprover(createTouchIdApprover(deps));
   }
   if (import.meta.env.POLARIS_ALLOW_AUTO_APPROVE === "1") {
     return resolveApprover(true);
