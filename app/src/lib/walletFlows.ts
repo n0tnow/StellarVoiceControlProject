@@ -105,6 +105,8 @@ export interface ImportState {
   secret: string;
   /** Optional derivation index, kept as the raw field text. */
   index: string;
+  /** Optional nickname; blank falls back to the position default `Account N`. */
+  name: string;
   /** The previewed address, present once derivation has happened. */
   address: string | null;
   error: string | null;
@@ -115,6 +117,7 @@ export const initialImportState: ImportState = {
   mode: "secret",
   secret: "",
   index: "",
+  name: "",
   address: null,
   error: null,
 };
@@ -123,6 +126,7 @@ export type ImportAction =
   | { type: "mode"; mode: ImportMode }
   | { type: "secret"; value: string }
   | { type: "index"; value: string }
+  | { type: "name"; value: string }
   | { type: "preview" }
   | { type: "previewed"; address: string }
   | { type: "failed"; error: string }
@@ -140,6 +144,8 @@ export function reduceImport(state: ImportState, action: ImportAction): ImportSt
       return { ...state, secret: action.value, error: null };
     case "index":
       return { ...state, index: action.value, error: null };
+    case "name":
+      return { ...state, name: action.value, error: null };
     case "preview":
       return { ...state, step: "previewing", error: null };
     case "previewed":
@@ -192,4 +198,59 @@ export function parseImportIndex(value: string): number | undefined {
   const trimmed = value.trim();
   if (trimmed.length === 0) return undefined;
   return Number.parseInt(trimmed, 10);
+}
+
+/* ------------------------------------------------------------------ *
+ * Account nicknames + switcher model (task W19)
+ * ------------------------------------------------------------------ */
+
+/** Nicknames are short by design; Rust allows 40, the panel shows 24. */
+export const MAX_ACCOUNT_LABEL = 24;
+
+/** The default nickname for the next account, matching Rust's `Account N`. */
+export function defaultAccountLabel(count: number): string {
+  return `Account ${count + 1}`;
+}
+
+/** The trimmed nickname, or `fallback` when the field is blank. */
+export function normalizeAccountLabel(value: string, fallback: string): string {
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : fallback;
+}
+
+/**
+ * Validates a typed nickname against the already-used ones. A blank value is
+ * allowed (it becomes the default). Names are compared case-insensitively.
+ */
+export function validateAccountLabel(value: string, taken: readonly string[]): string | null {
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return null;
+  if (trimmed.length > MAX_ACCOUNT_LABEL) {
+    return `Keep the name to ${MAX_ACCOUNT_LABEL} characters or fewer.`;
+  }
+  const key = trimmed.toLowerCase();
+  if (taken.some((label) => label.trim().toLowerCase() === key)) {
+    return "That name is already used.";
+  }
+  return null;
+}
+
+/** One row of the account switcher. */
+export interface AccountSwitcherRow {
+  address: string;
+  /** The nickname, falling back to the position default when blank. */
+  label: string;
+  active: boolean;
+}
+
+/** Builds the switcher's rows in store order, flagging the active account. */
+export function accountSwitcherRows(
+  entries: readonly { address: string; label: string }[],
+  activeAddress: string | null,
+): AccountSwitcherRow[] {
+  return entries.map((entry, index) => ({
+    address: entry.address,
+    label: normalizeAccountLabel(entry.label, defaultAccountLabel(index)),
+    active: entry.address === activeAddress,
+  }));
 }

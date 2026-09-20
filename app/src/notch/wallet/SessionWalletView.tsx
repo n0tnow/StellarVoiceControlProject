@@ -9,6 +9,7 @@
 import { useState } from "react";
 
 import { walletEngine } from "@/lib/wallet";
+import { defaultAccountLabel } from "@/lib/walletFlows";
 import { walletScreenFor, WalletSessionError } from "@/lib/walletSession";
 import { ConnectScreen } from "@/notch/wallet/ConnectScreen";
 import { CreateWallet } from "@/notch/wallet/CreateWallet";
@@ -49,6 +50,9 @@ export function SessionWalletView() {
     reload();
   };
 
+  const defaultLabel = defaultAccountLabel(accounts.entries.length);
+  const existingLabels = accounts.entries.map((entry) => entry.label);
+
   const run = (action: Promise<unknown>): void => {
     void action
       .then(() => accounts.reload())
@@ -68,17 +72,35 @@ export function SessionWalletView() {
     }
   };
 
+  // Onboarding screens take over the page whenever it is open, whatever the
+  // session read says — the unlocked dashboard offers the same flow to add an
+  // account, so `mode` must not be ignored while a wallet is active.
+  if (mode === "create") {
+    return (
+      <CreateWallet
+        label={defaultLabel}
+        onDone={afterChange}
+        onCancel={() => setMode("none")}
+      />
+    );
+  }
+  if (mode === "import") {
+    return (
+      <ImportWallet
+        defaultLabel={defaultLabel}
+        existingLabels={existingLabels}
+        onDone={afterChange}
+        onCancel={() => setMode("none")}
+        onCreate={() => setMode("create")}
+      />
+    );
+  }
+
   if (screen === "loading") {
     return <p className="wallet-key-label">Reading wallet session…</p>;
   }
 
   if (screen === "connect") {
-    if (mode === "create") {
-      return <CreateWallet onDone={afterChange} onCancel={() => setMode("none")} />;
-    }
-    if (mode === "import") {
-      return <ImportWallet onDone={afterChange} onCancel={() => setMode("none")} />;
-    }
     return (
       <div className="page-stack">
         <ConnectScreen
