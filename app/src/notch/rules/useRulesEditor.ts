@@ -13,7 +13,7 @@ import { loadSecurityState } from "@/lib/guardStateLive";
 import type { SecurityState } from "@/lib/guardState";
 import type { AutoPayContact } from "@/lib/autopay";
 
-import { ruleIntent, rulesFormFromState, type RulesForm } from "./rulesModel";
+import { normalizeForm, ruleIntent, rulesFormFromState, type RulesForm } from "./rulesModel";
 
 export type RulesLoadState = "loading" | "ready" | "unconfigured" | "not_set_up" | "error";
 
@@ -137,7 +137,9 @@ export function useRulesEditor(): RulesEditorData {
     [security, refresh],
   );
 
-  const save = useCallback(() => run(form, "rules page: save"), [run, form]);
+  // The single control collapses to "always ask" when the threshold is blank or
+  // zero, so a cleared field can never accidentally arm automatic payments.
+  const save = useCallback(() => run(normalizeForm(form), "rules page: save"), [run, form]);
   const disable = useCallback(() => run({ ...form, mode: "always_ask" }, "rules page: disable"), [run, form]);
   const syncContacts = useCallback(() => run(form, "rules page: sync contacts"), [run, form]);
 

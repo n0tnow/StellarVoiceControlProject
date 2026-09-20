@@ -294,6 +294,7 @@
 - [ ] **Open / honest:** SPP **value-moving** integration (needs wallet `signAuthEntry`); CT (confidential tokens) spike/integration; protocol integration (Soroswap swap **or** DeFindex, not both); **A4 screen reading**; developer mode; MPP; passkey wallet.
 - [x] **W15d** Settings page — session/status/privacy/diagnostics/quit in the notch (`feat/w15d-settings`, `backlog/w15d-settings.md`).
 - [x] **W15a** shell cleanup: panel always closable (Wallet auto-opens once at launch, logout/auto-lock collapses it), "⋯" `MoreMenu` deleted, every voice `NavigationTarget` folded into a notch page, compacted nav (`feat/w15a-shell`).
+- [x] (2026-09-20, branch `feat/w15e-rules`) **W15e.** Notch Rules/Tasks redesign: one-control Rules page with live summary + Advanced (auto-pay batch save) and a compact New-schedule reveal on Tasks; check clean, app 442/0 — `backlog/w15e-rules.md`
 - [ ] **Open / honest:** SPP **value-moving** integration (needs wallet `signAuthEntry`); **Trade page**; CT (confidential tokens) spike/integration; protocol integration (Soroswap swap **or** DeFindex, not both); **A4 screen reading**; developer mode; MPP; passkey wallet.
 - **Human-verification list (unverified by automation):** real mic + STT, real Touch ID (create/sign/unlock/batch), real Keychain first-access, live anchor payout leg, live `pay_executor`, real notch windows/hover/pin, Friendbot.
 

@@ -35,6 +35,35 @@ export function rulesFormFromState(state: Pick<SecurityState, "rule" | "executor
   };
 }
 
+/** A positive decimal string (the shape the contract accepts). */
+const POSITIVE_AMOUNT = /^\d{1,12}(\.\d{1,7})?$/;
+
+/**
+ * Collapse the single-control form before it is saved: a blank or zero
+ * threshold can only mean "always ask", so a mistyped clear never arms payments.
+ */
+export function normalizeForm(form: RulesForm): RulesForm {
+  const threshold = form.threshold.trim();
+  const positive = POSITIVE_AMOUNT.test(threshold) && /[1-9]/.test(threshold);
+  return { ...form, threshold, mode: positive ? "auto_under_limit" : "always_ask" };
+}
+
+/**
+ * The plain-language sentence at the top of the page, read from the live
+ * on-chain rule. `symbol` is the chain's asset code, so the page stays honest
+ * when the rule is not XLM.
+ */
+export function ruleSummary(state: Pick<SecurityState, "rule" | "executor">, symbol: string): string {
+  const rule = state.rule;
+  if (rule === null) return "No spending rule yet. Set one below.";
+  const armed = state.executor !== null && (rule.auto_approve_limit ?? 0n) > 0n;
+  if (!armed) return "Every payment needs your Touch ID. Nothing is sent without asking.";
+  return (
+    `Payments under ${guard.fromRawUnits(rule.auto_approve_limit)} ${symbol} are sent without ` +
+    "asking. Everything else needs Touch ID."
+  );
+}
+
 /**
  * The `guard_policy` intent for a save. `always_ask` carries no limits (the
  * disable path); `auto_under_limit` carries the typed limit and the recipient

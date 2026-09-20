@@ -82,9 +82,9 @@ test("rowsFromMock marks a disabled task finished", () => {
   assert.equal(row?.statusLabel, "Disabled");
 });
 
-test("tasksSource: real data only inside Tauri with an owner address", () => {
+test("tasksSource: live inside Tauri with an owner, never demo there", () => {
   assert.equal(tasksSource({ inTauri: true, ownerAddress: "GACC2" }), "live");
-  assert.equal(tasksSource({ inTauri: true, ownerAddress: null }), "demo");
+  assert.equal(tasksSource({ inTauri: true, ownerAddress: null }), "unconfigured");
   assert.equal(tasksSource({ inTauri: false, ownerAddress: "GACC2" }), "demo");
   assert.equal(tasksSource({ inTauri: false, ownerAddress: null }), "demo");
 });
