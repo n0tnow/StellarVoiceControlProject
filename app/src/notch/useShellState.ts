@@ -33,6 +33,7 @@ import {
   listenNotchHotkey,
   requestShellState,
   resizeShellContent,
+  setShellPinned,
 } from "./shellBridge";
 import {
   HOVER_ENTER_DWELL_MS,
@@ -44,6 +45,7 @@ import {
   resolveShellState,
   type ShellStateName,
 } from "./shellState";
+import { recordShellDiagnostics } from "./shellDiagnostics";
 
 export type { ShellStateName } from "./shellState";
 export { HOVER_ENTER_DWELL_MS, HOVER_LEAVE_GRACE_MS, SHELL_MOTION_MS, resolveShellState } from "./shellState";
@@ -94,13 +96,21 @@ export function usePrefersReducedMotion(): boolean {
 export interface UseShellStateOptions {
   /** Is the voice source an attention state that must outrank hover? */
   voiceAttention?: boolean;
+  /**
+   * A gate the UI is deliberately holding open (the wallet login/unlock screen)
+   * proposes this state. It outranks the ambient ready/error dwell but not a
+   * genuine attention voice state; `"collapsed"` (the default) means unpinned.
+   * Rust is told about it so its click-through watchdog does not force the shell
+   * shut under the pinned screen.
+   */
+  pin?: ShellStateName;
 }
 
 export function useShellState(
   voice: ShellStateName,
   options: UseShellStateOptions = {},
 ): ShellStateController {
-  const { voiceAttention = true } = options;
+  const { voiceAttention = true, pin = "collapsed" } = options;
   const [hoverActive, setHoverActive] = useState(false);
   // The hotkey source is a latch, not a pulse: the double-Control tap event
   // sets it, and Escape / click-away / a second tap / the Rust watchdog's
@@ -237,22 +247,48 @@ export function useShellState(
     return () => window.removeEventListener("blur", onBlur);
   }, [dismiss]);
 
+  // Keep Rust's click-through watchdog from force-collapsing a gate the UI is
+  // deliberately holding open. Without this the wallet login panel was shut to
+  // the collapsed frame ~1.5 s after launch (cursor outside) while React still
+  // rendered the panel into it — the clipped wallet screen.
+  useEffect(() => {
+    void setShellPinned(pin !== "collapsed").catch((error: unknown) => {
+      console.warn("shell_set_pinned failed", error);
+    });
+  }, [pin]);
+
   const target = resolveShellState(
-    { voice, hover: hoverActive ? "panel" : "collapsed", hotkey: hotkeyState },
+    { voice, hover: hoverActive ? "panel" : "collapsed", hotkey: hotkeyState, pin },
     { voiceAttention },
   );
   const [applied, setApplied] = useState<ShellStateName>(target);
   // Which source resolved the current state — the `source=` half of the hover
-  // diagnostics (Rust logs the hover edge half).
-  const source = hotkeyState !== "collapsed" ? "hotkey" : hoverActive ? "hover" : "voice";
+  // diagnostics (Rust logs the hover edge half). Mirrors the reducer's order.
+  const source =
+    hotkeyState !== "collapsed"
+      ? "hotkey"
+      : voiceAttention && voice !== "collapsed"
+        ? "voice"
+        : pin !== "collapsed"
+          ? "pin"
+          : hoverActive
+            ? "hover"
+            : "voice";
   // One terminal line per applied-state transition, so "where does the hover
   // chain get to" is answerable from the launch terminal alone.
   const loggedState = useRef<ShellStateName | null>(null);
   useEffect(() => {
+    recordShellDiagnostics({
+      applied,
+      target,
+      source,
+      pinned: pin !== "collapsed",
+      voiceAttention,
+    });
     if (loggedState.current === applied) return;
     loggedState.current = applied;
     webLog("info", `notch state applied=${applied} target=${target} source=${source}`);
-  }, [applied, target, source]);
+  }, [applied, target, source, pin, voiceAttention]);
   // Measured, Rust-clamped shell height for the active content-driven state.
   const [contentHeight, setContentHeight] = useState<number | null>(null);
   // Bumped after every completed request so the commit guarantee runs even when

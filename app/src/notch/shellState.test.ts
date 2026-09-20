@@ -47,6 +47,49 @@ test("an ambient voice state still wins when hover is quiet", () => {
   );
 });
 
+test("a pinned wallet gate outranks the ready/error dwell (notch-clip)", () => {
+  // The W13b wallet gate pins the panel while nobody is logged in. The voice
+  // source's ready label must not keep the shell in the small strip the wallet
+  // screen is rendered into.
+  assert.equal(
+    resolveShellState(
+      { voice: "compact", hover: "collapsed", hotkey: "collapsed", pin: "panel" },
+      { voiceAttention: false },
+    ),
+    "panel",
+  );
+});
+
+test("a genuine attention voice state still outranks a pinned gate", () => {
+  // Recording/transcribing/thinking/speaking (and the F1 payment stages) are
+  // something the user must see now; the pin returns once they settle.
+  assert.equal(
+    resolveShellState(
+      { voice: "compact", hover: "collapsed", hotkey: "collapsed", pin: "panel" },
+      { voiceAttention: true },
+    ),
+    "compact",
+  );
+  // The same input with the attention flag cleared returns to the pin.
+  assert.equal(
+    resolveShellState(
+      { voice: "compact", hover: "collapsed", hotkey: "collapsed", pin: "panel" },
+      { voiceAttention: false },
+    ),
+    "panel",
+  );
+});
+
+test("a pinned gate also outranks hover and the ambient voice proposal", () => {
+  assert.equal(
+    resolveShellState(
+      { voice: "compact", hover: "panel", hotkey: "collapsed", pin: "panel" },
+      { voiceAttention: false },
+    ),
+    "panel",
+  );
+});
+
 test("a latched prompt mode outranks hover and attention voice", () => {
   // The double-Control prompt is an explicitly invoked mode: losing hover must
   // not collapse it, and a recording must not replace it. The prompt keeps the
