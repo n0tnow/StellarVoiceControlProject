@@ -54,6 +54,16 @@ export async function resizeShellContent(height: number): Promise<number> {
 }
 
 /**
+ * Tells Rust whether the active panel is a gate the UI is deliberately holding
+ * open (the wallet login/unlock pin). While pinned Rust's click-through
+ * watchdog must not force-collapse the shell the moment the cursor leaves it —
+ * that is what clipped the wallet screen to a thin strip (notch-clip).
+ */
+export async function setShellPinned(pinned: boolean): Promise<void> {
+  await invoke("shell_set_pinned", { pinned });
+}
+
+/**
  * Cursor hover changes, debounced in Rust (only emitted on an inside/outside
  * change). Dwell timing is left to React.
  */
@@ -106,6 +116,10 @@ export interface NotchHoverHealth {
   clickThrough: boolean;
   interactive: boolean;
   focusable: boolean;
+  /** True while a pinned gate (the wallet login/unlock screen) owns the shell. */
+  pinned: boolean;
+  /** Native OS window height in points. */
+  windowHeight: number;
   /** `NSApplication.isActive` — macOS pauses the global monitor while active. */
   active: boolean;
   activationPolicy: string;

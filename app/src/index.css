@@ -457,6 +457,10 @@
 }
 
 .panel-body {
+  /* The panel's height is fixed by the shell (`--shell-height`), so a long page
+     scrolls here instead of clipping at the window edge. `min-height: 0` is what
+     lets this grid item shrink below its content and actually scroll. */
+  min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;

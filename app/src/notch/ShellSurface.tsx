@@ -60,18 +60,8 @@ export function ShellSurface({
   navigation = null,
 }: ShellSurfaceProps) {
   // A voice-opened panel is pinned until an explicit dismissal, independent of
-  // the turn session, so the screen survives the turn settling. It rides the
-  // existing `voice` proposal as `panel` with attention forced on.
+  // the turn session, so the screen survives the turn settling.
   const [panelRequest, setPanelRequest] = useState(false);
-  const {
-    applied,
-    onTransitionEnd,
-    contentHeight,
-    applyContentHeight,
-    dismiss,
-  } = useShellState(panelRequest ? "panel" : voiceState, {
-    voiceAttention: panelRequest || voiceAttention,
-  });
 
   // W13b: while nobody is logged in the Wallet login owns the panel. The panel
   // opens itself on the Wallet page at launch and on every `wallet_session_changed`
@@ -79,6 +69,20 @@ export function ShellSurface({
   // until the session unlocks.
   const { session } = useWalletSession();
   const walletPin = shouldPinWallet(session);
+  // The pin is a proposal of its own (not a faked attention voice): it outranks
+  // the ready/error dwell so the wallet screen gets the full panel, while a
+  // genuine attention voice turn still takes the surface and hands it back.
+  const pinned = walletPin || panelRequest;
+  const {
+    applied,
+    onTransitionEnd,
+    contentHeight,
+    applyContentHeight,
+    dismiss,
+  } = useShellState(voiceState, {
+    voiceAttention,
+    pin: pinned ? "panel" : "collapsed",
+  });
 
   // Page routing for the `panel` state. Owned here (not in the panel) so the
   // controller survives the panel body's mount/unmount cycles and the voice
