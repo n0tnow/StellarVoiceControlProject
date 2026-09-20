@@ -30,7 +30,7 @@ function unlockError(failure: unknown): string {
 
 export function SessionWalletView() {
   const { session } = useWalletSession();
-  const { unlock, lock, setAutoLock, refresh } = useWalletSessionActions();
+  const { unlock, lock, refresh } = useWalletSessionActions();
   const accounts = useWalletAccounts();
   const [mode, setMode] = useState<OnboardingMode>("none");
   const [busy, setBusy] = useState(false);
@@ -110,13 +110,12 @@ export function SessionWalletView() {
       <WalletDashboard
         entries={accounts.entries}
         activeAddress={activeAddress}
-        autoLockMinutes={session?.autoLockMinutes ?? 30}
+        store={accounts.status?.store}
         onSelectAccount={(address) => run(walletEngine.select(address))}
         onRenameAccount={(address, label) => run(walletEngine.rename(address, label))}
         onRemoveAccount={(address) => run(walletEngine.remove(address))}
         onReloadAccounts={reload}
         onLock={() => run(lock())}
-        onSetAutoLock={(minutes) => run(setAutoLock(minutes))}
       />
     </div>
   );

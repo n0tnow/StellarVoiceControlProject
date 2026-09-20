@@ -1,14 +1,15 @@
 /**
- * The dashboard's Send form (task W13b).
+ * The dashboard's Send card (task W15b).
  *
- * It builds the same `Intent` a spoken "send 5 XLM to ada" produces and runs it
- * through the single `executeApprovedIntent` seam (chain tool → approval card →
- * Touch ID → `wallet_sign` → submit), so a typed send and a voice send cannot
- * diverge. The recipient is a saved contact or a pasted `G…` address; the asset
- * is one of the account's own balances.
+ * Two inputs on one row — "To" (a saved contact name or a pasted `G…` address,
+ * with matching contacts suggested as you type) and "Amount" — plus one Send
+ * button. The asset is XLM unless the account holds more than one asset, in
+ * which case a tiny switcher appears. The form builds the same `Intent` a spoken
+ * send produces and runs it through `executeApprovedIntent` (approval card →
+ * Touch ID → sign → submit), so a typed send and a voice send cannot diverge.
  */
 import { useState, type FormEvent } from "react";
-import { ExternalLink } from "lucide-react";
+import { Check } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { executeApprovedIntent } from "@/lib/chain";
@@ -31,7 +32,7 @@ const STAGE_LABEL: Record<PaymentStage, string> = {
 type SendState =
   | { kind: "idle" }
   | { kind: "running"; label: string }
-  | { kind: "done"; explorerUrl?: string }
+  | { kind: "done"; txHash: string }
   | { kind: "failed"; label: string };
 
 export interface SendFormProps {
@@ -43,9 +44,17 @@ export interface SendFormProps {
 export function SendForm({ assets, onSent }: SendFormProps) {
   const { contacts } = useContacts();
   const [recipient, setRecipient] = useState("");
-  const [asset, setAsset] = useState(assets[0] ?? "XLM");
+  const [asset, setAsset] = useState("XLM");
   const [amount, setAmount] = useState("");
   const [state, setState] = useState<SendState>({ kind: "idle" });
+
+  const query = recipient.trim().toLowerCase();
+  const isAddress = ADDRESS_SHAPE.test(recipient.trim());
+  const suggestions = isAddress
+    ? []
+    : contacts
+        .filter((contact) => query.length > 0 && contact.nickname.includes(query))
+        .slice(0, 3);
 
   const resolvedRecipient = (): string => {
     const match = contacts.find((contact) => contact.nickname === recipient.trim().toLowerCase());
@@ -56,7 +65,7 @@ export function SendForm({ assets, onSent }: SendFormProps) {
     event.preventDefault();
     const to = resolvedRecipient();
     if (!ADDRESS_SHAPE.test(to)) {
-      setState({ kind: "failed", label: "Enter a valid G… address or a saved recipient." });
+      setState({ kind: "failed", label: "Enter a valid G… address or a saved contact." });
       return;
     }
     if (!AMOUNT_SHAPE.test(amount.trim()) || !/[1-9]/.test(amount)) {
@@ -70,7 +79,7 @@ export function SendForm({ assets, onSent }: SendFormProps) {
         { onStage: (stage) => setState({ kind: "running", label: STAGE_LABEL[stage] }) },
       );
       if (outcome.status === "executed" && outcome.txHash !== undefined) {
-        setState({ kind: "done", explorerUrl: outcome.explorerUrl });
+        setState({ kind: "done", txHash: outcome.txHash });
         setAmount("");
         onSent?.();
       } else {
@@ -87,52 +96,20 @@ export function SendForm({ assets, onSent }: SendFormProps) {
     <section className={CARD}>
       <h3 className="text-xs font-semibold">Send</h3>
       <form className="space-y-2" onSubmit={(event) => void submit(event)}>
-        <label className="block text-[11px] text-polaris-muted">
-          Recipient
-          <input
-            className={FIELD}
-            value={recipient}
-            placeholder="ada or G…"
-            autoComplete="off"
-            autoCorrect="off"
-            spellCheck={false}
-            onChange={(event) => setRecipient(event.target.value)}
-          />
-        </label>
-        {contacts.length > 0 ? (
-          <select
-            className={FIELD}
-            aria-label="Pick a saved recipient"
-            value=""
-            onChange={(event) => {
-              if (event.target.value) setRecipient(event.target.value);
-            }}
-          >
-            <option value="">Saved recipients…</option>
-            {contacts.map((contact) => (
-              <option key={contact.nickname} value={contact.nickname}>
-                {contact.nickname}
-              </option>
-            ))}
-          </select>
-        ) : null}
-
         <div className="flex gap-2">
           <label className="block flex-1 text-[11px] text-polaris-muted">
-            Asset
-            <select
+            To
+            <input
               className={FIELD}
-              value={asset}
-              onChange={(event) => setAsset(event.target.value)}
-            >
-              {assets.map((code) => (
-                <option key={code} value={code}>
-                  {code}
-                </option>
-              ))}
-            </select>
+              value={recipient}
+              placeholder="ada or G…"
+              autoComplete="off"
+              autoCorrect="off"
+              spellCheck={false}
+              onChange={(event) => setRecipient(event.target.value)}
+            />
           </label>
-          <label className="block flex-1 text-[11px] text-polaris-muted">
+          <label className="block w-28 text-[11px] text-polaris-muted">
             Amount
             <input
               className={FIELD}
@@ -145,31 +122,53 @@ export function SendForm({ assets, onSent }: SendFormProps) {
           </label>
         </div>
 
+        {suggestions.length > 0 ? (
+          <div className={ACTIONS}>
+            {suggestions.map((contact) => (
+              <button
+                key={contact.nickname}
+                type="button"
+                className="rounded-full bg-white/10 px-2 py-0.5 text-[11px] text-[var(--color-notch-muted)] hover:text-[var(--color-notch-text)]"
+                onClick={() => setRecipient(contact.nickname)}
+              >
+                {contact.nickname}
+              </button>
+            ))}
+          </div>
+        ) : null}
+
         {state.kind === "failed" ? <p className={ERROR}>{state.label}</p> : null}
         {state.kind === "running" ? <p className={HINT}>{state.label}</p> : null}
         {state.kind === "done" ? (
-          <p className={HINT}>
-            Sent.{" "}
-            {state.explorerUrl !== undefined ? (
-              <a
-                className="inline-flex items-center gap-1 underline"
-                href={state.explorerUrl}
-                target="_blank"
-                rel="noreferrer"
-              >
-                View on explorer <ExternalLink aria-hidden="true" className="h-3 w-3" />
-              </a>
-            ) : null}
+          <p className={`${HINT} flex items-center gap-1`}>
+            <Check aria-hidden="true" className="h-3 w-3 text-[var(--color-polaris-ok)]" />
+            Sent.
+            <code className="selectable" title={state.txHash}>
+              {`${state.txHash.slice(0, 8)}…${state.txHash.slice(-8)}`}
+            </code>
           </p>
         ) : null}
 
-        <div className={ACTIONS}>
+        <div className="flex items-center gap-2">
           <Button size="sm" type="submit" disabled={busy}>
             {busy ? "Sending…" : "Send"}
           </Button>
+          {assets.length > 1 ? (
+            <select
+              className={`${FIELD} w-24`}
+              aria-label="Asset"
+              value={asset}
+              onChange={(event) => setAsset(event.target.value)}
+            >
+              {assets.map((code) => (
+                <option key={code} value={code}>
+                  {code}
+                </option>
+              ))}
+            </select>
+          ) : null}
         </div>
       </form>
-      <p className={HINT}>Typed and spoken sends both go through the approval card and Touch ID.</p>
     </section>
   );
 }

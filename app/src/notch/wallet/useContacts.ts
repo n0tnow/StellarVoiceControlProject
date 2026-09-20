@@ -1,14 +1,23 @@
 /**
- * Recipient-book state for the Wallet page (task W10b).
+ * Recipient-book state for the Wallet page (task W10b, cross-view event W15b).
  *
- * Loads the saved contacts and refreshes on `contacts_changed`. `add` validates
- * the nickname locally and the address by checksum (lazily importing the SDK)
- * before it ever reaches Rust, so an obvious typo never makes a round trip.
+ * Loads the saved contacts and refreshes on the Rust `contacts_changed` event
+ * and on the webview-level `polaris:contacts-changed` DOM event. The latter lets
+ * any view that adds/removes a contact (the Wallet page, "Ask Polaris") notify
+ * every other view without a shared store. `add` validates the nickname locally
+ * and the address by checksum (lazily importing the SDK) before it ever reaches
+ * Rust, so an obvious typo never makes a round trip.
  */
 import { useCallback, useEffect, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
-import { CONTACTS_CHANGED_EVENT, contactsClient, isValidStellarAddress } from "@/lib/contacts";
+import {
+  CONTACTS_CHANGED_DOM_EVENT,
+  CONTACTS_CHANGED_EVENT,
+  contactsClient,
+  isValidStellarAddress,
+  notifyContactsChanged,
+} from "@/lib/contacts";
 import { buildContactDraft, type Contact } from "@/lib/contactsModel";
 
 export interface AddContactResult {
@@ -66,6 +75,14 @@ export function useContacts(): ContactsState {
     };
   }, [reload]);
 
+  useEffect(() => {
+    const onChanged = (): void => {
+      void reload();
+    };
+    window.addEventListener(CONTACTS_CHANGED_DOM_EVENT, onChanged);
+    return () => window.removeEventListener(CONTACTS_CHANGED_DOM_EVENT, onChanged);
+  }, [reload]);
+
   const add = useCallback(
     async (nickname: string, address: string): Promise<AddContactResult> => {
       const draft = buildContactDraft(
@@ -78,7 +95,7 @@ export function useContacts(): ContactsState {
       if (!draft.ok) return { ok: false, field: draft.field, error: draft.error };
       try {
         await contactsClient.add(draft.draft.nickname, draft.draft.address);
-        await reload();
+        notifyContactsChanged();
         return { ok: true };
       } catch (failure) {
         return {
@@ -87,16 +104,13 @@ export function useContacts(): ContactsState {
         };
       }
     },
-    [contacts, reload],
+    [contacts],
   );
 
-  const remove = useCallback(
-    async (nickname: string): Promise<void> => {
-      await contactsClient.remove(nickname);
-      await reload();
-    },
-    [reload],
-  );
+  const remove = useCallback(async (nickname: string): Promise<void> => {
+    await contactsClient.remove(nickname);
+    notifyContactsChanged();
+  }, []);
 
   return { contacts, loading, error, add, remove, reload };
 }

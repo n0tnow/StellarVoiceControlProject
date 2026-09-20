@@ -192,3 +192,36 @@ export function deriveAssetRows(detail: HorizonAccountDetail): AssetRow[] {
 export function accountStatusLabel(result: HorizonAccountResult): "Funded" | "Not funded" {
   return result.status === "ok" ? "Funded" : "Not funded";
 }
+
+/* ------------------------------------------------------------------ *
+ * Testnet funding (task W15b)
+ * ------------------------------------------------------------------ */
+
+/** The testnet faucet the app calls in-process, so no browser is opened. */
+export const FRIENDBOT_ENDPOINT = "https://friendbot.stellar.org";
+
+export type FriendbotResult = { status: "ok" } | { status: "failed"; message: string };
+
+/**
+ * Asks Friendbot to credit a public testnet address. This runs inside the app
+ * (the Wallet page's "Fund account" button) instead of linking out. It only
+ * sends the public `G…` address to the faucet; no key, no signing.
+ */
+export async function requestFriendbotFund(
+  address: string,
+  deps: { fetchImpl?: FetchLike; endpoint?: string } = {},
+): Promise<FriendbotResult> {
+  const fetchImpl = deps.fetchImpl ?? (globalThis.fetch as FetchLike | undefined);
+  if (!fetchImpl) return { status: "failed", message: "no fetch implementation is available" };
+  const base = (deps.endpoint ?? FRIENDBOT_ENDPOINT).replace(/\/$/, "");
+  try {
+    const response = await fetchImpl(`${base}/?addr=${encodeURIComponent(address)}`, {
+      headers: { accept: "application/json" },
+    });
+    if (!response.ok) return { status: "failed", message: `Friendbot returned HTTP ${response.status}` };
+    return { status: "ok" };
+  } catch (error) {
+    const raw = error instanceof Error ? error.message : typeof error === "string" ? error : "";
+    return { status: "failed", message: raw.split("\n")[0]?.trim() || "Friendbot is unreachable" };
+  }
+}
