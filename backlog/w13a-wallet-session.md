@@ -22,3 +22,11 @@ Verification: `npm run check` green; app **385/0**; cargo test **362/0/5-ignored
 auto-lock, lock surviving a restart, and the W13b UI.
 
 Handoff: `ownerAddress` is withheld for every signer while locked (a Freighter-only user must log in first, per contract); `DebugPanel.tsx` got one case for the new tagged event.
+
+## MERGE-WALLET2 — W13a + W13b onto the security-fixed engine (branch `integration/wallet-login`)
+Merged `feat/w13a-wallet-session` then `feat/w13b-wallet-experience`; resolved `wallet/mod.rs` (kept both `SignerChanged→address_mismatch` and `Locked→not_authorized`), `interfaces/index.ts`, `backlog.md`, `sprints.md`, `WalletPage.tsx` (W13b session page; W10b body preserved in `LegacyWalletView`), and the `debug/checks/walletSession.ts` add/add (one check on `walletSessionEngine` + auto-lock detail).
+Reconciliation: one `WalletSession`/`WalletSessionState` definition in `@polaris/interfaces`; `walletSession.ts` is the pure store/engine using them; removed W13a's duplicate command wrappers from `wallet.ts`. Fixed `walletSessionLive.ts` event drift: it now listens on `polaris-event` and filters the `wallet_session_changed` tag (was the wrong channel). Fixed merge-bit Rust tests (`file.rs` Metadata field, `session.rs` `WalletService::new(Stores,…)`).
+E2E read-confirmed: launch locked/none → panel pins Wallet → Touch ID unlock → `ownerAddress` set → payment → approver → `wallet_sign` → submit; locked refuses before `take_authorized`. Kept W13a's fail-closed bridge code (`not_authorized`) for `wallet_sign` while locked; typed kind is `"locked"`. WalletOnly stays webview-unreachable, Keychain-only default, seeds never leave Rust, auto-approve placeholder untouched.
+Verification: `npm run check` green; app **404/0**, agent **190/0**, stellar **112/0**; `npm run build -w @polaris/app` green; cargo test **375/0/5-ignored**; `cargo clippy --all-targets -D warnings` clean.
+Human-verify: real Touch ID unlock/cancel, real idle auto-lock, locked-next-restart, live notch pin/unlock/dashboard.
+
