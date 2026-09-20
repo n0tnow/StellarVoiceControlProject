@@ -33,6 +33,22 @@ export const TR_MOCK_HOME_DOMAIN = "tr-mock-anchor.fly.dev";
 /** The one host that is the labelled NON-TR fallback (SDF test anchor). */
 export const SDF_TEST_ANCHOR_HOME_DOMAIN = "testanchor.stellar.org";
 
+/**
+ * Clearly-fake SEP-12 customer used ONLY for the Stellar SDF test anchor. This is
+ * synthetic demo data (see docs/anchor-sdf-flow.md); it must never be replaced by
+ * real personal data, read from the user's files, or reused for another anchor.
+ */
+export const SDF_DEMO_CUSTOMER: Readonly<Record<string, string>> = {
+  first_name: "Demo",
+  last_name: "User",
+  email_address: "demo@polaris.invalid",
+};
+
+/** Demo SEP-12 fields for a home domain; empty for any host that is not the SDF test anchor. */
+export function demoCustomerFields(homeDomain: string): Record<string, string> {
+  return homeDomain === SDF_TEST_ANCHOR_HOME_DOMAIN ? { ...SDF_DEMO_CUSTOMER } : {};
+}
+
 const BLOCKED_TLDS = ["localhost", "local", "internal", "intranet", "lan", "home", "corp", "private", "arpa", "onion", "invalid"];
 /** Plain lowercase DNS labels only: no uppercase, no unicode homoglyphs. */
 const PLAIN_DOMAIN = /^[a-z0-9.-]+$/;
@@ -52,11 +68,12 @@ const KNOWN: Record<string, Omit<AnchorScenario, "allowed"> & { allowed: readonl
   },
   [SDF_TEST_ANCHOR_HOME_DOMAIN]: {
     id: "sdf-test",
-    label: "NON-TR test scenario (SDF test anchor) — discovery + SEP-10 login + SEP-6 info only; deposit stops at SEP-12 KYC",
+    label:
+      "NON-TR test scenario (Stellar SDF test anchor) — discovery + SEP-10 login + SEP-6 info + SEP-12 demo KYC; deposit stops at the anchor's per-transaction identity fields",
     sepScope: "SEP-6 only",
-    allowed: ["sep1.discovery", "sep10.login", "sep6.info"],
+    allowed: ["sep1.discovery", "sep10.login", "sep6.info", "sep12.customer", "sep6.deposit", "sep6.withdraw"],
     notes:
-      "NON-TR comparison only, never presented as the Turkish path. A deposit here stops at SEP-12 KYC: the anchor requires first_name, last_name and email_address. This check never attempts a deposit or withdraw.",
+      "NON-TR comparison only, never presented as the Turkish path. SEP-12 auto-fills ONLY the clearly-fake demo customer (first_name, last_name, email_address); any other required field stops with KycRequiredError. A deposit then asks for per-transaction identity fields (address, birth_date, id_type, id_country_code, id_issue_date, id_expiration_date, id_number) that this project refuses to fabricate.",
   },
 };
 

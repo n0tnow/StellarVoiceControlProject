@@ -39,12 +39,12 @@ export const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 
 /**
  * The mandatory closing line for the NON-TR (SDF) scenario. It must be printed
- * on EVERY SDF outcome, including a discovery failure: the whole point of the
- * scenario is that a deposit stops at SEP-12 KYC, so the boundary is never
- * dependent on the network succeeding.
+ * on EVERY SDF outcome, including a discovery failure: the scenario's boundary is
+ * that SEP-12 auto-fills only the clearly-fake demo customer, and a deposit then
+ * needs per-transaction identity fields this project refuses to fabricate.
  */
 export const SDF_KYC_FINAL_LINE =
-  "Deposit is not attempted: this anchor requires SEP-12 KYC fields (first_name, last_name, email_address)";
+  "SEP-12: auto-filled only the clearly-fake demo customer (first_name, last_name, email_address); a deposit then stops at the anchor's per-transaction identity fields, which are never invented";
 
 export interface PlannedStep {
   name: string;
