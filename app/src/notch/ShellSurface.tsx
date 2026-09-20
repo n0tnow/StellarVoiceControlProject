@@ -19,8 +19,10 @@ import { useCallback, useEffect, useState, type CSSProperties } from "react";
 import type { ShellGeometry } from "@polaris/interfaces";
 
 import { StageLabel } from "@/components/StageLabel";
+import { NotchPanel } from "./NotchPanel";
 import { PromptPanel } from "./PromptPanel";
 import { inlineVoiceStage } from "./shellState";
+import { useNotchPage } from "./useNotchPage";
 import { SHELL_MOTION_MS, useShellState, usePrefersReducedMotion, type ShellStateName } from "./useShellState";
 
 export interface ShellSurfaceProps {
@@ -53,6 +55,13 @@ export function ShellSurface({
     applyContentHeight,
     dismiss,
   } = useShellState(voiceState, { voiceAttention });
+
+  // Page routing for the `panel` state. Owned here (not in the panel) so the
+  // controller survives the panel body's mount/unmount cycles and the voice
+  // seam can later be wired one level up without touching the pages. Closing
+  // the panel is the shell's `dismiss`, so nav-close, Escape and hover-leave
+  // all end in the same collapse path.
+  const pageController = useNotchPage(dismiss);
 
   // `PromptPanel` measures the body below the top inset; the state's min/max
   // are **whole-shell** heights, so add the inset before reporting. It is the
@@ -177,9 +186,11 @@ export function ShellSurface({
         />
       ) : null}
 
-      {/* Placeholder panel body. Menus land here. */}
+      {/* The `panel` state body: the multi-page surface (History / Tasks /
+          Rules / Wallet). Always mounted and crossfaded by the shell-panel
+          class, so page state survives a close/reopen within the session. */}
       <div className="notch-panel" aria-hidden={applied !== "panel"}>
-        <p className="notch-panel-placeholder">menus land here</p>
+        <NotchPanel controller={pageController} />
       </div>
     </section>
   );
