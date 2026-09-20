@@ -35,8 +35,10 @@ pub const MILESTONE: &str = "W14";
 pub const INITIAL_BALANCE_MINOR: i64 = 10_000_000;
 /// Default demo currency; the webview switches it to the anchor's quoted fiat.
 pub const DEFAULT_CURRENCY: &str = "TRY";
-/// Default anchor home domain (SDF test anchor; the owner's latest decision).
-pub const DEFAULT_ANCHOR_HOME_DOMAIN: &str = "testanchor.stellar.org";
+/// Default anchor home domain: the TR mock anchor (TRY <-> USDC) — the owner's
+/// latest decision, because the SDF test anchor only trades SRT. The SDF anchor
+/// stays the automatic fallback (see the up-front anchor selection).
+pub const DEFAULT_ANCHOR_HOME_DOMAIN: &str = "tr-mock-anchor.fly.dev";
 
 /// How a ledger entry came to exist.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
