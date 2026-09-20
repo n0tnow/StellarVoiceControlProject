@@ -377,11 +377,10 @@ export interface StellarConfig {
   networkPassphrase: string;
   ownerAddress: string | null;
   /**
-   * Which signer the shell uses (step W10): `embedded` (the in-app wallet,
-   * the default) or `freighter` (the optional browser bridge, via
-   * `POLARIS_SIGNER=freighter`).
+   * Which signer the shell uses (step W10): always `embedded`, the in-app
+   * wallet. This field is kept on the wire for compatibility.
    */
-  signer: "embedded" | "freighter";
+  signer: "embedded";
   aliases: Record<string, string>;
   guardContractId: string | null;
   /** `POLARIS_P2P_CONTRACT_ID`; the deployed `polaris_p2p_escrow` id, or null. */
@@ -398,7 +397,7 @@ export interface StellarConfig {
  * `keychain unavailable` (no seed can be written or read).
  */
 export interface WalletStatus {
-  signer: "embedded" | "freighter";
+  signer: "embedded";
   /** The active account, or null when no wallet exists yet. */
   active: { address: string; label: string } | null;
   /** How many accounts the metadata file holds. */

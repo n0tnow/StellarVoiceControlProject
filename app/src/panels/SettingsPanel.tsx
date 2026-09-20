@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
-import { getBridgeHealth, getVoiceHealth } from "@/debug/commands";
+import { getVoiceHealth } from "@/debug/commands";
 import { redact } from "@/debug/redact";
 import { AGENT_MODEL, AGENT_PROVIDER } from "@/lib/agent";
 import { getAppInfo } from "@/lib/polaris";
@@ -27,7 +27,6 @@ export function SettingsPanel() {
   const [version, setVersion] = useState<string | null>(null);
   const [voice, setVoice] = useState<VoiceFacts | null>(null);
   const [chain, setChain] = useState<SettingsInput["chain"]>(null);
-  const [bridge, setBridge] = useState<SettingsInput["bridge"]>(null);
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
 
   useEffect(() => {
@@ -49,19 +48,14 @@ export function SettingsPanel() {
         if (!cancelled) setChain(next);
       })
       .catch(warn("stellar_config"));
-    void getBridgeHealth()
-      .then((next) => {
-        if (!cancelled) setBridge({ status: next.status, detail: next.detail });
-      })
-      .catch(warn("bridge_health"));
     return () => {
       cancelled = true;
     };
   }, []);
 
   const view = useMemo(
-    () => buildSettingsView({ version, voice, chain, agentModel: AGENT_MODEL, bridge }),
-    [version, voice, chain, bridge],
+    () => buildSettingsView({ version, voice, chain, agentModel: AGENT_MODEL }),
+    [version, voice, chain],
   );
 
   const copyDiagnostics = useCallback(async () => {

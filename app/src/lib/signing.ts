@@ -4,15 +4,14 @@
  * The chain tool has already built the unsigned XDR and the Rust Touch ID gate
  * has released it; this module is the last leg of the value-moving path:
  *
- *   `wallet_sign(id)` (embedded, W10) or `bridge_sign(id)` (Freighter)
- *                      →  the signer returns a signed envelope
+ *   `wallet_sign(id)` (the embedded wallet)
+ *                      →  the wallet returns a signed envelope
  *                      →  the signed envelope comes back to Rust, which verifies
  *                         it independently
  *                      →  this module submits it via `submitSignedTx`
  *                      →  `tx_submitted { hash, explorerUrl }` is emitted.
  *
- * The embedded wallet signs inside the app (no browser); the Freighter bridge
- * opens a page. `resolveSigner` picks the path from `stellar_config`.
+ * The embedded wallet signs inside the app; no browser is involved.
  *
  * ## Fail-closed and never throws
  *
@@ -26,7 +25,7 @@
  * ## No secrets, no value without approval
  *
  * The XDR only exists in Rust while signing; this module sees the returned
- * signed envelope and the tx hash. `bridge_sign` accepts only an approval id
+ * signed envelope and the tx hash. `wallet_sign` accepts only an approval id
  * whose gate state is `Authorized`, so nothing here can sign without the gate.
  */
 import { invoke } from "@tauri-apps/api/core";
@@ -35,10 +34,9 @@ import type { SubmitResult } from "@polaris/stellar";
 
 import type { InvokeFn } from "./approval.ts";
 import type { PaymentStage } from "./turnSession.ts";
-import { resolveWalletSigner } from "./wallet.ts";
 import { webLog } from "./weblog.ts";
 
-/** The Rust `bridge_sign` success shape (`BridgeOutcome` camelCase). */
+/** The Rust `wallet_sign` success shape (`BridgeOutcome` camelCase). */
 export interface BridgeSigned {
   ok: true;
   signedXdr: string;
@@ -46,7 +44,7 @@ export interface BridgeSigned {
   txHash: string;
 }
 
-/** The Rust `bridge_sign` failure shape. */
+/** The Rust `wallet_sign` failure shape. */
 export interface BridgeFailure {
   ok: false;
   code: BridgeFailureCode;
@@ -93,7 +91,7 @@ export interface SubmittedOutcome extends ExecutionOutcome {
   signerAddress?: string;
 }
 
-/** Short, overlay-safe labels for the bridge's failure codes. */
+/** Short, overlay-safe labels for the wallet's failure codes. */
 const BRIDGE_LABELS: Record<BridgeFailureCode, string> = {
   rejected: "Wallet didn't sign",
   address_mismatch: "Wrong wallet account",
@@ -125,27 +123,11 @@ export interface SigningDeps {
   /** Emits `tx_submitted` to the webview. Routed to the Rust command by default. */
   emitSubmitted: (hash: string, explorerUrl: string) => Promise<void> | void;
   /**
-   * Additive (F1): reports the Freighter wait and the submit boundary so the
+   * Additive (F1): reports the signing wait and the submit boundary so the
    * notch keeps the matching stage up. Optional, so existing callers and tests
    * that do not care about UI stages are unaffected.
    */
   onStage?: (stage: PaymentStage) => void;
-  /**
-   * Additive (W10): which signer to use. The default reads `stellar_config` and
-   * routes to `wallet_sign` (embedded) or `bridge_sign` (freighter).
-   */
-  signer?: () => Promise<SignerKind>;
-}
-
-/** Which signing path the shell uses (step W10). */
-export type SignerKind = "embedded" | "freighter";
-
-/**
- * Resolves the configured signer through the one shared resolver in
- * `wallet.ts`, so `getSigner` and this module can never disagree.
- */
-export async function resolveSigner(invokeImpl: InvokeFn): Promise<SignerKind> {
-  return resolveWalletSigner(invokeImpl);
 }
 
 /**
@@ -172,7 +154,7 @@ export function explorerTxUrl(hash: string): string {
 }
 
 /**
- * Signs the approved transaction through the Freighter bridge, submits it, and
+ * Signs the approved transaction with the embedded wallet, submits it, and
  * emits `tx_submitted`. Never throws; every failure is a labelled outcome with
  * the original `intent` intact so the shell can settle the turn.
  *
@@ -190,15 +172,12 @@ export async function signAndSubmit(
     return outcome;
   }
 
-  // F1: the approved blob is handed to the wallet; the shell shows the Freighter
-  // wait from here until the signed envelope comes back. W10: the embedded wallet
-  // signs in-process (`wallet_sign`), so no browser opens in that mode.
+  // F1: the approved blob is handed to the wallet; the shell shows the signing
+  // wait from here until the signed envelope comes back.
   deps.onStage?.("signing");
   let bridge: BridgeOutcome;
   try {
-    const signer = deps.signer ? await deps.signer() : await resolveSigner(deps.invoke);
-    const command = signer === "embedded" ? "wallet_sign" : "bridge_sign";
-    bridge = await deps.invoke<BridgeOutcome>(command, { id: approvalId });
+    bridge = await deps.invoke<BridgeOutcome>("wallet_sign", { id: approvalId });
   } catch (error) {
     // A rejected command (transport, a typed gate error) is a labelled failure;
     // no signed envelope was produced, so nothing can be submitted.

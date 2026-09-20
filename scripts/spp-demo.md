@@ -48,6 +48,6 @@ independently with `getTransaction` on `soroban-testnet.stellar.org`.
 ## Why not in the app yet
 
 Every `transact` needs a Soroban **auth-entry signature** in addition to the
-envelope signature (Freighter `signAuthEntry` + `signTransaction`). Polaris'
-bridge currently signs only an envelope, so the value-moving forms are disabled
-until that bridge extension lands.
+envelope signature (`signAuthEntry` + `signTransaction`). Polaris'
+wallet currently signs only an envelope, so the value-moving forms are disabled
+until that signing extension lands.

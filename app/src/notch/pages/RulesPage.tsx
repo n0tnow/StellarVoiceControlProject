@@ -5,7 +5,7 @@
  * profile, executor, limits, recipients, allowance, spent-today and the alias
  * book size. Nothing is editable here — "Edit rules" opens the Security panel,
  * where every change goes through the shared tx pipeline (approval card →
- * Touch ID → Freighter). Reads come from `useRulesData`; a browser preview
+ * Touch ID → wallet signing). Reads come from `useRulesData`; a browser preview
  * shows the labelled mock demo, and a failed read shows an error with Retry.
  */
 import { CircleAlert, PenLine, RefreshCw, ShieldCheck } from "lucide-react";

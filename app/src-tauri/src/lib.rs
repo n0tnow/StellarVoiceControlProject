@@ -85,11 +85,6 @@ pub fn run() {
             // Task F4: one webview log line in the terminal, optionally mirrored
             // onto the `error` event the Debug panel renders.
             weblog::polaris_log,
-            bridge::commands::bridge_sign,
-            bridge::commands::bridge_selftest,
-            bridge::commands::bridge_health,
-            bridge::commands::bridge_sign_challenge,
-            bridge::commands::anchor_signing_health,
             // Step W10: the embedded wallet inside the app. Create/import, local
             // signing and the Debug health check.
             wallet::commands::wallet_status,
@@ -181,17 +176,12 @@ pub fn run() {
             app.manage(tts::build_backend());
 
             // Step W3: the Touch ID approval gate. The store holds the one
-            // pending approval that may be released to the Freighter bridge;
+            // pending approval that may be released to the embedded wallet;
             // the authenticator is the real LocalAuthentication prompt (a fake
             // is used only in tests).
             let approvals = approval::ApprovalStore::new();
             app.manage(approvals.clone());
             app.manage(biometric::system());
-
-            // Step W4b: the browser launcher for the Freighter signing bridge.
-            // Managed as a trait object so tests can install a fake and never
-            // open a real browser.
-            app.manage(bridge::commands::system_launcher());
 
             // Step W10: the embedded wallet. Built before the window opens: it
             // probes the Keychain once (falling back to a 0600 file store and

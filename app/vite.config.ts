@@ -61,16 +61,6 @@ export default defineConfig({
   build: {
     // macOS 15 = Safari 18; WKWebView is always current on the target machine.
     target: "safari15",
-    // Two entries: the Tauri shell (`index.html`) and the Freighter signing
-    // bridge (`bridge.html`) served in the user's normal browser by the W4b
-    // localhost server. Wallets Kit is imported only from the bridge entry, so
-    // it lands in a chunk the main app never loads.
-    rollupOptions: {
-      input: {
-        main: path.resolve(import.meta.dirname, "index.html"),
-        bridge: path.resolve(import.meta.dirname, "bridge.html"),
-      },
-    },
     // Vite 8 dropped esbuild in favour of Oxc — keep the default minifier (Oxc);
     // pinning "esbuild" would require installing it separately.
     minify: process.env.TAURI_ENV_DEBUG === "true" ? false : true,

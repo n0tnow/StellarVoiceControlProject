@@ -4,7 +4,7 @@
  * Rows come from [`useTasksData`] (real `listUpcoming` when a wallet is
  * configured, an explicit demo fallback otherwise). Cancel is the only
  * value-moving action: it runs through the shared `txPipeline` (approval card →
- * Touch ID → Freighter → submit) and the page shows its progress and outcome.
+ * Touch ID → wallet signing → submit) and the page shows its progress and outcome.
  * Creating a schedule stays a voice action, so the empty state points at the
  * spoken example instead of offering a form.
  */

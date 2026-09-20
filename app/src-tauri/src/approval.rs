@@ -1,16 +1,16 @@
 //! The pending-approval store and the Touch ID gate (step W3).
 //!
 //! Every value-moving action needs a user approval before its unsigned XDR may
-//! reach the Freighter bridge. Signing happens in the browser with the user's own
-//! key; Polaris holds no secret material. The gate's whole job is therefore to
-//! release **one specific unsigned XDR** after the device owner authenticates —
-//! and to make that release unreachable any other way.
+//! be released to the signer. Signing happens in the embedded wallet, where the
+//! seed stays in the OS keychain; Polaris never exposes it. The gate's whole job
+//! is therefore to release **one specific unsigned XDR** after the device owner
+//! authenticates — and to make that release unreachable any other way.
 //!
 //! ## One request at a time
 //!
 //! The store holds at most one entry. [`ApprovalStore::begin`] supersedes
 //! whatever was there (the old request becomes `Denied` with the reason
-//! `superseded`), so a stale approval can never be presented to the bridge after
+//! `superseded`), so a stale approval can never be presented to the signer after
 //! the user has moved on.
 //!
 //! ## Hash binding
@@ -32,8 +32,8 @@
 //! ## Where XDR leaves
 //!
 //! [`ApprovalStore::take_authorized`] is the **only** path by which an unsigned
-//! XDR leaves the gate. It is intentionally not a Tauri command; the bridge
-//! server (another milestone) calls it in-process.
+//! XDR leaves the gate. It is intentionally not a Tauri command; the embedded
+//! wallet (`wallet_sign`) calls it in-process.
 
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -49,7 +49,7 @@ use crate::types::{Intent, TxSummary};
 use crate::wallet::session::SessionStore;
 
 /// How long a request stays actionable. At most one Touch ID prompt (60 s) plus
-/// a moment to hand the payload to the bridge fits inside this.
+/// a moment to hand the payload to the signer fits inside this.
 pub const APPROVAL_TTL: Duration = Duration::from_secs(120);
 
 /// Refuse unsigned XDR larger than this. A Stellar transaction envelope is a
@@ -80,7 +80,8 @@ pub enum ApprovalMode {
     /// Touch ID (device password fallback) before release. The default.
     #[default]
     TouchId,
-    /// No biometric prompt; reserved for anchor flows, where Freighter approves.
+    /// No biometric prompt; reserved for anchor flows, where the embedded
+    /// wallet signs the SEP-10 challenge.
     WalletOnly,
 }
 
@@ -110,7 +111,7 @@ impl ApprovalState {
 /// A request to authorize the release of one unsigned XDR.
 ///
 /// `id` is assigned by the gate, not the caller: a caller-chosen id would be a
-/// way to confuse the bridge about which payload is which. It is `#[serde(default)]`
+/// way to confuse the signer about which payload is which. It is `#[serde(default)]`
 /// so the webview may omit it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -165,10 +166,9 @@ pub struct AuthorizedPayload {
     pub summary: TxSummary,
     pub intent: Intent,
     /// The signature hint (last four bytes) of the transaction's source key, read
-    /// from the fixed XDR offset by the bridge (W4b). It is optional and additive:
-    /// the gate releases XDR without decoding it, so an unknown or malformed
-    /// envelope simply carries `None` and the bridge falls back to a full
-    /// signature check.
+    /// from the fixed XDR offset (W4b). It is optional and additive: the gate
+    /// releases XDR without decoding it, so an unknown or malformed envelope
+    /// simply carries `None` and the signer falls back to a full signature check.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signer_hint: Option<Vec<u8>>,
 }
@@ -194,6 +194,7 @@ pub enum AuthorizeError {
     WalletOnly,
     /// The in-process anchor authorization was called for a `TouchId` request;
     /// that request must go through the real biometric prompt, not this path.
+    #[allow(dead_code)] // In-process wallet-only path; the SPA uses TouchId only.
     NotWalletOnly,
 }
 
@@ -265,7 +266,7 @@ impl DenyError {
     }
 }
 
-#[allow(dead_code)] // Surfaced by the Freighter bridge server (W4).
+#[allow(dead_code)] // `label` is surfaced by Debug checks; `detail` by `wallet_sign`.
 impl TakeError {
     pub fn label(&self) -> &'static str {
         match self {
@@ -445,8 +446,9 @@ impl ApprovalStore {
     /// [`ApprovalStore::authorize_with`] refuses `WalletOnly`, so no webview call
     /// can flip it to `Authorized` without a real gesture. Only the in-process
     /// [`ApprovalStore::authorize_wallet_only`] may authorize it, and the caller
-    /// (W5's `bridge_sign_challenge`) has proven the payload is a sequence-0
+    /// (W5's `wallet_sign_challenge`) has proven the payload is a sequence-0
     /// SEP-10 challenge first.
+    #[allow(dead_code)] // In-process wallet-only path, retained by the fail-closed gate.
     pub(crate) fn begin_wallet_only(
         &self,
         mut request: ApprovalRequest,
@@ -631,6 +633,7 @@ impl ApprovalStore {
     /// `WalletOnly`, so it can never be used to skip the prompt for a normal
     /// (value-moving) request. It is deliberately an inherent method, not a Tauri
     /// command, so the webview can never reach it.
+    #[allow(dead_code)] // In-process wallet-only path, retained by the fail-closed gate.
     pub(crate) fn authorize_wallet_only(&self, id: &str) -> Result<String, AuthorizeError> {
         let (plan, _guard) = self.prepare_authorize(id)?;
         if plan.mode != ApprovalMode::WalletOnly {
@@ -715,9 +718,8 @@ impl ApprovalStore {
     ///
     /// This is the only path by which XDR leaves the gate. It returns the payload
     /// only while the request is `Authorized` and unexpired, and marks it
-    /// `Consumed` so a second call fails. The bridge server (another milestone)
+    /// `Consumed` so a second call fails. The embedded wallet (`wallet_sign`)
     /// calls this in-process; it is deliberately not a Tauri command.
-    #[allow(dead_code)] // Called by the Freighter bridge server (W4).
     pub(crate) fn take_authorized(&self, id: &str) -> Result<AuthorizedPayload, TakeError> {
         let now = self.now();
         let mut inner = self.lock();
@@ -765,9 +767,9 @@ impl ApprovalStore {
 }
 
 /// The signature hint (last four bytes) of an unsigned v1 transaction envelope's
-/// source key, read from the fixed offset the bridge uses (W4b). Best-effort:
-/// the gate is not the XDR validator, so anything unexpected yields `None` and
-/// the bridge falls back to its own full check.
+/// source key, read from the fixed offset (W4b). Best-effort: the gate is not
+/// the XDR validator, so anything unexpected yields `None` and the signer falls
+/// back to its own full check.
 fn signer_hint_of(unsigned_xdr: &str) -> Option<Vec<u8>> {
     let bytes = crate::bridge::verify::decode_envelope(unsigned_xdr).ok()?;
     let parsed = crate::bridge::verify::parse_unsigned(&bytes).ok()?;

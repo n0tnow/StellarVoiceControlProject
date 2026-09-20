@@ -1,9 +1,9 @@
 //! The macOS device-owner authentication used by the approval gate (step W3).
 //!
-//! Polaris is a wallet whose keys live in the user's Freighter wallet, not in
-//! the app. The only thing the Touch ID prompt has to prove is that **a human is
-//! present at this Mac right now** before the gate releases an unsigned XDR to
-//! the bridge. That is exactly the property `LAContext` with
+//! Polaris is a wallet whose keys live in the app's embedded wallet, protected
+//! by the OS keychain. The only thing the Touch ID prompt has to prove is that
+//! **a human is present at this Mac right now** before the gate releases an
+//! unsigned XDR to the signer. That is exactly the property `LAContext` with
 //! [`LAPolicy::DeviceOwnerAuthentication`] provides: Touch ID first, and the
 //! device password as the documented fallback when no biometrics are available
 //! (lid closed, no finger enrolled, Touch ID locked out). The fallback is a

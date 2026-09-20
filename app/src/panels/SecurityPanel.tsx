@@ -42,7 +42,7 @@ type Loaded =
  * Shows the owner's current on-chain rule set and lets the owner set it up,
  * enable/change/disable auto-pay and edit the alias book. Every on-chain write
  * goes through the shared `useTxRun` pipeline (approval card → Touch ID →
- * Freighter → submit); this panel only builds unsigned steps and renders
+ * wallet signing → submit); this panel only builds unsigned steps and renders
  * progress. It never signs, never holds a key and never enables
  * `POLARIS_ALLOW_AUTO_APPROVE`.
  */

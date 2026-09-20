@@ -40,22 +40,15 @@ tauri-plugin-global-shortcut = "2.3"
 # so the exact request shape is unit-testable.
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "native-tls"] }
 
-# Step W4b: the Freighter signing bridge. The one-shot loopback server is
-# `tiny_http` — a small, sync, blocking server with no async runtime and only a
-# few transitives (`ascii`, `chunked_transfer`, `httpdate`), which is the smallest
-# well-maintained option for a two-endpoint local server. The XDR is verified
-# without an XDR crate: `base64` decodes the envelope, `sha2`/`hex` compute the
-# transaction hash, and `ed25519-dalek` (audited) verifies the owner's signature.
-# `getrandom` mints the one-time token from the OS CSPRNG and `subtle` compares
-# tokens in constant time.
+# Step W4b: signing helpers. The XDR is verified without an XDR crate: `base64`
+# decodes the envelope, `sha2`/`hex` compute the transaction hash, and
+# `ed25519-dalek` (audited) verifies the owner's signature.
 #
 # `ed25519-dalek` is pinned to exactly 2.1.1: 2.2.0 raises the MSRV to 1.81,
 # above this crate's declared `rust-version = "1.77"` (2.1.1 needs 1.60).
-tiny_http = "0.12"
 ed25519-dalek = "=2.1.1"
 base64 = "0.23"
 getrandom = "0.3"
-subtle = "2.6"
 
 # Step W10: the wallet inside the app. `bip39` generates and parses the 24-word
 # recovery phrase; `hmac`/`sha2` implement SLIP-0010 ed25519 derivation for the

@@ -75,25 +75,6 @@ const defaultDeps: WalletDeps = { invoke };
 /** The event Rust emits whenever the active wallet changes. */
 export const WALLET_CHANGED_EVENT = "wallet_changed";
 
-/** Which signing path the shell uses: the in-app wallet or the Freighter bridge. */
-export type WalletSigner = "embedded" | "freighter";
-
-/**
- * The one signer resolver for the shell. `freighter` only when `stellar_config`
- * explicitly says so; a missing command or a failed read falls back to the
- * in-app `embedded` default that Rust also uses (W10 MINOR-7).
- */
-export async function resolveWalletSigner(
-  invokeImpl: InvokeFn,
-): Promise<WalletSigner> {
-  try {
-    const config = await invokeImpl<{ signer?: string }>("stellar_config");
-    return config?.signer === "freighter" ? "freighter" : "embedded";
-  } catch {
-    return "embedded";
-  }
-}
-
 /** `wallet_status`: signer, active account, count and store label. Never prompts. */
 export function walletStatus(deps: WalletDeps = defaultDeps): Promise<WalletStatus> {
   return deps.invoke<WalletStatus>("wallet_status");

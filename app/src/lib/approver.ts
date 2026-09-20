@@ -35,7 +35,7 @@
  *
  * This module never sees a secret and never returns one. The XDR it hands to
  * Rust is the unsigned envelope; the signed envelope only exists inside Rust
- * after the wallet signs and is released on the separate `bridge_sign` path.
+ * after the wallet signs and is released on the separate `wallet_sign` path.
  * `approve()` returns only the boolean decision and the gate-assigned id, never
  * the payload.
  */

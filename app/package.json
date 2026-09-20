@@ -15,7 +15,6 @@
     "tauri:build": "tauri build"
   },
   "dependencies": {
-    "@creit.tech/stellar-wallets-kit": "2.6.0",
     "@polaris/agent": "*",
     "@polaris/interfaces": "*",
     "@polaris/stellar": "*",
