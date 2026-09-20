@@ -290,7 +290,8 @@
 - [x] **W6c** Wallet/Suggestions panels; **NOTCH-CLIP** pinning fix (`feat/w6c-wallet-suggestions`, `fix/notch-panel-clipped`).
 - [x] Chain track: **ANCHOR-SDF/BANK-SIM** (SDF anchor + demo bank, both directions live), **W8a/W8b** P2P escrow contract + client/panel, **W9** SPP read-only.
 - [x] **W11a** executor key + `executor_sign_pay` → [x] **W11b** autonomous payments UI (`e2e:autopay` live) → [x] **W12** remove the Freighter bridge → **MERGE-FINAL**.
-- [ ] **Open / honest:** SPP **value-moving** integration (needs wallet `signAuthEntry`); **Trade page**; CT (confidential tokens) spike/integration; protocol integration (Soroswap swap **or** DeFindex, not both); **A4 screen reading**; developer mode; MPP; passkey wallet.
+- [x] (2026-09-20, branch `feat/w15c-trade`) **W15c.** Trade page (Deposit·Withdraw·P2P) in the notch: anchor deposit/withdraw via BANK-SIM with a 3-row step list + bank/wallet balance line, P2P offers list + Accept and a Sell form; locked → LoginGate; check clean, app 444/0 (10 new), build green — `backlog/w15c-trade.md`
+- [ ] **Open / honest:** SPP **value-moving** integration (needs wallet `signAuthEntry`); CT (confidential tokens) spike/integration; protocol integration (Soroswap swap **or** DeFindex, not both); **A4 screen reading**; developer mode; MPP; passkey wallet.
 - **Human-verification list (unverified by automation):** real mic + STT, real Touch ID (create/sign/unlock/batch), real Keychain first-access, live anchor payout leg, live `pay_executor`, real notch windows/hover/pin, Friendbot.
 
 ---
