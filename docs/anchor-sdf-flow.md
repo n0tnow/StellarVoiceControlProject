@@ -34,6 +34,18 @@ It also publishes `TRANSFER_SERVER_SEP0024`, which this project never uses.
 - **Timing**: the full deposit+withdraw e2e takes ~45-47 s end to end on testnet (Friendbot +
   trustline + two KYC rounds + polling); each leg's final status appears within a few seconds.
 
+## Anchor selection (fallback)
+
+The shell picks ONE anchor before any money moves: it preflights the approved
+scenarios in order (SDF test anchor first, then `tr-mock-anchor.fly.dev`) with a
+~6 s SEP-1 discovery + SEP-6 `/info` supported-asset check and uses the first
+healthy one. The chosen scenario supplies the asset pair (SDF: USD/SRT; TR:
+TRY/USDC), the fiat label, the wallet balances and the trustline — never mixed.
+If neither answers, the UI shows one plain line ("No anchor is reachable right
+now — try again in a minute") with per-anchor reasons behind "Details", and
+nothing is debited. The second anchor is only ever an up-front choice, never a
+retry after value moved.
+
 **Gotchas**: fund the account first (Friendbot) or requests 404; add the asset trustline before the
 deposit completes or it stalls in `pending_trust`. Issuers: SRT
 `GCDNJUBQSX7AJWLJACMJ7I4BC3Z47BQUTMHEICZLE6MU4KQBRYG5JY6B`, USDC
