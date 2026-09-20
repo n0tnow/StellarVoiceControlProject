@@ -203,20 +203,26 @@ export async function executeApprovedIntent(
   intent: Intent,
   signingDeps?: Partial<SigningDeps>,
 ): Promise<SubmittedOutcome> {
-  // voice-dialog: a spending rule spoken by voice is a proposal only in this
-  // build. It never reaches the chain (or needs the owner env): the shell shows
-  // the intent and this labelled outcome says plainly that autonomous rules are
-  // not enabled yet. The Security panel's own guard_policy intents carry no
-  // `rule`, so they keep their existing path.
+  // W11b: a spoken spending rule now opens the batch approval card and, on ONE
+  // Touch ID, applies the ordered owner transactions (`approve` → `set_rule` →
+  // `set_executor`, executor last). The Security panel's own `guard_policy`
+  // intents carry no `rule`, so they keep their existing path.
   if (intent.kind === "guard_policy" && intent.rule) {
-    const notEnabled: SubmittedOutcome = {
-      status: "unavailable",
-      intent,
-      label: "Autonomous rules aren't enabled in this build yet.",
-      detail: "Voice-proposed spending rules are proposals only; configure them in the Security panel.",
-    };
-    logFailure(notEnabled);
-    return notEnabled;
+    const { runGuardPolicySetup } = await import("@/lib/autopayWiring");
+    const outcome = await runGuardPolicySetup(intent);
+    logFailure(outcome);
+    return outcome;
+  }
+  // W11b: when auto-pay is armed, a small payment to a saved contact is settled
+  // by the executor key with no card (fail closed: any doubt returns `null` and
+  // the owner path below runs, so we never silently pay outside the mandate).
+  if (intent.kind === "send") {
+    const { tryAutoPaySend } = await import("@/lib/autopayWiring");
+    const auto = await tryAutoPaySend(intent);
+    if (auto) {
+      logFailure(auto);
+      return auto;
+    }
   }
   const deps: SigningDeps = {
     ...defaultSigningDeps,
