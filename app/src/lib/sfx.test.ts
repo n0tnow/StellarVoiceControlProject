@@ -35,6 +35,47 @@ function fakePlayer(overrides: Partial<UISFXPlayer> = {}): UISFXPlayer & { calls
   return Object.assign(base, overrides, { calls });
 }
 
+/** A minimal `localStorage` stand-in, with per-test overrides. */
+function fakeStorage(overrides: Partial<Storage> = {}): Storage {
+  const store = new Map<string, string>();
+  const base: Storage = {
+    get length() {
+      return store.size;
+    },
+    clear: () => store.clear(),
+    getItem: (key: string) => store.get(key) ?? null,
+    key: (index: number) => [...store.keys()][index] ?? null,
+    removeItem: (key: string) => {
+      store.delete(key);
+    },
+    setItem: (key: string, value: string) => {
+      store.set(key, value);
+    },
+  };
+  return Object.assign(base, overrides);
+}
+
+/**
+ * Runs `run` with a fake `window` installed, restoring the real (absent) one
+ * afterwards. `hasWindow()` reads the global dynamically, so this is enough to
+ * exercise the storage/reduced-motion branches that the default `node --test`
+ * environment (no `window`) never reaches.
+ */
+function withFakeWindow<T>(
+  win: { localStorage?: Storage; matchMedia?: (query: string) => { matches: boolean } },
+  run: () => T,
+): T {
+  const scope = globalThis as { window?: unknown };
+  const previous = scope.window;
+  scope.window = win;
+  try {
+    return run();
+  } finally {
+    if (previous === undefined) delete scope.window;
+    else scope.window = previous;
+  }
+}
+
 test.afterEach(() => {
   __testing.reset();
 });
@@ -126,6 +167,146 @@ test("initialEnabled defaults to true when nothing is stored and there is no win
   // No `window` at all in this environment: neither a stored preference nor
   // a reduced-motion signal is available, so the default is "enabled".
   assert.equal(__testing.initialEnabled(), true);
+});
+
+test("playSfx forwards PlayOptions through to the player", () => {
+  const options = { volume: 0.5, cooldownMs: 100 };
+  let received: { cue: unknown; options: unknown } | null = null;
+  const fake = fakePlayer({
+    play: ((cue: unknown, playOptions?: unknown) => {
+      received = { cue, options: playOptions };
+      return null as unknown as PlayingSFX;
+    }) as UISFXPlayer["play"],
+  });
+  __testing.setPlayer(fake);
+
+  playSfx("select", options);
+
+  assert.deepEqual(received, { cue: "select", options });
+});
+
+test("readStoredEnabled returns null, not throwing, when getItem throws", () => {
+  const storage = fakeStorage({
+    getItem: () => {
+      throw new Error("storage blocked");
+    },
+  });
+
+  assert.equal(
+    withFakeWindow({ localStorage: storage }, () => __testing.readStoredEnabled()),
+    null,
+  );
+});
+
+test("readStoredEnabled returns null for malformed JSON", () => {
+  const storage = fakeStorage({ getItem: () => "{not json" });
+
+  assert.equal(withFakeWindow({ localStorage: storage }, () => __testing.readStoredEnabled()), null);
+});
+
+test("readStoredEnabled returns null when the stored enabled is not a boolean", () => {
+  const storage = fakeStorage({ getItem: () => JSON.stringify({ enabled: "yes" }) });
+
+  assert.equal(withFakeWindow({ localStorage: storage }, () => __testing.readStoredEnabled()), null);
+});
+
+test("readStoredEnabled returns the stored boolean", () => {
+  const storage = fakeStorage({ getItem: () => JSON.stringify({ enabled: false }) });
+
+  assert.equal(withFakeWindow({ localStorage: storage }, () => __testing.readStoredEnabled()), false);
+});
+
+test("prefersReducedMotion reflects the media query", () => {
+  const storage = fakeStorage();
+
+  assert.equal(
+    withFakeWindow({ localStorage: storage, matchMedia: () => ({ matches: true }) }, () =>
+      __testing.prefersReducedMotion(),
+    ),
+    true,
+  );
+  assert.equal(
+    withFakeWindow({ localStorage: storage, matchMedia: () => ({ matches: false }) }, () =>
+      __testing.prefersReducedMotion(),
+    ),
+    false,
+  );
+});
+
+test("an explicit stored preference beats prefers-reduced-motion", () => {
+  const storedOn = fakeStorage({ getItem: () => JSON.stringify({ enabled: true }) });
+  assert.equal(
+    withFakeWindow({ localStorage: storedOn, matchMedia: () => ({ matches: true }) }, () =>
+      __testing.initialEnabled(),
+    ),
+    true,
+  );
+
+  const storedOff = fakeStorage({ getItem: () => JSON.stringify({ enabled: false }) });
+  assert.equal(
+    withFakeWindow({ localStorage: storedOff, matchMedia: () => ({ matches: false }) }, () =>
+      __testing.initialEnabled(),
+    ),
+    false,
+  );
+});
+
+test("with nothing stored, reduced motion starts sound disabled", () => {
+  const storage = fakeStorage();
+
+  assert.equal(
+    withFakeWindow({ localStorage: storage, matchMedia: () => ({ matches: true }) }, () =>
+      __testing.initialEnabled(),
+    ),
+    false,
+  );
+  assert.equal(
+    withFakeWindow({ localStorage: storage, matchMedia: () => ({ matches: false }) }, () =>
+      __testing.initialEnabled(),
+    ),
+    true,
+  );
+});
+
+test("playSfx/setSfxEnabled/isSfxEnabled do not throw when storage read and write throw", () => {
+  const throwingStorage = fakeStorage({
+    getItem: () => {
+      throw new Error("storage blocked");
+    },
+    setItem: () => {
+      throw new Error("storage blocked");
+    },
+  });
+
+  withFakeWindow({ localStorage: throwingStorage, matchMedia: () => ({ matches: false }) }, () => {
+    __testing.reset();
+    assert.doesNotThrow(() => playSfx("hover"));
+    assert.doesNotThrow(() => setSfxEnabled(false));
+    assert.doesNotThrow(() => isSfxEnabled());
+  });
+});
+
+test("a construction failure is cached: playSfx stays silent and never retries the construct", () => {
+  let storageAccesses = 0;
+  const win: { localStorage?: Storage } = {};
+  // A throwing accessor makes `createUISFX`'s construction fail inside
+  // `getPlayer`'s try, which is the branch that caches `player = null`.
+  Object.defineProperty(win, "localStorage", {
+    get() {
+      storageAccesses += 1;
+      throw new Error("storage blocked");
+    },
+  });
+
+  withFakeWindow(win, () => {
+    __testing.reset();
+    assert.doesNotThrow(() => playSfx("hover"));
+    const afterFirst = storageAccesses;
+    assert.equal(afterFirst >= 1, true);
+    // A retry on every call would keep touching storage; the cache does not.
+    assert.doesNotThrow(() => playSfx("hover"));
+    assert.equal(storageAccesses, afterFirst);
+  });
 });
 
 test("STORAGE_KEY is the documented preference key", () => {
