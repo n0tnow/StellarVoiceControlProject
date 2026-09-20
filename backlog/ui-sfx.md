@@ -136,3 +136,46 @@ Key implementation choices:
 
 - Coordinator: open the PR from `feat/ui-sfx` to `main`, assign a separate
   reviewer per §3 of `CLAUDE.md`/`AGENTS.md`.
+
+## Review fixes applied
+
+Applied against `backlog/ui-sfx-review.md` (verdict: REQUEST CHANGES).
+
+- **Finding 1 (must fix) — the "deliberately silent" voice strip was not
+  silent.** `ShellSurface.tsx` now plays `close` only when `previous` was
+  `panel` or `prompt`, so `compact -> collapsed` (the end of every
+  push-to-talk turn) is silent as documented. The comment still states why the
+  voice strip is silent (TTS collision), now for both directions.
+- **Finding 2 (must fix) — fail-silent contract untested.** Added 10 cases to
+  `sfx.test.ts`: throwing `localStorage.getItem`/`setItem`, malformed JSON, a
+  non-boolean stored `enabled`, the stored-preference-beats-reduced-motion
+  precedence both ways, the no-stored + reduced-motion default, `PlayOptions`
+  forwarding, and a construction failure that is cached (no retry-construct).
+  They install a fake `window` for the read/parse branches and exercise the
+  real `createUISFX` path for the throwing-storage calls (no `AudioContext` is
+  constructed; `play` returns `null` without one).
+- **Finding 3 (judgement call) — `press` scope.** Chose a targeted scope rather
+  than removing the wiring: `Button` gained a `sound?: boolean` opt-out and the
+  `danger` variant is always silent; `sound={false}` was set on the DebugPanel
+  harness (4 controls) and the repeated refresh/reload controls (Wallet,
+  Schedules, Security, P2P refresh + P2P load-more). Ordinary single-action
+  buttons, including Approval Approve/Deny, keep the cue — the author's
+  press-then-outcome reading is fine there.
+- **Finding 4 — MoreMenu spurious `hover` on programmatic open focus.** Dropped
+  the `onFocus` cue entirely and kept `onMouseEnter` only (the review's first
+  suggestion). This removes the no-pointer chirp on open and avoids the
+  hover+focus+select triple-cue a pointer click would otherwise produce.
+  Keyboard users still get the visual focus ring.
+- **Finding 5 — doc comments.** Corrected the header's "why not eager"
+  rationale to the user-gesture requirement, and corrected the
+  `initialEnabled()` doc to `options.enabled ?? stored.enabled ?? true` (the
+  constructor option wins over storage; the storage re-read here is what keeps
+  a stored preference effective).
+- **Nits.** Not changed: `__testing` still lives in the production module
+  (documented private seam; splitting it is a separate refactor), and
+  `setSfxEnabled`/`isSfxEnabled` remain unused by the UI pending the
+  onboarding toggle consumer (still valid backlog work). `button.tsx` keeps
+  its pre-existing missing trailing newline.
+
+Verification after fixes: `npx tsc -p tsconfig.json` exit 0; `npm test`
+402/402 pass (was 392; +10 new cases).
