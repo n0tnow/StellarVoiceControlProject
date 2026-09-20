@@ -9,14 +9,14 @@
  * sync) or fetching them (a network dependency for a menu click). Synthesis
  * sidesteps both: the cue is a few numbers turned into a buffer at play time.
  *
- * The player itself is built lazily, on first use, never at import time. An
- * `AudioContext` can only be constructed where `window` exists, and this
- * module is imported by `node --test` (no DOM) as well as by the renderer —
- * constructing eagerly would crash the test run before a single assertion.
- * Browsers also refuse to run an `AudioContext` before a real user gesture,
- * so `unlockSfx` is armed once against the first `pointerdown`/`keydown` the
- * document sees; by the time anything tries to play a cue, the context is
- * already unlocked.
+ * The player itself is built lazily, on first use, never at import time.
+ * Browsers refuse to run an `AudioContext` before a real user gesture, so
+ * there is nothing useful an eager construction could do at import: the
+ * context would sit suspended until the first interaction anyway. Instead
+ * `unlockSfx` is armed once against the first `pointerdown`/`keydown` the
+ * document sees, so by the time anything tries to play a cue the context is
+ * already unlocked. Building on first use also keeps `node --test` (no DOM)
+ * from ever constructing a player at all.
  *
  * Every entry point here fails silent: a construction error, a disabled
  * preference, or a missing `window` all degrade to "nothing played" rather
@@ -66,9 +66,12 @@ function prefersReducedMotion(): boolean {
 }
 
 /**
- * The `enabled` value handed to `createUISFX` on first construction. It only
- * matters for a first run: once anything has been stored under
- * `STORAGE_KEY`, `uisfx` loads that value itself and this default is ignored.
+ * The `enabled` value handed to `createUISFX`. `uisfx` resolves its enabled
+ * state as `options.enabled ?? stored.enabled ?? true` — the constructor
+ * option wins over its stored value — so the stored preference is honoured
+ * here by reading it first and only falling back to the reduced-motion guess
+ * when nothing is stored. Removing that read would silently ignore an existing
+ * preference, because `uisfx` would then use the value we pass unconditionally.
  */
 function initialEnabled(): boolean {
   const stored = readStoredEnabled();
