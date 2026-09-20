@@ -14,11 +14,15 @@
  * turn's stage as a small inline indicator (see `inlineVoiceStage`). The panel
  * placeholder remains for the menus we design later.
  *
- * The strip's right ear also carries Polaris' face ([`BlobatarFace`]) — the
- * assistant's visible identity, posed from the same voice stage the indicator
- * dots animate on. It is mounted on the state boundary only (`shouldRenderFace`)
- * so the collapsed shell stays faceless and the pose morph survives a stage
- * change.
+ * Polaris' face ([`BlobatarFace`]) is the shell's own child rather than any
+ * body's, because it has two presentations in two different places — small and
+ * alone in the strip's right ear during a voice turn, large in the panel's
+ * header band — and moving it between them in the *tree* would remount it and
+ * destroy the pose morph. It is mounted on the state boundary only
+ * (`shouldRenderFace`), and the stylesheet does the moving.
+ *
+ * It replaced the three indicator dots outright: the face is the stage signal
+ * now, and the strip does not say the same thing twice.
  */
 import { useCallback, useEffect, useState, type CSSProperties } from "react";
 
@@ -27,7 +31,7 @@ import type { NavigationRequest, ShellGeometry } from "@polaris/interfaces";
 import { StageLabel } from "@/components/StageLabel";
 import { notchPageFor } from "@/lib/navigation";
 import { BlobatarFace } from "./BlobatarFace";
-import { shouldRenderFace } from "./faceState";
+import { facePlacementFor, shouldRenderFace } from "./faceState";
 import { MoreMenu } from "./MoreMenu";
 import { NotchPanel } from "./NotchPanel";
 import { PromptPanel } from "./PromptPanel";
@@ -167,10 +171,12 @@ export function ShellSurface({
   // prompt on top). Because the strip is not rendered in `prompt`, the turn's
   // stage travels into the prompt as this inline stage instead.
   const voiceStage = inlineVoiceStage(visual);
-  // Polaris' face rides the strip's right ear. Gated on the applied *state*
-  // only: the collapsed shell is the camera cutout and must stay faceless, and
-  // the prompt state has no strip to ride in.
+  // Polaris' face. Gated on the applied *state* only: the collapsed shell is
+  // the camera cutout and must stay faceless, and the prompt owns its surface.
+  // The placement (size + gaze excursion) is also per state — small and alone
+  // in the strip's ear during a turn, large in the panel's header band.
   const showFace = shouldRenderFace(applied);
+  const facePlacement = facePlacementFor(applied);
 
   // A content-driven state (the prompt) uses its measured, Rust-clamped height;
   // every other state uses the table value.
@@ -188,6 +194,11 @@ export function ShellSurface({
     // cutout height, but the prompt anchors to it explicitly so no prompt pixel
     // can ever be drawn behind the camera housing.
     "--safe-top": `${geometry.notch.safeTop}px`,
+    // The face's drawn size, from the tested placement table. It lives on the
+    // shell rather than on the face so that the panel's header band can be
+    // `calc(var(--face-size) + …)` instead of a second copy of the number that
+    // silently stops matching the day the face is resized.
+    "--face-size": `${facePlacement.size}px`,
   } as CSSProperties;
 
   return (
@@ -203,6 +214,16 @@ export function ShellSurface({
           : "Polaris ready. Hold Control and Option to record, or hold Control, Option and Space."
       }
     >
+      {/* Polaris' face. A direct child of the shell, and rendered in exactly one
+          place in the tree no matter which presentation is on screen: the
+          stylesheet moves it from the strip's right ear to the panel's header
+          band and resizes it on the shell's own curve. Rendering it inside the
+          strip in one state and inside the panel in the other would remount it,
+          which kills the pose morph, restarts the idle loops and snaps the gaze
+          back to centre — see `BlobatarFace`. It is absent only where there is
+          nothing to draw on (`shouldRenderFace`). */}
+      {showFace ? <BlobatarFace stage={voiceStage} placement={facePlacement} /> : null}
+
       {/* Voice states only. The `prompt` state removes the strip from the tree
           rather than hiding it, so its label and indicator cannot occupy space
           or paint the purple wash behind the prompt body. */}
@@ -216,20 +237,14 @@ export function ShellSurface({
           </div>
           {/* The camera housing: no pixels exist here, so it stays empty. */}
           <span className="notch-gap" aria-hidden="true" />
-          {/* The right ear: Polaris' face, then the indicator dots at the very
-              edge (the dots keep the purple wash anchored where it has always
-              been). The face is mounted per *state*, never per stage — see
-              `BlobatarFace` for why a remount would kill the pose morph — and
-              is absent while collapsed, where there are no pixels to draw it
-              on (`shouldRenderFace`). */}
-          <div className="notch-trail">
-            {showFace ? <BlobatarFace stage={voiceStage} /> : null}
-            <div className="notch-indicator" aria-hidden="true">
-              <span />
-              <span />
-              <span />
-            </div>
-          </div>
+          {/* The right ear is the face's, and only the face's. The three
+              indicator dots that used to animate here are gone: one surface
+              cannot have two things saying the same thing, and the face says it
+              with a shape rather than with three dots. The face itself is not
+              rendered here — it is a direct child of the shell (below), because
+              it also has to be able to sit in the panel's header without being
+              torn out of the tree on the way. The grid keeps the column either
+              way — `grid-template-columns` sizes it, not its contents. */}
         </div>
       ) : null}
 
