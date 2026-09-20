@@ -8,6 +8,7 @@ import {
   rowsFromMock,
   rowsFromUpcoming,
   tasksSource,
+  tasksViewState,
   type TaskRow,
 } from "./useTasksData.ts";
 
@@ -87,6 +88,17 @@ test("tasksSource: live inside Tauri with an owner, never demo there", () => {
   assert.equal(tasksSource({ inTauri: true, ownerAddress: null }), "unconfigured");
   assert.equal(tasksSource({ inTauri: false, ownerAddress: "GACC2" }), "demo");
   assert.equal(tasksSource({ inTauri: false, ownerAddress: null }), "demo");
+});
+
+test("tasksViewState never shows a blank body", () => {
+  // Cached rows win, even while a background refresh is in flight.
+  assert.equal(tasksViewState({ loading: true, error: null, count: 2 }), "rows");
+  assert.equal(tasksViewState({ loading: false, error: "rpc down", count: 1 }), "rows");
+  // First read with no cache: a skeleton, never blank.
+  assert.equal(tasksViewState({ loading: true, error: null, count: 0 }), "skeleton");
+  // A failed first read shows the error; a healthy empty read shows empty.
+  assert.equal(tasksViewState({ loading: false, error: "rpc down", count: 0 }), "error");
+  assert.equal(tasksViewState({ loading: false, error: null, count: 0 }), "empty");
 });
 
 test("cancelIntentFor builds a cancel_schedule intent for a real row only", () => {
