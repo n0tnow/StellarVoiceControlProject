@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Autonomy",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "identifier": "dev.polaris.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -40,7 +40,8 @@
     "targets": ["app"],
     "macOS": {
       "signingIdentity": "-",
-      "hardenedRuntime": false
+      "hardenedRuntime": true,
+      "entitlements": "Entitlements.plist"
     },
     "icon": [
       "icons/32x32.png",

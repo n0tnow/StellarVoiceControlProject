@@ -9,7 +9,7 @@ APP_MANIFEST := app/src-tauri/Cargo.toml
 CHAIN_MANIFEST := contracts/Cargo.toml
 APP_BIN := app/src-tauri/target/release/bundle/macos/Autonomy.app/Contents/MacOS/polaris-app
 
-.PHONY: help setup icons check check-chain check-contracts dev agent build run build-contracts contracts-test clean
+.PHONY: help setup icons check check-chain check-contracts dev agent build run build-contracts contracts-test clean release-macos
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
@@ -41,6 +41,9 @@ build: ## Bundle the macOS app (release) using the local Tauri CLI
 run: ## Launch the built app from the repo root so the repo-root .env is found
 	@test -x "$(APP_BIN)" || { echo "No build yet — run 'make build' first."; exit 1; }
 	"$(APP_BIN)"
+
+release-macos: ## Developer ID sign + notarize + staple the app and a .dmg (see scripts/release-macos.sh)
+	bash scripts/release-macos.sh
 
 build-contracts: ## Build polaris_guard to wasm (requires stellar-cli >= 25.2.0)
 	caffeinate -i stellar contract build --manifest-path $(CHAIN_MANIFEST)
