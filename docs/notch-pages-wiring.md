@@ -92,12 +92,12 @@ refused with one sentence and the Wallet page, with no chain call. New Debug che
 The Wallet page now follows the Rust session (`wallet_session` / `wallet_session_changed`,
 feature-detected by `WalletPage`): `none` → Create/Import, `locked` → `UnlockScreen` (wallet picker
 + Touch ID), `unlocked` → `WalletDashboard`. `lib/walletSession.ts` holds the pure engine/store and
-selectors (`walletScreenFor`, `shouldGateForSession`, `shouldAutoOpenWallet`, `shouldPinWallet`);
+selectors (`walletScreenFor`, `shouldGateForSession`, `shouldAutoOpenWallet`, `didSessionLock`);
 `walletSessionLive.ts` binds Tauri, `notch/wallet/useWalletSession.ts` exposes them to React through
-one `useSyncExternalStore` subscription. `ShellSurface` opens the panel on Wallet at startup and
-re-raises it on every `wallet_session_changed` → `locked`/`none`, pinning it so hover-away/Escape
-cannot dismiss it until unlock. While gated, History/Tasks/Rules render `LoginGate` and the "⋯"
-panel entries are disabled — no chain reads. A value-moving intent while locked answers "Please
+one `useSyncExternalStore` subscription. `ShellSurface` opens the panel on Wallet **once** at launch
+when the session is not unlocked and collapses it on the unlocked → locked (logout / auto-lock)
+edge; the panel is always closable (Close, Escape, hover-away). While gated, History/Tasks/Rules
+render `LoginGate` — no chain reads. A value-moving intent while locked answers "Please
 unlock your wallet first." (`decideWalletGateForSession`), opens Wallet and makes no chain call.
 
 The dashboard reads via `useWalletData` (extended: trustlines/issuer/sequence/subentries from

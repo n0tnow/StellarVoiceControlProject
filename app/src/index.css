@@ -466,16 +466,21 @@
 .panel-nav {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
+  /* The six pages plus Close are the whole nav: it must never scroll, and it
+     must still fit under the reserved face header (`--face-size` + 28px). */
+  min-height: 0;
+  overflow: hidden;
   padding: 10px 8px 10px 14px;
   border-right: 1px solid #ffffff14;
 }
 
 .panel-nav-item {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: 8px;
-  padding: 7px 9px;
+  padding: 6px 9px;
   border: 0;
   border-radius: 9px;
   background: transparent;
