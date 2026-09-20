@@ -13,6 +13,28 @@
  */
 
 /* ------------------------------------------------------------------ *
+ * Connect-existing copy (task W14)
+ * ------------------------------------------------------------------ */
+
+/**
+ * The user-facing wording of the "connect an existing wallet" path (task W14).
+ * Kept here so the primary first-run copy is testable and cannot silently drift
+ * back to presenting wallet creation first.
+ */
+export const CONNECT_COPY = {
+  screenTitle: "Connect your wallet",
+  screenBody:
+    "Already use Freighter, Lobstr or xBull? Paste that account's secret key once. " +
+    "Polaris keeps it in the macOS Keychain, asks for Touch ID, and signs every " +
+    "payment here — you never go back to the other wallet app.",
+  connectExisting: "Connect existing wallet",
+  createNew: "Create new wallet",
+  importHeading: "Connect existing wallet",
+  previewHeading: "Connect this account?",
+  confirm: "Connect and store in Keychain",
+} as const;
+
+/* ------------------------------------------------------------------ *
  * Create flow
  * ------------------------------------------------------------------ */
 

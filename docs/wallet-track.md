@@ -32,6 +32,13 @@ embedded wallet, keeping the reusable XDR verification helpers
 * The embedded wallet is the **only** signer; `POLARIS_SIGNER` no longer selects a
   path.
 
+First-run UX (W14): the Wallet page leads with **"Connect existing wallet"** —
+the secret-key mode by default, with "Create new wallet" as the secondary
+action — so connecting a Freighter/Lobstr/xBull account reads as the primary
+path. Import stays Touch-ID gated and, like create, leaves the session unlocked,
+so the user lands on the dashboard with the connected account instead of the
+Connect screen.
+
 Data-protection / biometric Keychain ACLs need entitlements an ad-hoc dev build
 lacks, so the item is a plain generic password. The first time a rebuild reads an
 item a previous build created, macOS shows its standard “Always Allow / Deny”
