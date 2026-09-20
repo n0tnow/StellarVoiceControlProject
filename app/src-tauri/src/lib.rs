@@ -12,6 +12,7 @@ mod biometric;
 mod bridge;
 mod capture;
 mod commands;
+mod contacts;
 mod ctrl_tap;
 mod env;
 mod events;
@@ -66,6 +67,10 @@ pub fn run() {
             hotkey::hotkey_permission,
             panels::open_panel,
             stellar_config::stellar_config,
+            // Task W10b: the Wallet page's non-secret recipient book.
+            contacts::contacts_list,
+            contacts::contacts_add,
+            contacts::contacts_remove,
             approval::approval_begin,
             approval::approval_authorize,
             approval::approval_deny,

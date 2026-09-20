@@ -1,11 +1,18 @@
 /**
- * The webview's client for the in-app wallet (step W10).
+ * The webview's single wallet module (steps W10 + W10b).
  *
- * The default signer is the embedded wallet: the user creates a 24-word wallet
- * or imports an `S…` seed / recovery phrase, and Rust stores the seed in the
- * macOS Keychain. This module is the one place the webview names the wallet
- * commands, so the wire contract stays in one file. Every wrapper is a thin
+ * W10 — the in-app wallet's command client. The default signer is the embedded
+ * wallet: the user creates a 24-word wallet or imports an `S…` seed / recovery
+ * phrase, and Rust stores the seed in the macOS Keychain. Every wrapper is a thin
  * `invoke`; a rejected command is a typed `WalletCommandError` (`{ kind, message }`).
+ *
+ * W10b — the same wire commands exposed to the notch UI through one
+ * feature-detected `walletEngine`. Its injectable factory lives in
+ * `walletEngine.ts`; this file is the only place that binds it to Tauri's real
+ * `invoke`, so the pure modules and their tests never import Tauri.
+ *
+ * The wire contract has a single source of truth: the command names and their
+ * types live in `@polaris/interfaces` and in this file.
  *
  * Secrets only ever travel webview → Rust over IPC: `walletImport` /
  * `walletImportPreview` pass the phrase or secret as an argument and never log
@@ -24,6 +31,7 @@ import type {
 } from "@polaris/interfaces";
 
 import type { InvokeFn } from "./approval.ts";
+import { createWalletEngine } from "./walletEngine.ts";
 
 export type {
   WalletAccount,
@@ -32,9 +40,30 @@ export type {
   WalletCreateOutcome,
   WalletErrorKind,
   WalletStatus,
-};
+} from "@polaris/interfaces";
+export {
+  WalletEngineError,
+  createWalletEngine,
+  isMissingCommandError,
+  toWalletEngineError,
+} from "./walletEngine.ts";
+export type {
+  ImportInput,
+  WalletEngine,
+  WalletFailureKind,
+  WalletInvokeFn,
+} from "./walletEngine.ts";
 
-/** Injectable seam so the wrappers are unit-testable without Tauri. */
+/** The W10b names are aliases of the canonical `@polaris/interfaces` types. */
+export type WalletEntry = WalletAccount;
+export type WalletActive = NonNullable<WalletStatus["active"]>;
+export type WalletCreateResult = WalletCreateOutcome;
+export type WalletImportPreview = WalletAddressOutcome;
+
+/** The app's single wallet-engine instance (W10b). */
+export const walletEngine = createWalletEngine((command, args) => invoke(command, args));
+
+/** Injectable seam so the W10 wrappers are unit-testable without Tauri. */
 export interface WalletDeps {
   invoke: InvokeFn;
 }

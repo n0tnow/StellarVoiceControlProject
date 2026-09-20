@@ -130,8 +130,9 @@ pub(crate) fn is_public_key(value: &str) -> bool {
 }
 
 /// The alias-name charset from `stellar/src/payments/aliases.ts` (C3):
-/// `[a-z][a-z0-9_-]{0,31}`.
-fn is_alias_name(name: &str) -> bool {
+/// `[a-z][a-z0-9_-]{0,31}`. `pub(crate)` so the contacts store reuses the same
+/// charset instead of duplicating it (W10b).
+pub(crate) fn is_alias_name(name: &str) -> bool {
     if name.is_empty() || name.len() > 32 {
         return false;
     }
@@ -212,13 +213,37 @@ pub fn read_with_wallet(active: Option<String>) -> StellarConfig {
     from_lookup(crate::env::var, active)
 }
 
+/// Overlays the saved contacts under the env aliases (W10b). Precedence is
+/// **committed `aliases.json` < contacts < `POLARIS_ALIASES`**: the committed
+/// book is merged on the TypeScript side, contacts fill it here, and an env pair
+/// wins last. A malformed contact (bad nickname or address) is dropped, so a
+/// bad entry is "not resolvable" (fail-closed), never a wrong destination.
+pub fn aliases_with_contacts(
+    env_aliases: BTreeMap<String, String>,
+    contacts: &[crate::contacts::Contact],
+) -> BTreeMap<String, String> {
+    let mut merged: BTreeMap<String, String> = contacts
+        .iter()
+        .filter(|contact| is_alias_name(&contact.nickname) && is_public_key(&contact.address))
+        .map(|contact| (contact.nickname.clone(), contact.address.clone()))
+        .collect();
+    merged.extend(env_aliases);
+    merged
+}
+
 /// The webview's entry point: non-secret chain configuration for the shell. The
-/// embedded wallet's active address (when one exists) is the owner.
+/// embedded wallet's active address (when one exists) is the owner, and the
+/// saved contacts (W10b) are merged under the env aliases so the voice lane can
+/// resolve a freshly added "rumuz" on the next turn.
 #[tauri::command]
 pub fn stellar_config(
+    app: tauri::AppHandle,
     wallet: tauri::State<'_, std::sync::Arc<crate::wallet::WalletService>>,
 ) -> StellarConfig {
-    read_with_wallet(wallet.active_address())
+    let mut config = read_with_wallet(wallet.active_address());
+    let contacts = crate::contacts::load_for_app(&app);
+    config.aliases = aliases_with_contacts(std::mem::take(&mut config.aliases), &contacts);
+    config
 }
 
 #[cfg(test)]
@@ -371,6 +396,27 @@ mod tests {
         assert_eq!(aliases.len(), 2);
         assert_eq!(aliases.get("acc2").map(String::as_str), Some(ACC2));
         assert_eq!(aliases.get("ok_alias").map(String::as_str), Some(ACC2));
+    }
+
+    #[test]
+    fn contacts_merge_below_env_aliases_and_drop_malformed_entries() {
+        use crate::contacts::Contact;
+        let env = parse_aliases(&format!("acc2={ACC2},ada={OWNER}"));
+        let contacts = vec![
+            Contact { nickname: "ali".into(), address: ACC2.into() },
+            // Env wins over a contact with the same nickname.
+            Contact { nickname: "ada".into(), address: ACC2.into() },
+            // Dropped, not written into the alias table.
+            Contact { nickname: "bad name".into(), address: ACC2.into() },
+            Contact { nickname: "typo".into(), address: "Gbad".into() },
+        ];
+        let merged = aliases_with_contacts(env, &contacts);
+        assert_eq!(merged.get("ali").map(String::as_str), Some(ACC2));
+        assert_eq!(merged.get("acc2").map(String::as_str), Some(ACC2));
+        // `ada` keeps the env address, not the contact's.
+        assert_eq!(merged.get("ada").map(String::as_str), Some(OWNER));
+        assert!(!merged.contains_key("bad name"));
+        assert!(!merged.contains_key("typo"));
     }
 
     #[test]
