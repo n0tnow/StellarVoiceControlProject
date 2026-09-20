@@ -62,14 +62,18 @@ source can only serve the repository root or `/docs`, never an arbitrary subdire
 | Repository | Pages source | Status |
 |---|---|---|
 | `fthsrbst/StellarVoiceControlProject` (fork) | GitHub Actions | **live** — <https://fthsrbst.github.io/StellarVoiceControlProject/> |
-| `n0tnow/StellarVoiceControlProject` (origin) | GitHub Actions | workflow merged; **needs an admin** to set Settings → Pages → Source to "GitHub Actions" |
+| `n0tnow/StellarVoiceControlProject` (origin) | GitHub Actions | workflow in #44; **needs an admin** to set Settings → Pages → Source to "GitHub Actions" — `POST /repos/.../pages` returns 404 without admin |
 
 Verified on the live fork deployment: `/` and `/style.css` both return HTTP 200, and the
 served page renders identically to the local `python3 -m http.server` preview.
 
 ## 5. Deleted branches
 
-Every branch below was deleted from `origin` on 2026-09-20. "Commits ahead" counts commits
+The 49 branches below were deleted from `origin` on 2026-09-20. Two branches were left
+in place because their pull requests were still open at the time of the cleanup:
+`chore/pages-deploy` (#44) and `docs/repo-cleanup` (#45, this report).
+
+Every branch below was deleted on 2026-09-20. "Commits ahead" counts commits
 not reachable from `main`; a squash-merged branch shows a non-zero count even though its
 *content* is already on `main`, which is why this table records the SHA rather than a
 merged/unmerged verdict.
@@ -77,7 +81,6 @@ merged/unmerged verdict.
 | Branch | Head SHA | Commits ahead of `main` | Last commit |
 |---|---|---|---|
 | `audit/rules-ruleset-check` | `956e8e1fca5b248ff54df86961eb19497d76f01b` | 2 | docs: independent review of the ruleset audit (accept with corrections) |
-| `chore/pages-deploy` | `5775adcf6a93986cd3ab002813ce38e03dd6f11a` | 1 | ci(pages): publish the landing page to GitHub Pages |
 | `chore/remove-freighter-bridge` | `0d8861ad632f8fb8bd0c3e3b2db8d0bbe9cc936d` | 35 | docs: Freighter bridge removal report |
 | `codex/dark-landing` | `19866be8788a89953c69ddfdc47612d9264d5e3b` | 7 | Merge remote-tracking branch 'origin/main' into codex/dark-landing |
 | `docs/blobatar-review` | `48896ac073474fb5f4390867bd2fd403970a3e6c` | 2 | Merge remote-tracking branch 'origin/main' into docs/blobatar-review |
@@ -150,8 +153,9 @@ scratch tags were removed:
 
 ## 7. What `main` looks like afterwards
 
-- One branch: `main`.
+- One branch: `main`, once #44 and #45 are merged and their branches deleted.
 - Three tags: `v0.1.0`, `v0.2.0`, `v0.2.1`.
-- No open pull requests.
+- No open pull requests. #29 and #8 were closed as superseded (see §3); #41, #32 and #31
+  were merged (see §2).
 - `landing/` published to GitHub Pages through `.github/workflows/pages.yml`.
 - Local `.worktrees/` removed.
