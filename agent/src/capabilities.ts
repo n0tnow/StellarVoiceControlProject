@@ -48,6 +48,8 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
     "",
     ...navigation(),
     "",
+    ...contacts(),
+    "",
     ...examples(),
   ].join("\n");
 }
@@ -225,6 +227,29 @@ function navigation(): string[] {
   ];
 }
 
+/**
+ * Saving, listing and forgetting contacts by voice or typed prompt (W15f). These
+ * are read-only: no approval, no value moves, and the app owns validation.
+ */
+function contacts(): string[] {
+  return [
+    "Contacts (save_contact / list_contacts / delete_contact) — no value moves:",
+    '- "this is my friend\'s address GABC..., save it as Ada" / "GABC... adresini Ada',
+    '  olarak kaydet" -> save_contact name "Ada", address "GABC...".',
+    '- "save Ada as GABC..." / "Ada\'yı GABC... olarak kaydet" -> save_contact name',
+    '  "Ada", address "GABC...".',
+    '- "save Ada" with no address -> save_contact name "Ada" and no address; the app',
+    "  asks for the full address (voice cannot read 56 characters).",
+    '- "who are my contacts" / "kişilerim kim" -> list_contacts.',
+    '- "remove Ada" / "Ada\'yı sil" -> delete_contact name "Ada".',
+    "- NEVER pass a secret key (starts with \"S\") or a recovery phrase to",
+    "  save_contact. If the user reads one, call no tool, never repeat it, and say",
+    "  to use the Wallet screen to import it.",
+    "- A name already saved to a different address is not overwritten; the app asks",
+    "  the user for another name.",
+  ];
+}
+
 function examples(): string[] {
   return [
     "Examples (utterance -> correct behaviour):",
@@ -287,6 +312,17 @@ function examples(): string[] {
     "  the earlier asset/amount/route.",
     '- (pending rule, missing asset) "USDC" -> set_approval_rule auto_under_limit with',
     '  asset "USDC" and the earlier limit.',
+    // W15f: contacts by prompt or voice.
+    '- "this is my friend\'s address GABC..., save it as Ada" -> save_contact name',
+    '  "Ada", address "GABC...", language "en".',
+    '- "save Ada as GABC..." -> save_contact name "Ada", address "GABC...", language "en".',
+    '- "GABC... adresini Ada olarak kaydet" -> save_contact name "Ada", address',
+    '  "GABC...", language "tr".',
+    '- "save Ada" (no address) -> save_contact name "Ada" with no address.',
+    '- "who are my contacts" / "kişilerim kim" -> list_contacts, language "en"/"tr".',
+    '- "remove Ada" / "Ada\'yı sil" -> delete_contact name "Ada", language "en"/"tr".',
+    '- "save my key SABC... as Ada" (a secret key) -> no tool, tell the user to use',
+    "  the Wallet screen; never repeat the key.",
     // Negatives: these must NOT create a rule, a sell or a buy.
     '- "what are my limits" -> navigate target "rules", language "en" (do not invent a rule).',
     '- "how do I sell a token?" (a question, not a command) -> no tool, one short',
