@@ -2,7 +2,7 @@
 
 - **Date:** 2026-09-20
 - **Branch:** `feat/touchid-approval`
-- **PR:** _opened with this report; link added by the coordinator_
+- **PR:** https://github.com/n0tnow/StellarVoiceControlProject/pull/29
 - **Status:** implemented; **manual Touch ID device test pending** (hardware cannot be driven headlessly)
 
 ## 1. Scope vs. what already existed
