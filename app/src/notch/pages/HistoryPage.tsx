@@ -22,7 +22,6 @@ import {
   Clock,
   Copy,
   Download,
-  ExternalLink,
   LoaderCircle,
   RefreshCw,
   Search,
@@ -45,6 +44,7 @@ import {
   relativeTime,
   type HistoryFilter,
 } from "../history/group";
+import { ExplorerLink } from "../ExplorerLink";
 import { useHistoryData } from "../data/useHistoryData";
 import { LoginGate } from "../wallet/LoginGate";
 import { useWalletLocked } from "../wallet/useWalletSession";
@@ -167,18 +167,7 @@ function DetailDrawer({ row }: { row: HistoryRow }) {
           >
             <Copy aria-hidden="true" />
           </button>
-          {row.explorerUrl !== null ? (
-            <a
-              className="history-link"
-              href={row.explorerUrl}
-              target="_blank"
-              rel="noreferrer"
-              title="Open in explorer"
-            >
-              <ExternalLink aria-hidden="true" />
-              Explorer
-            </a>
-          ) : null}
+          <ExplorerLink target={row.txHash} kind="tx" />
         </div>
       ) : (
         <div className="history-detail-line">

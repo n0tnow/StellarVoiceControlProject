@@ -29,6 +29,8 @@ export interface RulesEditorData {
   busy: boolean;
   /** The last action's one-line result, or its failure reason. */
   message: string | null;
+  /** The tx hash of the last submitted setup, or `null` when there is none. */
+  resultHash: string | null;
   save: () => Promise<void>;
   disable: () => Promise<void>;
   syncContacts: () => Promise<void>;
@@ -63,6 +65,7 @@ export function useRulesEditor(): RulesEditorData {
   const [autoPaySupported, setAutoPaySupported] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [resultHash, setResultHash] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
 
   const refresh = useCallback(() => setNonce((value) => value + 1), []);
@@ -129,8 +132,10 @@ export function useRulesEditor(): RulesEditorData {
       if (!security) return;
       setBusy(true);
       setMessage(null);
+      setResultHash(null);
       const outcome = await executeApprovedIntent(ruleIntent(next, security.assetSymbol, source));
       setMessage(outcome.label ?? outcome.detail ?? "Done");
+      setResultHash(outcome.txHash ?? null);
       setBusy(false);
       refresh();
     },
@@ -158,6 +163,7 @@ export function useRulesEditor(): RulesEditorData {
     autoPaySupported,
     busy,
     message,
+    resultHash,
     save,
     disable,
     syncContacts,

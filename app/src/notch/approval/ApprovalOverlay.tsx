@@ -1,21 +1,32 @@
+import { ExplorerLink } from "@/notch/ExplorerLink";
+
 import { ApprovalCard } from "./ApprovalCard.tsx";
 import { BatchApprovalCard } from "./BatchApprovalCard.tsx";
 import { resultLine, resultTone } from "./overlayModel.ts";
 import type { PendingApproval } from "./usePendingApproval.ts";
 
 /** The short, single-line result shown for a moment after a decision. */
-function ResultView({ message, tone }: { message: string; tone: "ok" | "danger" | null }) {
+function ResultView({
+  message,
+  tone,
+  txHash,
+}: {
+  message: string;
+  tone: "ok" | "danger" | null;
+  txHash: string | null;
+}) {
   const ok = tone === "ok";
   return (
-    <p
+    <div
       role="status"
       aria-live="polite"
-      className={`text-center text-lg font-semibold ${
+      className={`flex flex-col items-center gap-1 text-center text-lg font-semibold ${
         ok ? "text-polaris-ok" : "text-polaris-danger"
       }`}
     >
-      {ok ? `${message} ✓` : message}
-    </p>
+      <p>{ok ? `${message} ✓` : message}</p>
+      {ok && txHash ? <ExplorerLink target={txHash} kind="tx" /> : null}
+    </div>
   );
 }
 
@@ -26,7 +37,7 @@ function ResultView({ message, tone }: { message: string; tone: "ok" | "danger" 
  * only place an approval is ever shown; there is no separate window.
  */
 export function ApprovalOverlay({ approval }: { approval: PendingApproval }) {
-  const { state, visible, canApprove, remainingMs, onApprove, onDeny } = approval;
+  const { state, visible, canApprove, remainingMs, txHash, onApprove, onDeny } = approval;
   if (!visible) return null;
 
   const message = resultLine(state);
@@ -36,7 +47,7 @@ export function ApprovalOverlay({ approval }: { approval: PendingApproval }) {
     <div className="absolute inset-0 z-20 flex overflow-y-auto bg-black/60 px-4 py-3 backdrop-blur-sm">
       <div className="m-auto w-full max-w-md">
         {message !== null ? (
-          <ResultView message={message} tone={resultTone(state)} />
+          <ResultView message={message} tone={resultTone(state)} txHash={txHash} />
         ) : snapshot === null ? null : snapshot.batch !== undefined ? (
           <BatchApprovalCard
             stage={state.stage}

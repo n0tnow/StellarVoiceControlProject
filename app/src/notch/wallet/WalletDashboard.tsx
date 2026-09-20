@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import type { WalletEntry } from "@/lib/wallet";
 import { deriveAssetRows, requestFriendbotFund } from "@/lib/walletAssets";
 import { useWalletData } from "@/notch/data/useWalletData";
+import { ExplorerLink } from "@/notch/ExplorerLink";
 import { shortAddress } from "@/lib/address";
 import committedAliases from "../../../../stellar/config/aliases.json";
 
@@ -198,6 +199,7 @@ export function WalletDashboard({
             >
               <QrIcon aria-hidden="true" />
             </button>
+            <ExplorerLink target={owner} kind="account" iconOnly />
           </div>
           {showQr ? (
             <div className="flex items-start gap-3">

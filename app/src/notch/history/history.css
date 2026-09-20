@@ -224,20 +224,6 @@
   color: var(--color-notch-text);
 }
 
-.history-link {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  flex-shrink: 0;
-  color: var(--color-notch-accent);
-  text-decoration: none;
-}
-
-.history-link svg {
-  width: 11px;
-  height: 11px;
-}
-
 .history-facts {
   display: grid;
   grid-template-columns: 1fr 1fr;

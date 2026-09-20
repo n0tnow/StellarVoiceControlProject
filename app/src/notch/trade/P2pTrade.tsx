@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import { buildP2pActionCall, createP2pOfferCall, getP2pContext } from "@/lib/p2p";
 import { actionLabel, offerView, type OfferView } from "@/lib/p2pView";
 import { useTxRun } from "@/lib/useTxRun";
+import { ExplorerLink } from "@/notch/ExplorerLink";
 
 import { validateOfferInputs } from "./tradeModel";
 
@@ -41,6 +42,7 @@ export function P2pTrade() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<Notice>(null);
+  const [submittedHash, setSubmittedHash] = useState<string | null>(null);
   const [showSell, setShowSell] = useState(false);
   const [amount, setAmount] = useState("");
   const [price, setPrice] = useState("");
@@ -71,6 +73,7 @@ export function P2pTrade() {
   const runCall = useCallback(
     async (callPromise: Promise<P2pCall>, intent: Intent, label: string): Promise<boolean> => {
       setBusy(true);
+      setSubmittedHash(null);
       try {
         const call = await callPromise;
         const [outcome] = await run([
@@ -78,6 +81,7 @@ export function P2pTrade() {
         ]);
         if (outcome?.status === "submitted") {
           await load();
+          setSubmittedHash(outcome.txHash);
           setNotice({ kind: "ok", message: `${label} submitted.` });
           return true;
         }
@@ -195,6 +199,12 @@ export function P2pTrade() {
       {notice ? (
         <p className={`text-[11px] ${notice.kind === "ok" ? "text-polaris-ok" : "text-polaris-danger"}`}>
           {notice.message}
+          {notice.kind === "ok" && submittedHash ? (
+            <>
+              {" "}
+              <ExplorerLink target={submittedHash} kind="tx" />
+            </>
+          ) : null}
         </p>
       ) : null}
 

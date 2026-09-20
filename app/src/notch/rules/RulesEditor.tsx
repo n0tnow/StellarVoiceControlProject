@@ -15,6 +15,7 @@ import { useState } from "react";
 import { ChevronDown, CircleAlert, LoaderCircle, RefreshCw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { ExplorerLink } from "@/notch/ExplorerLink";
 
 import { ruleSummary, rulesView } from "./rulesModel";
 import { useRulesEditor } from "./useRulesEditor";
@@ -47,8 +48,19 @@ function LimitField({
 
 export function RulesEditor() {
   const editor = useRulesEditor();
-  const { state, detail, security, form, patch, contacts, executorFunded, autoPaySupported, busy, message } =
-    editor;
+  const {
+    state,
+    detail,
+    security,
+    form,
+    patch,
+    contacts,
+    executorFunded,
+    autoPaySupported,
+    busy,
+    message,
+    resultHash,
+  } = editor;
   const [advanced, setAdvanced] = useState(false);
 
   if (state === "loading") return <p className="rule-condition">Reading spending rules…</p>;
@@ -176,6 +188,12 @@ export function RulesEditor() {
       ) : message ? (
         <p className="rule-condition" role="status">
           {message}
+          {resultHash ? (
+            <>
+              {" "}
+              <ExplorerLink target={resultHash} kind="tx" />
+            </>
+          ) : null}
         </p>
       ) : null}
     </>
