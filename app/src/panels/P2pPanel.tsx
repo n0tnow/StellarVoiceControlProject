@@ -199,7 +199,7 @@ export function P2pPanel() {
 
         <div className="flex items-center justify-between gap-2">
           <h2 className="text-xs font-semibold text-polaris-text">Offers</h2>
-          <Button variant="ghost" size="sm" disabled={busy} onClick={() => void load(true)}>
+          <Button variant="ghost" size="sm" sound={false} disabled={busy} onClick={() => void load(true)}>
             {busy ? "Working…" : "Refresh"}
           </Button>
         </div>
@@ -214,7 +214,7 @@ export function P2pPanel() {
         <OfferSection title="Open offers from others" rows={others} busy={busy} onAction={onAction} />
 
         {hasMore ? (
-          <Button variant="secondary" size="sm" disabled={busy} onClick={() => void load(false)}>
+          <Button variant="secondary" size="sm" sound={false} disabled={busy} onClick={() => void load(false)}>
             Load more offers
           </Button>
         ) : null}

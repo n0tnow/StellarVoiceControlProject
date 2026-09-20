@@ -226,12 +226,13 @@ export function DebugPanel() {
             {copyState === "failed" ? (
               <span className="text-xs text-polaris-danger">Copy failed</span>
             ) : null}
-            <Button variant="outline" size="sm" onClick={() => void copyReport()}>
+            <Button variant="outline" size="sm" sound={false} onClick={() => void copyReport()}>
               Copy report
             </Button>
             <Button
               variant="secondary"
               size="sm"
+              sound={false}
               disabled={runningAll}
               onClick={() => void runEverything()}
             >
@@ -271,6 +272,7 @@ export function DebugPanel() {
                   <Button
                     variant="secondary"
                     size="sm"
+                    sound={false}
                     disabled={isBusy}
                     onClick={() => void runOne(check)}
                   >
@@ -284,6 +286,7 @@ export function DebugPanel() {
                         key={action.id}
                         variant="outline"
                         size="sm"
+                        sound={false}
                         title={action.description}
                         disabled={busy.has(action.id)}
                         onClick={() => void runAction(check, action)}

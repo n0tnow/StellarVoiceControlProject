@@ -38,13 +38,32 @@ const buttonVariants = cva(
 
 export interface ButtonProps
   extends ButtonHTMLAttributes<HTMLButtonElement>,
-    VariantProps<typeof buttonVariants> {}
+    VariantProps<typeof buttonVariants> {
+  /**
+   * Whether the shared `press` cue plays on click. Defaults to `true`. Set to
+   * `false` on high-frequency refresh/reload controls and diagnostic harnesses,
+   * where a cue per click reads as machine-gun rather than confirmation.
+   * Destructive (`variant="danger"`) controls are always silent regardless —
+   * a cheerful tap on an irreversible action reads wrong.
+   */
+  sound?: boolean;
+}
 
-export function Button({ className, variant, size, type = "button", onClick, ...props }: ButtonProps) {
+export function Button({
+  className,
+  variant,
+  size,
+  type = "button",
+  onClick,
+  sound = true,
+  ...props
+}: ButtonProps) {
   // Every button in the app shares this one cue: a shared `press` here beats
-  // each of the ~16 call sites remembering to wire its own.
+  // each of the ~16 call sites remembering to wire its own. It is suppressed
+  // for `danger` and opt-out (`sound={false}`) call sites; the caller's own
+  // `onClick` still runs either way.
   const handleClick = (event: MouseEvent<HTMLButtonElement>): void => {
-    playSfx("press");
+    if (sound && variant !== "danger") playSfx("press");
     onClick?.(event);
   };
   return (

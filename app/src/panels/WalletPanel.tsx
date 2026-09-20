@@ -217,6 +217,7 @@ export function WalletPanel() {
           <Button
             variant="secondary"
             size="sm"
+            sound={false}
             disabled={refreshing || !config?.ownerAddress}
             onClick={() => void refresh()}
           >

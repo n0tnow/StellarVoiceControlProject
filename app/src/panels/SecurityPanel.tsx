@@ -170,7 +170,7 @@ export function SecurityPanel() {
             <section className="space-y-2 rounded-lg border border-polaris-line bg-polaris-panel/60 p-3">
               <header className="flex items-center justify-between gap-2">
                 <h2 className="text-sm font-semibold">Current on-chain state</h2>
-                <Button size="sm" variant="ghost" disabled={running} onClick={() => void refresh()}>
+                <Button size="sm" variant="ghost" sound={false} disabled={running} onClick={() => void refresh()}>
                   Refresh
                 </Button>
               </header>

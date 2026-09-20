@@ -92,7 +92,7 @@ export function SchedulesPanel() {
 
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-semibold">Upcoming</h2>
-          <Button size="sm" variant="ghost" onClick={refresh} disabled={running || loading}>
+          <Button size="sm" variant="ghost" sound={false} onClick={refresh} disabled={running || loading}>
             Refresh
           </Button>
         </div>
