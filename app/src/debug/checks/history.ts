@@ -11,6 +11,8 @@ import { errorDetail, makeResult } from "@/debug/runner.ts";
 import type { FeatureCheck } from "@/debug/types.ts";
 import { fetchOwnerPayments } from "@/lib/history.ts";
 import { readTurnLog } from "@/lib/turnLog.ts";
+import { loadAnchorRows } from "@/notch/history/anchorHistory.ts";
+import { loadP2pRows } from "@/notch/history/p2pHistory.ts";
 
 export default {
   id: "history",
@@ -44,11 +46,15 @@ export default {
             "warn",
             `${turns} local turn(s); owner account is not funded on testnet`,
           );
-        case "ok":
+        case "ok": {
+          // The optional lanes are best-effort: `[]` means not configured or
+          // unreadable, which the detail reports as 0 rather than failing.
+          const [p2p, anchor] = await Promise.all([loadP2pRows(), loadAnchorRows()]);
           return makeResult(
             "ok",
-            `${turns} local turn(s), ${payments.payments.length} recent payment(s) from Horizon`,
+            `${turns} turn(s), ${payments.payments.length} payment(s), ${p2p.length} P2P offer(s), ${anchor.length} anchor row(s)`,
           );
+        }
       }
     } catch (error) {
       return makeResult("fail", `history check failed: ${errorDetail(error)}`);

@@ -4,15 +4,17 @@
 > assistant for Stellar (hackathon track: Genesis, 19–20 Sep 2026).
 >
 > This README is refreshed by a dedicated agent at the end of every milestone
-> (see `AGENTS.md` §6). It describes the codebase as of **v0.1.0** on `integration/wallet`:
-> the voice pipeline, chain lane and wallet UI are wired end to end (hotkey → STT → agent →
-> spoken answer; approval → Touch ID → Freighter → submit). Live runs need a human on a Mac.
+> (see `AGENTS.md` §6). It describes the codebase as of **v0.1.0** on
+> `integration/wallet-login`: the notch voice pipeline, the embedded wallet (macOS
+> Keychain, Touch ID, session lock) and the chain lane (guard, SDF anchor, P2P) are
+> wired end to end. Live runs need a human on a Mac.
 
 Polaris is a voice-controlled Stellar assistant: hold a global hotkey, speak, and it
-answers and can act on Stellar — pay, schedule payments, move between TRY and USDC
-through an anchor. Value-moving steps are designed around an explicit owner approval
-gate (Touch ID) and hard on-chain limits. **Testnet only**: no mainnet, no real money,
-no custom anchor; scope and non-goals are defined in `docs/architecture.md` §1.
+answers and can act on Stellar — pay, set spending rules by voice, schedule payments,
+ramp through an anchor or trade P2P. Value-moving steps go through an explicit owner
+gate (Touch ID) and are bounded by hard on-chain limits; the signer is an embedded
+wallet whose seed lives in the macOS Keychain. **Testnet only**: no mainnet, no real
+money; scope and non-goals are in `docs/architecture.md` §1.
 
 | Where things stand | |
 |---|---|
@@ -29,9 +31,9 @@ no custom anchor; scope and non-goals are defined in `docs/architecture.md` §1.
 ```
 interfaces/   @polaris/interfaces — the ONLY typed seam between owners (source-only pkg)
 agent/        @polaris/agent      — agent loop, tool registry, event bus        (Owner A)
-app/          @polaris/app        — Tauri v2 desktop shell: Rust core + React UI (Owner A)
-  src/            React 19 + Vite 8 + Tailwind 4 — notch overlay (A0)
-  src-tauri/      Rust: notch overlay (AppKit), Control+Option hold, mic→WAV, typed event stream
+app/          @polaris/app        — Tauri v2 desktop shell: Rust core + React UI
+  src/            React 19 + Vite 8 + Tailwind 4 — notch overlay and pages
+  src-tauri/      Rust: notch/AppKit, Control+Option hold, mic→WAV, Touch ID, embedded wallet, typed event stream
 stellar/      @polaris/stellar    — anchor client (SEP-1/10/12/38/6) + keeper      (Owner B)
 contracts/    Soroban Cargo workspace: polaris_guard (spending rules + scheduler)  (Owner B)
 scripts/      setup / check / dev / icon generation
@@ -95,6 +97,11 @@ table: `stellar/src/keeper/README.md`.
 
 ### Anchor client — SEP-6 on/off-ramp
 
+The primary scenario is **Stellar's SDF test anchor `testanchor.stellar.org`** (SRT/USD
+quotes, TEST-DATA KYC), verified live in both directions and documented in
+`docs/anchor-sdf-flow.md`; a simulated **demo bank** automates bank → anchor → wallet →
+anchor → bank. The TR mock anchor is secondary (deposit payouts stalled 2026-09-20).
+
 `stellar/src/anchor` implements the programmatic SEPs — SEP-1 discovery, SEP-10 auth,
 SEP-12 KYC, SEP-38 quotes, SEP-6 deposit/withdraw — with preflight and an `explain`
 narration log. The home domain is the only anchor input; no keys are handled (signing is
@@ -123,11 +130,17 @@ npm run anchor:e2e -w @polaris/stellar -- --amount-try 50 --withdraw-usdc 1
 Details, verified live anchor behaviour, safety hardening and the mock-vs-mainnet table:
 `stellar/src/anchor/README.md`.
 
-### App, panels and Debug panel
+### App and Diagnostics
 
-`make setup` installs deps and `.env`; `make dev` runs the shell. There is no Dock icon — the
-menu-bar **tray** opens the panels and the **Debug panel** runs per-feature checks. See
-`docs/ui-panels.md`; the fail-closed signing path is `docs/freighter-bridge.md`.
+The **click-through notch is the only surface**: there is no menu-bar tray, no "⋯" menu and
+no popup windows. Every screen — History, Tasks, Rules, Wallet, Trade, Settings — is a page
+inside the notch, and the approval card renders inline. The Settings page's Diagnostics runs
+per-feature checks (`FeatureChecks`). See `docs/notch-ui.md`; the wallet, session and autonomy
+design is `docs/wallet-track.md`.
+
+**First run:** launch → the Wallet gate opens → **Create** (phrase shown once) or **Import**
+→ **Friendbot** funds the account → add a **contact** (recipient) → hold **Control+Option**
+and speak a payment; approve the card with Touch ID.
 
 ## Setup and checks
 
@@ -135,6 +148,13 @@ Requirements: macOS (Apple silicon), Node >= 22 (keeper requires >= 22.18), Rust
 `cargo-tauri` (`cargo install tauri-cli --version ^2`) or the local `@tauri-apps/cli`, and
 **stellar-cli >= 25.2.0** (`brew install stellar-cli`) for contract builds — soroban-sdk v28
 refuses a plain `cargo build --target wasm32v1-none`.
+
+`make setup` creates `.env` from `.env.example`; fill the keys you need: `OPENCODE_API_KEY`
+(LLM), `GROQ_API_KEY` (STT), `FISH_AUDIO_API_KEY` (TTS), `POLARIS_OWNER_ADDRESS` /
+`POLARIS_ALIASES`, `GUARD_CONTRACT_ID` and `POLARIS_P2P_CONTRACT_ID`. The shell loads the
+repo-root `.env`; a Finder-launched bundle falls back to
+`~/Library/Application Support/Polaris/.env`. `make build` bundles the macOS app and
+`make run` launches it from the repo root.
 
 ```bash
 make setup                                        # npm install + .env from .env.example + icons
@@ -168,25 +188,29 @@ long operations run under `caffeinate -i` per `AGENTS.md` §4. The desktop shell
 ### What is wired today (and what is not)
 
 **Wired**
-- The **typed event stream**: Rust (`app/src-tauri/src/events.rs`) emits `PolarisEvent`s on the
-  `polaris-event` channel; the UI subscribes through `app/src/lib/polaris.ts`. The wire shape
-  (snake_case type tags, camelCase fields) is pinned by Rust unit tests, and the same
-  TypeScript union lives in `interfaces/`.
-- **A0 — push-to-talk + notch overlay**: a transparent, click-through, always-on-top overlay at
-  the physical notch (AppKit geometry), driven by `idle → recording → ready` events. Hold
-  **Control+Option** to record (`control+option+space` also works), release to stop; `cpal` writes a 16-bit PCM WAV and
-  microphone/permission failures surface as the overlay `error` state. Release never sends.
-- The **voice pipeline** (hold-to-talk, STT, agent loop, spoken read-back) and the
-  **approval → signing path** (Touch ID gate, Freighter bridge, `tx_submitted` + explorer link).
-- `app_info`; `polaris_guard` on testnet, the keeper, the SEP-6 anchor client, P2P client and
-  the read-only SPP panel.
+- **Notch voice pipeline**: hold Control+Option → STT → agent loop with short dialogue memory
+  → spoken read-back; the typed `polaris-event` stream (`app/src-tauri/src/events.rs` →
+  `app/src/lib/polaris.ts`) drives the UI (shape pinned by Rust tests and `interfaces/`).
+- **Embedded wallet**: create/import (BIP-39/SEP-5), seed in the macOS Keychain, local signing,
+  Touch ID gate, `none`/`locked`/`unlocked` session with auto-lock, multi-account, Friendbot,
+  contacts, assets/QR/network.
+- **Approval + autonomy**: card built from the decoded XDR + Touch ID; rules by voice and
+  fail-closed auto-pay via the executor key, bounded on-chain by `polaris_guard`.
+- **Chain lane** (`@polaris/stellar`): payments, guard, schedules + keeper, SDF anchor + demo
+  bank, P2P client, read-only SPP.
 
-**Not wired yet:** screen reading (`A4`), the live protocol integration, value-moving SPP; live
-mic/Touch ID/Freighter and the P2P contract need a human/deployment.
+**Open:** value-moving SPP (needs wallet `signAuthEntry`), the Swap/Trade page and protocol
+integration (Soroswap/DeFindex), screen reading (A4), developer mode, MPP, passkey wallet.
+Live mic, Touch ID, real windows and the anchor payout leg need a human.
 
 ## Security & secrets
 
-- Testnet only. No mainnet, no real money.
-- Keys never enter the repository: `.env` is gitignored (`.env.example` is the template),
-  signing keys live in the macOS Keychain / stellar-cli keystore, and no value-moving step
-  is meant to execute without an explicit Touch ID approval once that path is wired (A5).
+- **Testnet only.** No mainnet, no real money.
+- **No secret keys in the app, webview or repo:** `.env` is gitignored (`.env.example` is the
+  template); wallet seeds live in the macOS Keychain and are zeroized in Rust.
+- **Fail-closed approvals:** the default approver is deny-all; `POLARIS_ALLOW_AUTO_APPROVE` is
+  never enabled by the app.
+- **On-chain bounds:** `polaris_guard` limits what an unattended executor key may spend; the
+  SAC allowance is the user's kill switch.
+- **Card from the XDR:** the approval card renders the decoded transaction, and Rust
+  re-verifies the signed envelope before submission.

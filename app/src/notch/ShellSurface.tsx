@@ -31,13 +31,17 @@ import type { NavigationRequest, ShellGeometry } from "@polaris/interfaces";
 import { StageLabel } from "@/components/StageLabel";
 import { notchPageFor } from "@/lib/navigation";
 import { playSfx } from "@/lib/sfx";
+import { didSessionLock, shouldAutoOpenWallet, type WalletSession } from "@/lib/walletSession";
+import { ApprovalOverlay } from "./approval/ApprovalOverlay";
+import { usePendingApproval } from "./approval/usePendingApproval";
 import { BlobatarFace } from "./BlobatarFace";
 import { facePlacementFor, shouldRenderFace } from "./faceState";
-import { MoreMenu } from "./MoreMenu";
+import { listenNotchHover } from "./shellBridge";
 import { NotchPanel } from "./NotchPanel";
 import { PromptPanel } from "./PromptPanel";
 import { inlineVoiceStage } from "./shellState";
 import { useNotchPage } from "./useNotchPage";
+import { useWalletSession } from "./wallet/useWalletSession";
 import { SHELL_MOTION_MS, useShellState, usePrefersReducedMotion, type ShellStateName } from "./useShellState";
 
 export interface ShellSurfaceProps {
@@ -54,9 +58,9 @@ export interface ShellSurfaceProps {
   label: string;
   detail: string;
   /**
-   * A read-only voice navigation request (NAV): `ShellSurface` selects the notch
-   * page and pins the panel for the targets that live in the notch. A new object
-   * identity is what re-triggers an identical request.
+   * A read-only voice navigation request (NAV): `ShellSurface` selects the
+   * matching notch page and holds the panel open on it. A new object identity is
+   * what re-triggers an identical request.
    */
   navigation?: NavigationRequest | null;
 }
@@ -70,18 +74,32 @@ export function ShellSurface({
   detail,
   navigation = null,
 }: ShellSurfaceProps) {
-  // A voice-opened panel is pinned until an explicit dismissal, independent of
-  // the turn session, so the screen survives the turn settling. It rides the
-  // existing `voice` proposal as `panel` with attention forced on.
+  // A voice-opened (or launch) panel is held open independent of the turn
+  // session, so the screen survives the turn settling. It is always closable:
+  // Close and Escape end in `closePanel`, and hover-leave drops the hold below.
   const [panelRequest, setPanelRequest] = useState(false);
+
+  // W13b/W15a: the Wallet page auto-opens once, the first time the webview
+  // learns the session is not unlocked (launch). It is never re-forced — a
+  // dismissal, or a later logout/auto-lock, does not reopen it.
+  const { session } = useWalletSession();
+  // The held-open request is a proposal of its own (not a faked attention
+  // voice): it outranks the ready/error dwell so the chosen screen gets the
+  // full panel, while a genuine attention voice turn still takes the surface
+  // and hands it back.
+  // W15g: a pending approval owns the notch. The overlay below renders the card
+  // and the pin forces the panel open; suppressing voice attention keeps the
+  // payment turn's compact proposal from shrinking the card away.
+  const approval = usePendingApproval();
   const {
     applied,
     onTransitionEnd,
     contentHeight,
     applyContentHeight,
     dismiss,
-  } = useShellState(panelRequest ? "panel" : voiceState, {
-    voiceAttention: panelRequest || voiceAttention,
+  } = useShellState(voiceState, {
+    voiceAttention: voiceAttention && !approval.visible,
+    pin: panelRequest || approval.visible ? "panel" : "collapsed",
   });
 
   // Page routing for the `panel` state. Owned here (not in the panel) so the
@@ -117,9 +135,57 @@ export function ShellSurface({
     }
   }, [applied]);
 
-  // Apply a voice navigation request. Notch targets select their page and pin
-  // the panel; panel-window targets are opened by App's `applyNavigation`, so
-  // the notch simply gives way; `close` dismisses.
+  // The launch trigger: open the Wallet page once, when the session is first
+  // read as not unlocked. The ref makes it fire exactly once, so closing the
+  // panel never re-opens it and a later logout does not either.
+  const autoOpened = useRef(false);
+  useEffect(() => {
+    if (autoOpened.current) return;
+    if (!shouldAutoOpenWallet(session)) return;
+    autoOpened.current = true;
+    setNotchPage("wallet");
+    setPanelRequest(true);
+  }, [session, setNotchPage]);
+
+  // Logout / auto-lock (`unlocked` → `locked`) collapses the panel. `dismiss`
+  // arms the hover latch, so a cursor still over the shell cannot reopen it.
+  const previousSession = useRef<WalletSession | null>(null);
+  useEffect(() => {
+    if (didSessionLock(previousSession.current, session)) {
+      setPanelRequest(false);
+      dismiss();
+    }
+    previousSession.current = session;
+  }, [session, dismiss]);
+
+  // Hover-leave is a dismissal for a *held-open* panel too (the launch wallet
+  // screen or a voice-opened page): the pointer leaving the shell drops the
+  // hold, and the reducer collapses it after its normal leave grace. This is
+  // what makes "Close / Escape / hover-away" all work. `useShellState` owns the
+  // same hover stream for a hover-opened panel; this listener only clears the
+  // hold, so the two cannot fight.
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void listenNotchHover((inside) => {
+      if (!inside) setPanelRequest(false);
+    })
+      .then((fn) => {
+        if (disposed) fn();
+        else unlisten = fn;
+      })
+      .catch((error: unknown) => {
+        console.warn("notch hover unavailable", error);
+      });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
+
+  // Apply a voice navigation request. Every target is a notch page now (the
+  // separate panel windows are gone), so the request selects the page and holds
+  // the panel open; `close` dismisses. There is no window to open.
   useEffect(() => {
     if (!navigation) return;
     if (navigation.target === "close") {
@@ -130,8 +196,6 @@ export function ShellSurface({
     if (page) {
       setNotchPage(page);
       setPanelRequest(true);
-    } else {
-      setPanelRequest(false);
     }
   }, [navigation, closePanel, setNotchPage]);
 
@@ -287,10 +351,9 @@ export function ShellSurface({
           class, so page state survives a close/reopen within the session. */}
       <div className="notch-panel" aria-hidden={applied !== "panel"}>
         <NotchPanel controller={pageController} />
-        {/* RMTRAY: the "⋯" menu replaces the removed menu-bar tray (panels +
-            Quit). Mounted only while the panel is applied so no focusable
-            control hides inside the collapsed, click-through shell. */}
-        {applied === "panel" ? <MoreMenu /> : null}
+        {/* W15g: the approval card renders over the page body; no separate
+            approval window exists. */}
+        <ApprovalOverlay approval={approval} />
       </div>
     </section>
   );

@@ -1,11 +1,11 @@
 /**
- * Pure helpers behind the W4b Debug checks.
+ * Pure helpers behind the Debug checks.
  *
  * `docs/debug-panel.md` keeps helper modules **outside** `checks/` on purpose:
  * the registry globs every `checks/*.ts` as a `FeatureCheck`, and only the pure,
  * Tauri-free logic can be unit-tested under `node:test`. The check files
- * (`checks/network.ts`, `checks/bridge.ts`, `checks/approval.ts`) are thin
- * wrappers that gather live facts and hand them here; the decisions live here.
+ * (`checks/network.ts`, `checks/approval.ts`) are thin wrappers that gather live
+ * facts and hand them here; the decisions live here.
  */
 import { makeResult } from "./runner.ts";
 import type { CheckResult } from "./types.ts";
@@ -47,7 +47,8 @@ const ADDRESS = /^G[A-Z2-7]{55}$/;
 /**
  * Maps gathered network facts to one Debug result. Severity is the worst
  * finding: a missing command or owner is a `warn`; a wrong network, a malformed
- * owner, an unresolvable alias or a missing/unfunded account is a `fail`; a
+ * owner or a missing/unfunded account is a `fail`; saved contacts are optional
+ * (a typed address is payable), so an empty alias book is not a failure; a
  * funded owner on testnet is an `ok` that shows the balance.
  */
 export function summarizeNetwork(facts: NetworkFacts): CheckResult {
@@ -65,15 +66,6 @@ export function summarizeNetwork(facts: NetworkFacts): CheckResult {
   if (!ADDRESS.test(owner)) {
     return makeResult("fail", `owner address is not a valid G… key: ${owner}`);
   }
-  if (!facts.aliasBookResolved) {
-    return makeResult("fail", "the alias book is not configured");
-  }
-  if (!facts.recipientResolved) {
-    return makeResult(
-      "fail",
-      `alias "${facts.recipientAlias}" does not resolve; add it to POLARIS_ALIASES`,
-    );
-  }
   if (facts.horizon === null) {
     return makeResult("fail", `Horizon is unreachable at ${config.horizonUrl ?? "the default URL"}`);
   }
@@ -89,7 +81,7 @@ export function summarizeNetwork(facts: NetworkFacts): CheckResult {
   }
   return makeResult(
     "ok",
-    `testnet · owner ${owner} · alias ${facts.recipientAlias} · ${balance} XLM`,
+    `testnet · owner ${owner} · ${balance} XLM`,
   );
 }
 
@@ -140,63 +132,4 @@ export function approvalSelftestResult(health: DebugFeatureHealth): CheckResult 
     default:
       return makeResult("fail", health.detail);
   }
-}
-
-/* ------------------------------------------------------------------ *
- * Freighter bridge
- * ------------------------------------------------------------------ */
-
-/** The human label for each `BridgeOutcome` failure code. */
-export const BRIDGE_CODE_LABELS: Record<string, string> = {
-  rejected: "the wallet declined to sign",
-  address_mismatch: "the wallet's account is not the configured owner",
-  network_mismatch: "the wallet is not on Testnet",
-  wallet_unavailable: "Freighter was not reachable",
-  not_authorized: "the signing gate was not authorized",
-  integrity: "the returned signature did not verify",
-  timeout: "no signature arrived before the timeout",
-  error: "the bridge reported an error",
-};
-
-/** The self-test action's outcome, as one actionable line. */
-export function bridgeSelftestResult(outcome: {
-  ok: boolean;
-  txHash?: string;
-  code?: string;
-  message?: string;
-}): CheckResult {
-  if (outcome.ok) {
-    return makeResult(
-      "ok",
-      `Freighter signed the throwaway transaction (hash ${outcome.txHash ?? "?"}); nothing was submitted`,
-    );
-  }
-  const label = BRIDGE_CODE_LABELS[outcome.code ?? "error"] ?? "the bridge reported an error";
-  const detail = outcome.message ? `${label}: ${outcome.message}` : label;
-  return makeResult("fail", detail);
-}
-
-/**
- * Builds the throwaway self-test XDR: a 1 XLM native payment from the owner to
- * itself, sequence number `0`. Sequence 0 makes the envelope unapplyable, so the
- * test is safe by construction. Requires a well-formed `G...` owner.
- */
-export async function buildSelfTestXdr(owner: string): Promise<string> {
-  const { Account, Asset, Operation, TimeoutInfinite, TransactionBuilder } = await import(
-    "@stellar/stellar-sdk"
-  );
-  const { TESTNET } = await import("@polaris/stellar");
-  // `TransactionBuilder.build()` emits `sequenceNumber + 1`, so a synthetic
-  // account at -1 yields the sequence-0 envelope the Rust self-test requires.
-  // Sequence 0 makes the transaction unapplyable on-chain; it is never loaded
-  // from the network and never submitted.
-  const account = new Account(owner, "-1");
-  return new TransactionBuilder(account, {
-    fee: "100",
-    networkPassphrase: TESTNET.networkPassphrase,
-  })
-    .addOperation(Operation.payment({ destination: owner, asset: Asset.native(), amount: "1" }))
-    .setTimeout(TimeoutInfinite)
-    .build()
-    .toXDR();
 }

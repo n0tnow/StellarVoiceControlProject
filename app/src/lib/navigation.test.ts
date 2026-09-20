@@ -1,29 +1,27 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { notchPageFor, panelFor } from "./navigation.ts";
+import { applyNavigation, notchPageFor } from "./navigation.ts";
 
-test("notch targets map to their notch page", () => {
+test("every navigation target maps to the notch page that owns its subject", () => {
   assert.equal(notchPageFor("wallet"), "wallet");
-  assert.equal(notchPageFor("rules"), "rules");
-  assert.equal(notchPageFor("tasks"), "tasks");
   assert.equal(notchPageFor("history"), "history");
+  assert.equal(notchPageFor("tasks"), "tasks");
+  assert.equal(notchPageFor("schedules"), "tasks");
+  assert.equal(notchPageFor("suggestions"), "tasks");
+  assert.equal(notchPageFor("rules"), "rules");
+  assert.equal(notchPageFor("security"), "rules");
+  assert.equal(notchPageFor("anchor"), "trade");
+  assert.equal(notchPageFor("p2p"), "trade");
+  assert.equal(notchPageFor("settings"), "settings");
+  assert.equal(notchPageFor("privacy"), "settings");
+  assert.equal(notchPageFor("debug"), "settings");
 });
 
-test("panel targets map to their panel window", () => {
-  assert.equal(panelFor("security"), "security");
-  assert.equal(panelFor("schedules"), "schedules");
-  assert.equal(panelFor("suggestions"), "suggestions");
-  assert.equal(panelFor("anchor"), "anchor");
-  assert.equal(panelFor("p2p"), "p2p");
-  assert.equal(panelFor("privacy"), "privacy");
-  assert.equal(panelFor("settings"), "settings");
-  assert.equal(panelFor("debug"), "debug");
-});
-
-test("the two surfaces do not overlap", () => {
-  assert.equal(notchPageFor("settings"), null);
-  assert.equal(panelFor("wallet"), null);
+test("close has no page: it collapses the panel instead", () => {
   assert.equal(notchPageFor("close"), null);
-  assert.equal(panelFor("close"), null);
+});
+
+test("applyNavigation opens no window and resolves", async () => {
+  await applyNavigation({ target: "settings", spoken: "Opening settings" });
 });

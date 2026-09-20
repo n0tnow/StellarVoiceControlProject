@@ -112,6 +112,44 @@ describe("SEP-10 challenge validation", () => {
     long.sign(SERVER);
     expect(() => validate(long.toXDR(), { now })).toThrow(/unreasonably long/);
   });
+
+  // Regression for the live failure: both anchors issue `minTime = now + 1` with a
+  // 900 s `maxTime`, so the old `maxTime - now` check saw 901 s and tripped an exact
+  // 900 s bound. The declared window (`maxTime - minTime`) is what must be bounded.
+  function challengeWithBounds(minTime: number, maxTime: number): string {
+    const account = new Account(SERVER.publicKey(), "-1"); // -> sequence 0
+    const tx = new TransactionBuilder(account, { fee: "100", networkPassphrase: TESTNET_PASSPHRASE, timebounds: { minTime, maxTime } })
+      .addOperation(Operation.manageData({ name: `${HOME} auth`, value: Buffer.alloc(48, 1).toString("base64"), source: CLIENT.publicKey() }))
+      .addOperation(Operation.manageData({ name: "web_auth_domain", value: HOME, source: SERVER.publicKey() }))
+      .build();
+    tx.sign(SERVER);
+    return tx.toXDR();
+  }
+
+  it("accepts the real anchor shape: minTime = now + 1, 900 s maxTime", () => {
+    const now = new Date();
+    const nowSec = Math.floor(now.getTime() / 1000);
+    expect(() => validate(challengeWithBounds(nowSec + 1, nowSec + 901), { now })).not.toThrow();
+  });
+
+  it("accepts an unset minTime when the remaining window is short", () => {
+    const now = new Date();
+    const nowSec = Math.floor(now.getTime() / 1000);
+    expect(() => validate(challengeWithBounds(0, nowSec + 300), { now })).not.toThrow();
+  });
+
+  it("refuses an unbounded maxTime = 0 (infinite validity)", () => {
+    const now = new Date();
+    const nowSec = Math.floor(now.getTime() / 1000);
+    expect(() => validate(challengeWithBounds(nowSec - 10, 0), { now })).toThrow(ChallengeError);
+  });
+
+  it("refuses a declared window one second over the maximum", () => {
+    const now = new Date();
+    const nowSec = Math.floor(now.getTime() / 1000);
+    const over = challengeWithBounds(nowSec, nowSec + MAX_CHALLENGE_WINDOW_SECONDS + 1);
+    expect(() => validate(over, { now })).toThrow(/unreasonably long/);
+  });
 });
 
 describe("SEP-10 authenticate()", () => {

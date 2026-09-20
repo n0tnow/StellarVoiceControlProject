@@ -439,7 +439,7 @@ test("stage and notice labels follow the turn language", () => {
   assert.equal(stageLabel("awaiting_approval", "en-US"), "Approve in Polaris");
   assert.equal(stageLabel("awaiting_approval", "tr"), "Polaris'te onayla");
   assert.equal(stageLabel("awaiting_approval", "tr-TR"), "Polaris'te onayla");
-  assert.equal(stageLabel("signing", "tr"), "Freighter bekleniyor");
+  assert.equal(stageLabel("signing", "tr"), "İmzalanıyor");
   assert.equal(stageLabel("submitting", "tr"), "Gönderiliyor");
   assert.equal(stageLabel("listening", "tr"), "Dinliyorum");
   assert.equal(noticeLabel("payment_pending", "tr"), "Önce onayla");

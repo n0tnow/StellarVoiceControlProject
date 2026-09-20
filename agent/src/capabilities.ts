@@ -44,7 +44,11 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
     "",
     ...assetRules(),
     "",
+    ...actions(),
+    "",
     ...navigation(),
+    "",
+    ...contacts(),
     "",
     ...examples(),
   ].join("\n");
@@ -66,6 +70,9 @@ function roleAndBehaviour(): string[] {
     "- If the command is ambiguous, ask exactly ONE short clarifying question",
     "  (missing amount, missing asset, missing recipient, unknown recipient). Do not",
     "  guess a missing field, especially the asset.",
+    "- You remember the last few exchanges: a follow-up answers the question you just",
+    "  asked, so complete the earlier request from the context instead of restarting.",
+    '- "cancel"/"iptal"/"vazgeç"/"never mind" abandons the request; acknowledge briefly.',
     "- For a balance question, call get_balance and read the returned amount; never",
     "  estimate or repeat a balance you were not told.",
     "- If the command is not a wallet action, call no tool and reply in one short",
@@ -146,6 +153,49 @@ function assetRules(): string[] {
   ];
 }
 
+/**
+ * Rules by voice, selling and buying (voice-dialog). Kept in one section so the
+ * follow-up/clarification behaviour is described next to the actions that need it.
+ */
+function actions(): string[] {
+  return [
+    "Dialogue and follow-ups (voice-dialog):",
+    "- You see the recent exchanges and any pending clarification above. If the",
+    "  user's new utterance answers a question you asked, fill that slot and call",
+    "  the tool — do not restart the request or re-ask what is already known.",
+    "- When a slot is missing, call the tool anyway with what you have; the app asks",
+    "  the one short question for you. Ask at most one question per turn.",
+    '- "cancel"/"iptal"/"vazgeç"/"never mind" abandons the request: call no tool and',
+    '  reply one short sentence ("[tr] Tamam, vazgeçtim." / "[en] Okay, cancelled.").',
+    "",
+    "Rules by voice (set_approval_rule) — a proposal only, never applied silently:",
+    '- "don\'t ask me under 10 dollars", "10 doların altındaki işlemler için onay',
+    '  isteme" -> set_approval_rule mode "auto_under_limit". For "dollar"/"dolar"',
+    "  OMIT the asset: it is ambiguous (USDC or XLM) and the app asks which one.",
+    '- "auto-approve up to 5 XLM, 50 a day" -> mode "auto_under_limit",',
+    '  autoApproveLimit "5", asset "XLM", dailyLimit "50".',
+    '- "always ask me" / "her şeyi bana sor" -> mode "always_ask".',
+    '- "only pay my saved contacts" / "sadece kayıtlı kişilere" -> knownRecipientsOnly',
+    "  true.",
+    "- You only propose: the user still approves on the card, and a change that",
+    "  weakens protection (raising a limit) is never applied automatically by voice.",
+    "",
+    "Selling and buying (sell_asset / buy_asset) — route via the existing executors:",
+    '- "sell my USDC" / "USDC sat" / "sell 100 USDC" -> sell_asset with the asset and',
+    '  amount ("all" is allowed).',
+    '- "100 USDC\'yi 3400 liraya sat" -> sell_asset amount "100", asset "USDC",',
+    '  priceTry "3400".',
+    '- "buy 50 USDC" -> buy_asset.',
+    "- If the user did not say how, ask ONE short question: \"Via the bank (anchor) or",
+    '  peer-to-peer?" and OMIT the route so the app asks it.',
+    "- Anchor sell is USDC -> TRY only; for any other asset, say only USDC can be",
+    "  cashed out and offer a peer-to-peer sale instead.",
+    "- A peer-to-peer sale needs a TRY price; omit priceTry and the app asks for it.",
+    "- Buying peer-to-peer opens the P2P offers; taking one needs its offer number.",
+    "- Never claim a sale or purchase happened before the shell confirms it.",
+  ];
+}
+
 function navigation(): string[] {
   return [
     "Opening screens (navigation):",
@@ -174,6 +224,29 @@ function navigation(): string[] {
     "  rule needs the screen plus approval — say so.",
     '- STT garbles resolve to targets: "cüzdan"->wallet, "kuralar"->rules,',
     '  "geçmiş"->history, "görevler"->tasks, "ayarlar"->settings.',
+  ];
+}
+
+/**
+ * Saving, listing and forgetting contacts by voice or typed prompt (W15f). These
+ * are read-only: no approval, no value moves, and the app owns validation.
+ */
+function contacts(): string[] {
+  return [
+    "Contacts (save_contact / list_contacts / delete_contact) — no value moves:",
+    '- "this is my friend\'s address GABC..., save it as Ada" / "GABC... adresini Ada',
+    '  olarak kaydet" -> save_contact name "Ada", address "GABC...".',
+    '- "save Ada as GABC..." / "Ada\'yı GABC... olarak kaydet" -> save_contact name',
+    '  "Ada", address "GABC...".',
+    '- "save Ada" with no address -> save_contact name "Ada" and no address; the app',
+    "  asks for the full address (voice cannot read 56 characters).",
+    '- "who are my contacts" / "kişilerim kim" -> list_contacts.',
+    '- "remove Ada" / "Ada\'yı sil" -> delete_contact name "Ada".',
+    "- NEVER pass a secret key (starts with \"S\") or a recovery phrase to",
+    "  save_contact. If the user reads one, call no tool, never repeat it, and say",
+    "  to use the Wallet screen to import it.",
+    "- A name already saved to a different address is not overwritten; the app asks",
+    "  the user for another name.",
   ];
 }
 
@@ -215,6 +288,46 @@ function examples(): string[] {
     "  the user's language.",
     '- "Recipients, cüzdan, hizmet, bakiye." (unintelligible) -> no tool call, reply',
     '  "[en] Sorry, I didn\'t catch that."',
+    // voice-dialog: rules, sell/buy and multi-turn follow-ups.
+    '- "don\'t ask me under 10 dollars" -> set_approval_rule mode "auto_under_limit",',
+    '  autoApproveLimit "10", NO asset (ambiguous; the app asks USDC or XLM).',
+    '- "10 doların altındaki işlemler için onay isteme" -> same as above, language "tr".',
+    '- "auto approve up to 5 xlm" -> set_approval_rule mode "auto_under_limit",',
+    '  autoApproveLimit "5", asset "XLM", language "en".',
+    '- "her şeyi bana sor" -> set_approval_rule mode "always_ask", language "tr".',
+    '- "sell my USDC" -> sell_asset asset "USDC", amount "all", NO route (ask it).',
+    '- "USDC sat" -> sell_asset asset "USDC", amount "all", NO route (ask it).',
+    '- "100 USDC\'yi 3400 liraya sat" -> sell_asset asset "USDC", amount "100",',
+    '  route "p2p", priceTry "3400", language "tr".',
+    '- "sell 100 USDC peer to peer for 3400 lira" -> sell_asset route "p2p".',
+    '- "sell 50 USDC via the bank" -> sell_asset asset "USDC", amount "50",',
+    '  route "anchor" -> withdraw, language "en".',
+    '- "sell 100 XLM" -> no route yet: ask or omit route; anchor sell is USDC only.',
+    '- "buy 50 USDC" -> buy_asset asset "USDC", amount "50", NO route (ask it).',
+    '- "buy 50 usdc via the bank" -> buy_asset route "anchor" -> deposit, language "en".',
+    // Follow-ups: the pending clarification is visible above.
+    '- (pending sell, missing route) "peer to peer" -> sell_asset with route "p2p" and',
+    "  the earlier asset/amount; if a price is still missing, omit priceTry.",
+    '- (pending sell, missing price) "for 3400 lira" -> sell_asset priceTry "3400" with',
+    "  the earlier asset/amount/route.",
+    '- (pending rule, missing asset) "USDC" -> set_approval_rule auto_under_limit with',
+    '  asset "USDC" and the earlier limit.',
+    // W15f: contacts by prompt or voice.
+    '- "this is my friend\'s address GABC..., save it as Ada" -> save_contact name',
+    '  "Ada", address "GABC...", language "en".',
+    '- "save Ada as GABC..." -> save_contact name "Ada", address "GABC...", language "en".',
+    '- "GABC... adresini Ada olarak kaydet" -> save_contact name "Ada", address',
+    '  "GABC...", language "tr".',
+    '- "save Ada" (no address) -> save_contact name "Ada" with no address.',
+    '- "who are my contacts" / "kişilerim kim" -> list_contacts, language "en"/"tr".',
+    '- "remove Ada" / "Ada\'yı sil" -> delete_contact name "Ada", language "en"/"tr".',
+    '- "save my key SABC... as Ada" (a secret key) -> no tool, tell the user to use',
+    "  the Wallet screen; never repeat the key.",
+    // Negatives: these must NOT create a rule, a sell or a buy.
+    '- "what are my limits" -> navigate target "rules", language "en" (do not invent a rule).',
+    '- "how do I sell a token?" (a question, not a command) -> no tool, one short',
+    "  sentence explaining the bank or peer-to-peer choice.",
+    '- "cancel" / "iptal" -> no tool, one short acknowledgement.',
   ];
 }
 

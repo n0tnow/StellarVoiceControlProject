@@ -9,6 +9,17 @@
  * `send_payment` produces a validated `Intent`; nothing here touches a chain.
  */
 export { createEventBus, PolarisEventBus, type PolarisEventHandler } from "./events.ts";
+export {
+  clarificationSentence,
+  DialogMemory,
+  DIALOG_TTL_MS,
+  isCancelUtterance,
+  MAX_EXCHANGES,
+  type ClarificationQuestion,
+  type DialogExchange,
+  type PendingClarification,
+  type PendingClarificationDraft,
+} from "./dialog.ts";
 export { AgentError, isAgentError, toAgentError, type AgentErrorKind } from "./errors.ts";
 export {
   createAutoApprovalPlaceholder,
@@ -178,3 +189,37 @@ export {
   type P2pOfferIdInput,
   type P2pOfferInput,
 } from "./tools/p2p.ts";
+export {
+  normalizeRuleMode,
+  parseSetApprovalRule,
+  setApprovalRuleTool,
+  type SetApprovalRuleInput,
+} from "./tools/rule.ts";
+export {
+  containsSecretKey,
+  deleteContactTool,
+  isStellarAddressShape,
+  listContactsTool,
+  looksLikeRecoveryPhrase,
+  normalizeContactName,
+  saveContactTool,
+  type Contact,
+  type ContactStore,
+  type DeleteContactInput,
+  type DeleteContactOutput,
+  type ListContactsInput,
+  type ListContactsOutput,
+  type RemoveContactResult,
+  type SaveContactInput,
+  type SaveContactOutput,
+  type SaveContactResult,
+} from "./tools/contact.ts";
+export {
+  buyAssetTool,
+  normalizeRoute,
+  parseBuyAsset,
+  parseSellAsset,
+  sellAssetTool,
+  type BuyAssetInput,
+  type SellAssetInput,
+} from "./tools/sell.ts";

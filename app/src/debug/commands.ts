@@ -27,7 +27,7 @@ export interface StellarConfig {
   aliases?: Record<string, string>;
 }
 
-/** The Rust `FeatureHealth` shape, shared by `biometric_health`/`bridge_health`. */
+/** The Rust `FeatureHealth` shape, shared by `biometric_health`/`wallet_health`. */
 export interface DebugFeatureHealth {
   id: string;
   title: string;
@@ -36,23 +36,6 @@ export interface DebugFeatureHealth {
   detail: string;
   checkedAt: number;
 }
-
-/** The Rust `BridgeOutcome` union (serde camelCase). */
-export type DebugBridgeOutcome =
-  | { ok: true; signedXdr: string; signerAddress: string; txHash: string }
-  | {
-      ok: false;
-      code:
-        | "rejected"
-        | "address_mismatch"
-        | "network_mismatch"
-        | "wallet_unavailable"
-        | "not_authorized"
-        | "integrity"
-        | "timeout"
-        | "error";
-      message: string;
-    };
 
 /** Non-secret voice-pipeline config facts. */
 export async function getVoiceHealth(): Promise<VoiceHealth> {
@@ -90,20 +73,4 @@ export async function getBiometricHealthIfAvailable(): Promise<DebugFeatureHealt
  */
 export async function biometricSelftest(): Promise<DebugFeatureHealth> {
   return invoke<DebugFeatureHealth>("biometric_selftest");
-}
-
-/**
- * Bridge readiness (`bridge_health`): can a loopback listener bind, are the
- * bridge assets servable, is the owner configured, which browser is used.
- */
-export async function getBridgeHealth(): Promise<DebugFeatureHealth> {
-  return invoke<DebugFeatureHealth>("bridge_health");
-}
-
-/**
- * Freighter signing self-test (`bridge_selftest`). It opens the user's browser
- * and never submits; only call it from an explicit action button.
- */
-export async function bridgeSelftest(xdr: string): Promise<DebugBridgeOutcome> {
-  return invoke<DebugBridgeOutcome>("bridge_selftest", { xdr });
 }

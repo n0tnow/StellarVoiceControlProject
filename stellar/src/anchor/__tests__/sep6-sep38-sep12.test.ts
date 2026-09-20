@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { TESTNET_PASSPHRASE } from "../config.ts";
 import { ExplainLog } from "../explain.ts";
 import { AnchorHttpError } from "../http.ts";
-import { ensureCustomer, KycRequiredError } from "../sep12.ts";
+import { ensureCustomer, ensureTransactionCustomer, KycRequiredError } from "../sep12.ts";
 import { getPrice, QuoteError } from "../sep38.ts";
 import {
   anchorOwnedLink,
@@ -95,6 +95,66 @@ describe("SEP-12 customer", () => {
     expect(err).toBeInstanceOf(KycRequiredError);
     expect((err as KycRequiredError).missingFields).toEqual(["id_number"]);
   });
+
+  it("auto-fills ONLY the requested fields it was given (SDF demo KYC)", async () => {
+    let accepted = false;
+    const { fetch, calls } = fakeFetch({
+      [`GET ${HOME}/sep12/customer`]: () =>
+        accepted
+          ? { id: "c", status: "ACCEPTED" }
+          : { status: "NEEDS_INFO", fields: { first_name: { optional: false }, last_name: { optional: false }, email_address: { optional: false }, nickname: { optional: true } } },
+      [`PUT ${HOME}/sep12/customer`]: (_u: URL, init: RequestInit) => {
+        // The optional `nickname` is never sent, and only the demo values are.
+        expect(JSON.parse(String(init.body))).toEqual({ account: TOKEN.account, first_name: "Demo", last_name: "User", email_address: "demo@polaris.invalid" });
+        accepted = true;
+        return new Response(JSON.stringify({ id: "c" }), { status: 202 });
+      },
+    });
+    const info = await ensureCustomer(makeCtx(fetch), TOML, TOKEN, { first_name: "Demo", last_name: "User", email_address: "demo@polaris.invalid" });
+    expect(info.status).toBe("ACCEPTED");
+    expect(calls.map((c) => c.method)).toEqual(["GET", "PUT", "GET"]);
+  });
+
+  it("submits per-transaction KYC with transaction_id and resumes (SDF test anchor)", async () => {
+    let accepted = false;
+    const { fetch, calls } = fakeFetch({
+      [`GET ${HOME}/sep12/customer`]: () =>
+        accepted ? { status: "ACCEPTED" } : { status: "NEEDS_INFO", fields: { address: { optional: false }, id_number: { optional: false }, nickname: { optional: true } } },
+      [`PUT ${HOME}/sep12/customer`]: (_u: URL, init: RequestInit) => {
+        expect(JSON.parse(String(init.body))).toEqual({ account: TOKEN.account, transaction_id: "tx1", address: "1 Test Street", id_number: "TEST-0000001" });
+        accepted = true;
+        return new Response(JSON.stringify({ id: "c" }), { status: 202 });
+      },
+    });
+    const ctx = makeCtx(fetch);
+    const info = await ensureTransactionCustomer(ctx, TOML, TOKEN, "tx1", { address: "1 Test Street", id_number: "TEST-0000001" });
+    expect(info.status).toBe("ACCEPTED");
+    expect(calls.map((c) => c.method)).toEqual(["GET", "PUT", "GET"]);
+    expect(calls[0]!.url).toContain("transaction_id=tx1");
+    expect(ctx.explain.all()[0]?.step).toBe("sep12.transaction");
+  });
+
+  it("stops per-transaction KYC when a requested field is not supplied", async () => {
+    const { fetch, calls } = fakeFetch({
+      [`GET ${HOME}/sep12/customer`]: { status: "NEEDS_INFO", fields: { id_number: { optional: false }, tax_id: { optional: false } } },
+      [`PUT ${HOME}/sep12/customer`]: { id: "x" },
+    });
+    const err = await ensureTransactionCustomer(makeCtx(fetch), TOML, TOKEN, "tx1", { id_number: "TEST-0000001" }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(KycRequiredError);
+    expect((err as KycRequiredError).missingFields).toEqual(["tax_id"]);
+    expect(calls.some((c) => c.method === "PUT")).toBe(false);
+  });
+
+  it("refuses when a requested field has no supplied value (never invents the rest)", async () => {
+    const { fetch, calls } = fakeFetch({
+      [`GET ${HOME}/sep12/customer`]: { status: "NEEDS_INFO", fields: { first_name: { optional: false }, id_number: { optional: false } } },
+      [`PUT ${HOME}/sep12/customer`]: { id: "x" },
+    });
+    const err = await ensureCustomer(makeCtx(fetch), TOML, TOKEN, { first_name: "Demo" }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(KycRequiredError);
+    expect((err as KycRequiredError).missingFields).toEqual(["id_number"]);
+    expect(calls.some((c) => c.method === "PUT")).toBe(false);
+  });
 });
 
 describe("SEP-6 deposit / withdraw requests", () => {
@@ -157,6 +217,13 @@ describe("SEP-6 deposit / withdraw requests", () => {
     expect(ctx.explain.all()[0]?.what).toContain("with id memo 523107803354");
   });
 
+  it("tolerates a deferred payout account (the anchor returns only {id} at first)", async () => {
+    const { fetch } = fakeFetch({ [`GET ${HOME}/sep6/withdraw`]: { id: "sep_w2" } });
+    const w = await startWithdraw(makeCtx(fetch), TOML, TOKEN, { assetCode: "USDC", account: CLIENT.publicKey(), amount: "1" });
+    expect(w.id).toBe("sep_w2");
+    expect(w.accountId).toBeUndefined();
+  });
+
   it("builds the withdrawal payment with the anchor's memo type (id) and asset", () => {
     const xdr = buildWithdrawPayment({
       sourceAccount: CLIENT.publicKey(),
@@ -199,7 +266,7 @@ describe("SEP-6 status classification and narration", () => {
     expect(classifyStatus("pending_trust")).toBe("needs_trustline");
     expect(classifyStatus("pending_user")).toBe("needs_user");
     expect(classifyStatus("pending_user_transfer_start")).toBe("waiting_user_transfer");
-    for (const s of ["pending_anchor", "pending_stellar", "pending_external", "pending_user_transfer_complete", "something_new"]) expect(classifyStatus(s)).toBe("in_progress");
+    for (const s of ["pending_anchor", "pending_stellar", "pending_external", "pending_user_transfer_complete", "incomplete", "something_new"]) expect(classifyStatus(s)).toBe("in_progress");
   });
 
   it("explains pending_trust as the missing-trustline gotcha (anchor text never enters the narration)", () => {
@@ -289,6 +356,24 @@ describe("SEP-6 polling state machine", () => {
     expect(repaired).toBe(1); // not once per poll
     expect(r.outcome).toBe("completed");
     expect(r.history).toEqual(["pending_trust", "completed"]);
+  });
+
+  it("runs the per-transaction KYC handler once, then resumes polling to completed", async () => {
+    const statuses = ["pending_customer_info_update", "pending_anchor", "completed"];
+    let i = 0;
+    const { fetch } = fakeFetch({
+      [`GET ${HOME}/sep6/transaction`]: () => ({ transaction: { id: "t1", kind: "deposit", status: statuses[Math.min(i++, statuses.length - 1)] } }),
+    });
+    let handled = 0;
+    const r = await pollTransaction(makeCtx(fetch), TOML, TOKEN, "t1", {
+      intervalMs: 10,
+      onCustomerInfoRequired: async () => {
+        handled++;
+      },
+    });
+    expect(handled).toBe(1);
+    expect(r.outcome).toBe("completed");
+    expect(r.history).toEqual(["pending_customer_info_update", "pending_anchor", "completed"]);
   });
 
   it("stops on pending_user (anchor needs input from us)", async () => {

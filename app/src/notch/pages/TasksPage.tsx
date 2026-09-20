@@ -1,19 +1,24 @@
 /**
- * Tasks page — the owner's on-chain scheduled payments.
+ * Tasks page — the owner's on-chain scheduled payments, inside the notch.
  *
- * Rows come from [`useTasksData`] (real `listUpcoming` when a wallet is
- * configured, an explicit demo fallback otherwise). Cancel is the only
- * value-moving action: it runs through the shared `txPipeline` (approval card →
- * Touch ID → Freighter → submit) and the page shows its progress and outcome.
- * Creating a schedule stays a voice action, so the empty state points at the
- * spoken example instead of offering a form.
+ * Rows come from real `listUpcoming` data (a labelled demo only in the browser
+ * preview). Cancel runs through the shared `txPipeline` (approval card → Touch
+ * ID → signing → submit); "New schedule" reveals the small To / Amount / Every /
+ * First run form, which creates through the same pipeline. The empty state is a
+ * single line and locked/loading/error states stay inline.
  */
 import { useState } from "react";
-import { CalendarClock, LoaderCircle, RefreshCw, Trash2 } from "lucide-react";
+import { CalendarClock, LoaderCircle, Plus, RefreshCw, Trash2 } from "lucide-react";
 
 import { useTasksData, type TaskRow } from "@/notch/data/useTasksData";
+import { ExplorerLink } from "@/notch/ExplorerLink";
+import { NewScheduleForm } from "@/notch/tasks/NewScheduleForm";
+import type { SimpleSchedule } from "@/notch/tasks/newSchedule";
 
-/** "5 XLM → acc2", or just the recipient label in demo mode. */
+import { LoginGate } from "../wallet/LoginGate";
+import { useWalletLocked } from "../wallet/useWalletSession";
+
+/** "5 XLM → ada", or just the recipient when the source has no amount. */
 function rowTitle(row: TaskRow): string {
   return row.amountLabel ? `${row.amountLabel} → ${row.recipient}` : row.recipient;
 }
@@ -25,14 +30,17 @@ function rowMeta(row: TaskRow): string {
   return [row.recurrence, runs, row.statusLabel].filter(Boolean).join(" · ");
 }
 
-interface TaskRowItemProps {
+function TaskRowItem({
+  row,
+  busy,
+  disabled,
+  onCancel,
+}: {
   row: TaskRow;
   busy: boolean;
   disabled: boolean;
   onCancel: (row: TaskRow) => void;
-}
-
-function TaskRowItem({ row, busy, disabled, onCancel }: TaskRowItemProps) {
+}) {
   return (
     <li className="task-row">
       <span className="task-main">
@@ -42,8 +50,7 @@ function TaskRowItem({ row, busy, disabled, onCancel }: TaskRowItemProps) {
           {rowMeta(row)}
         </span>
         <span className="task-schedule">
-          <span className="selectable">{row.nextRunLocal}</span> local ·{" "}
-          <span className="selectable">{row.nextRunUtc}</span> UTC
+          Next <span className="selectable">{row.nextRunLocal}</span>
         </span>
       </span>
       {row.scheduleId !== null ? (
@@ -67,7 +74,15 @@ function TaskRowItem({ row, busy, disabled, onCancel }: TaskRowItemProps) {
 }
 
 export function TasksPage() {
-  const { rows, loading, error, demo, keeper, refresh, cancel, actionError, tx } = useTasksData();
+  const locked = useWalletLocked();
+  if (locked) return <LoginGate />;
+  return <TasksBody />;
+}
+
+function TasksBody() {
+  const { rows, loading, error, demo, timeZone, refresh, cancel, create, actionError, tx } =
+    useTasksData();
+  const [showNew, setShowNew] = useState(false);
   const [busyId, setBusyId] = useState<number | null>(null);
   const running = tx.state === "running";
   const last = tx.outcomes[tx.outcomes.length - 1];
@@ -79,19 +94,20 @@ export function TasksPage() {
     setBusyId(null);
   };
 
+  const onCreate = (schedule: SimpleSchedule): void => {
+    setShowNew(false);
+    void create(schedule.form);
+  };
+
   return (
     <div className="page-stack">
+      <p className="rule-name">Upcoming payments</p>
+
       {demo ? (
-        <p className="task-schedule">Demo data — no owner wallet is configured in this build.</p>
+        <p className="rule-condition">Demo data — open the desktop app for live schedules.</p>
       ) : null}
 
-      {keeper.needed ? (
-        <p className="task-schedule">
-          Keeper needed: <code className="selectable">{keeper.command}</code>
-        </p>
-      ) : null}
-
-      {error ? (
+      {error !== null ? (
         <p className="task-schedule">
           {error}{" "}
           <button type="button" className="page-icon-button" aria-label="Retry" onClick={refresh}>
@@ -102,20 +118,30 @@ export function TasksPage() {
 
       {running && tx.progress ? (
         <p className="task-schedule">
+          <LoaderCircle className="page-status is-pending" aria-hidden="true" />
           {tx.progress.label} — {tx.progress.phase}…
         </p>
-      ) : actionError ? (
+      ) : actionError !== null ? (
         <p className="task-schedule">{actionError}</p>
       ) : last && last.status === "submitted" ? (
-        <p className="task-schedule">Cancelled — the list was refreshed.</p>
+        <p className="task-schedule">
+          Done — the list was refreshed. <ExplorerLink target={last.txHash} kind="tx" />
+        </p>
       ) : null}
+
+      {demo ? null : showNew ? (
+        <NewScheduleForm disabled={running} timeZone={timeZone} onCreate={onCreate} />
+      ) : (
+        <button type="button" className="rule-add" disabled={running} onClick={() => setShowNew(true)}>
+          <Plus aria-hidden="true" />
+          New schedule
+        </button>
+      )}
 
       {loading ? (
         <p className="task-schedule">Loading upcoming payments…</p>
-      ) : error ? null : rows.length === 0 ? (
-        <p className="task-schedule">
-          No scheduled payments yet. Try saying: “her cuma 10:00’da acc2’ye 5 XLM gönder”.
-        </p>
+      ) : error !== null ? null : rows.length === 0 ? (
+        <p className="task-schedule">No scheduled payments yet.</p>
       ) : (
         <ul className="page-list task-list">
           {rows.map((row) => (

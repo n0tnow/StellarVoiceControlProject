@@ -8,20 +8,22 @@
 
 mod agent;
 mod approval;
+mod bank;
 mod biometric;
 mod bridge;
 mod capture;
 mod commands;
+mod contacts;
 mod ctrl_tap;
 mod env;
 mod events;
+mod external;
 mod gesture;
 mod health;
 mod hotkey;
 mod hotkey_flags;
 mod notch;
 mod onboarding;
-mod panels;
 mod stellar_config;
 mod stt;
 mod timing;
@@ -29,6 +31,7 @@ mod tts;
 mod tx_events;
 mod types;
 mod voice_health;
+mod wallet;
 mod weblog;
 
 use tauri::{AppHandle, Manager};
@@ -36,7 +39,6 @@ use tauri::{AppHandle, Manager};
 pub use commands::{AppInfo, NETWORK};
 pub use events::{AgentStage, HotkeyState, PolarisEvent, SpeechState, POLARIS_EVENT_NAME};
 pub use notch::{NotchActivationPolicy, ShellGeometry};
-pub use panels::{PanelError, PanelSpec, PANELS};
 pub use types::CaptureStatus;
 
 /// Starts the desktop shell. Called from `main.rs`.
@@ -51,6 +53,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::app_info,
             commands::quit_app,
+            external::open_external,
             commands::capture_start,
             commands::capture_stop,
             commands::capture_status,
@@ -61,10 +64,11 @@ pub fn run() {
             notch::shell_request_state,
             notch::shell_commit_state,
             notch::shell_resize_content,
+            notch::shell_set_pinned,
+            notch::shell_request_keyboard,
             notch::notch_hover_health,
             notch::notch_simulate_hover,
             hotkey::hotkey_permission,
-            panels::open_panel,
             // First-run onboarding: the focusable window, the permission probes
             // and prompts, the System Settings deep links and the marker file
             // (see `onboarding.rs`).
@@ -78,11 +82,19 @@ pub fn run() {
             onboarding::onboarding_request_accessibility,
             onboarding::onboarding_open_settings,
             stellar_config::stellar_config,
+            // Task W10b: the Wallet page's non-secret recipient book.
+            contacts::contacts_list,
+            contacts::contacts_add,
+            contacts::contacts_remove,
             approval::approval_begin,
             approval::approval_authorize,
             approval::approval_deny,
             approval::approval_status,
             approval::approval_current,
+            // Step W11a: one Touch ID authorises a whole batch (e.g. enabling
+            // auto-pay: set_rule → set_executor → set_alias).
+            approval::approval_begin_batch,
+            approval::approval_authorize_batch,
             health::biometric_health,
             health::biometric_selftest,
             voice_health::voice_health,
@@ -90,27 +102,58 @@ pub fn run() {
             // Task F4: one webview log line in the terminal, optionally mirrored
             // onto the `error` event the Debug panel renders.
             weblog::polaris_log,
-            bridge::commands::bridge_sign,
-            bridge::commands::bridge_selftest,
-            bridge::commands::bridge_health,
-            bridge::commands::bridge_sign_challenge,
-            bridge::commands::anchor_signing_health,
+            // Step W10: the embedded wallet inside the app. Create/import, local
+            // signing and the Debug health check.
+            wallet::commands::wallet_status,
+            wallet::commands::wallet_health,
+            wallet::commands::wallet_create,
+            wallet::commands::wallet_import,
+            wallet::commands::wallet_import_preview,
+            wallet::commands::wallet_list,
+            wallet::commands::wallet_select,
+            wallet::commands::wallet_rename,
+            wallet::commands::wallet_remove,
+            wallet::commands::wallet_sign,
+            wallet::commands::wallet_sign_challenge,
+            // Step W13a: the wallet session — login, logout and idle auto-lock.
+            wallet::session::wallet_session,
+            wallet::session::wallet_unlock,
+            wallet::session::wallet_lock,
+            wallet::session::wallet_set_auto_lock,
+            // BANK-SIM: the simulated demo bank ledger + the active anchor
+            // scenario (the webview cannot read arbitrary env).
+            bank::bank_account,
+            bank::bank_history,
+            bank::bank_debit,
+            bank::bank_credit,
+            bank::bank_settle,
+            bank::bank_refund,
+            bank::bank_reset,
+            bank::bank_set_currency,
+            bank::bank_anchor_config,
+            bank::bank_health,
+            // Step W11a: the autopay executor key and the strict `pay_executor`
+            // signer (no Touch ID; only the guard's pay_executor call).
+            wallet::executor::executor_status,
+            wallet::executor::executor_create,
+            wallet::executor::executor_sign_pay,
+            wallet::executor::executor_health,
         ])
-        // Step W0: a panel's close button hides it instead of quitting the app
-        // (the overlay's `main` window is never closed, so the close handler is
-        // only ever about panels).
+        // First-run onboarding: its close button hides the window instead of
+        // destroying it. The overlay's `main` window is never closed and the
+        // panel system was replaced by the notch shell, so onboarding is the
+        // only interactive window that needs the hide/resign treatment.
         //
-        // Hover fix: opening a panel calls `set_focus`, which activates this
-        // accessory app, and macOS pauses the global `mouseMoved` monitor while
-        // we are active — so hover expansion went dead after any panel/approval
-        // interaction. Once the last panel is hidden, resign active to hand
-        // focus back and resume the monitor.
+        // Hover fix: opening the onboarding window calls `set_focus`, which
+        // activates this accessory app, and macOS pauses the global `mouseMoved`
+        // monitor while we are active — so hover expansion went dead after the
+        // first run. Once the window is hidden, resign active to hand focus back
+        // and resume the monitor.
         .on_window_event(|window, event| {
-            panels::handle_window_event(window, event);
             onboarding::handle_window_event(window, event);
             if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
                 let label = window.label();
-                if panels::is_panel_label(label) || onboarding::is_onboarding_label(label) {
+                if onboarding::is_onboarding_label(label) {
                     resign_after_interactive_close(window.app_handle(), label);
                 }
             }
@@ -145,16 +188,37 @@ pub fn run() {
             app.manage(tts::build_backend());
 
             // Step W3: the Touch ID approval gate. The store holds the one
-            // pending approval that may be released to the Freighter bridge;
+            // pending approval that may be released to the embedded wallet;
             // the authenticator is the real LocalAuthentication prompt (a fake
             // is used only in tests).
-            app.manage(approval::ApprovalStore::new());
+            let approvals = approval::ApprovalStore::new();
+            app.manage(approvals.clone());
             app.manage(biometric::system());
 
-            // Step W4b: the browser launcher for the Freighter signing bridge.
-            // Managed as a trait object so tests can install a fake and never
-            // open a real browser.
-            app.manage(bridge::commands::system_launcher());
+            // Step W10: the embedded wallet. Built before the window opens: it
+            // probes the Keychain once (falling back to a 0600 file store and
+            // saying so) and loads the non-secret `wallets.json` metadata. An
+            // `Arc` so the async, Touch-ID-gated commands can move it to a
+            // blocking thread.
+            let wallet = std::sync::Arc::new(wallet::WalletService::build());
+            // Step W13a: the wallet session. Always starts locked when wallets
+            // exist; the timer logs out after the persisted idle timeout.
+            let session = std::sync::Arc::new(wallet::session::SessionStore::new(
+                wallet.auto_lock_minutes(),
+            ));
+            wallet::session::spawn_auto_lock(
+                app.handle().clone(),
+                std::sync::Arc::clone(&wallet),
+                std::sync::Arc::clone(&session),
+                approvals,
+            );
+            app.manage(wallet);
+            app.manage(session);
+
+            // BANK-SIM: the demo bank ledger lives beside the recordings, never
+            // in the repo. It holds no secret (holder name, IBAN, amounts).
+            let bank_path = app.path().app_data_dir()?.join("bank.json");
+            app.manage(bank::BankStore::load(bank_path));
 
             // Registers the Control+Option monitor and the Control+Option+Space
             // fallback; both feed the same capture latch.
@@ -246,19 +310,12 @@ fn apply_activation_policy(_app: &mut tauri::App) {}
 
 /// Whether any interactive window other than `closing` is still visible.
 ///
-/// Panels and the onboarding window both activate this accessory app when they
-/// open, which pauses the global `mouseMoved` monitor the hover feature needs.
-/// The app must therefore stay active while one of them is still up, and only
-/// the last one to hide hands focus back ([`notch::resign_active`]).
+/// The onboarding window activates this accessory app when it opens, which
+/// pauses the global `mouseMoved` monitor the hover feature needs. The app must
+/// therefore stay active while it is still up, and only the last interactive
+/// window to hide hands focus back ([`notch::resign_active`]).
 fn any_other_interactive_visible(app: &AppHandle, closing: &str) -> bool {
-    let panel_visible = panels::PANELS.iter().any(|spec| {
-        spec.label != closing
-            && app
-                .get_webview_window(spec.label)
-                .and_then(|panel| panel.is_visible().ok())
-                .unwrap_or(false)
-    });
-    panel_visible || (closing != onboarding::WINDOW_LABEL && onboarding::is_visible(app))
+    closing != onboarding::WINDOW_LABEL && onboarding::is_visible(app)
 }
 
 /// Resigns Polaris from the active state when `closing` was the last interactive

@@ -605,6 +605,23 @@ This mirrors the source notes' ordering (after the headless slice).
 
 ---
 
+## 12. W11b implementation note (2026-09-20)
+
+The shell half now runs the design above (testnet only):
+
+- **Voice/UI setup** (`guard_policy` from `set_approval_rule` or the Rules page) builds the
+  D13 plan (`approve` → `set_rule` → `set_executor`, executor last = arming; executor
+  create/fund first; `set_alias` per saved contact) and applies it after **ONE** batch
+  approval card + **ONE** Touch ID (`approval_begin_batch` / `approval_authorize_batch`).
+- **`send` routing** (`app/src/lib/chain.ts` + `autopay.ts`): the executor settles a payment
+  with `pay_executor` and no card only when the cached rule allows it (armed, asset allowed,
+  ≤ `auto_approve_limit`, known recipient, daily remaining) **and** `executor_sign_pay`
+  accepts it; anything else falls back to the owner path (fail closed toward MORE approval).
+- **Always ask** is the disable path (`revoke_executor` first); the app preference never
+  widens the chain rule. Guard errors #103–#107 / #116 map to short human sentences.
+- **Rust side** (`executor_*`, batch approval) ships in W11a; the TS paths feature-detect the
+  commands and fall back when they are absent.
+
 *Cross-references: `docs/confidential-payments.md` (privacy modes, D1–D8), `docs/interfaces.md`
 (reserved seam), `contracts/DEPLOYED.md` (ABI, rule semantics, F-01/F-03/F-06/F-12),
 `stellar/src/keeper/README.md` (keeper config/behaviour), `docs/demo-runbook.md` (demo steps),

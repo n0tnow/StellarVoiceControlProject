@@ -40,22 +40,33 @@ tauri-plugin-global-shortcut = "2.3"
 # so the exact request shape is unit-testable.
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "native-tls"] }
 
-# Step W4b: the Freighter signing bridge. The one-shot loopback server is
-# `tiny_http` — a small, sync, blocking server with no async runtime and only a
-# few transitives (`ascii`, `chunked_transfer`, `httpdate`), which is the smallest
-# well-maintained option for a two-endpoint local server. The XDR is verified
-# without an XDR crate: `base64` decodes the envelope, `sha2`/`hex` compute the
-# transaction hash, and `ed25519-dalek` (audited) verifies the owner's signature.
-# `getrandom` mints the one-time token from the OS CSPRNG and `subtle` compares
-# tokens in constant time.
+# Step W4b: signing helpers. The XDR is verified without an XDR crate: `base64`
+# decodes the envelope, `sha2`/`hex` compute the transaction hash, and
+# `ed25519-dalek` (audited) verifies the owner's signature.
 #
 # `ed25519-dalek` is pinned to exactly 2.1.1: 2.2.0 raises the MSRV to 1.81,
 # above this crate's declared `rust-version = "1.77"` (2.1.1 needs 1.60).
-tiny_http = "0.12"
 ed25519-dalek = "=2.1.1"
 base64 = "0.23"
 getrandom = "0.3"
-subtle = "2.6"
+
+# Step W10: the wallet inside the app. `bip39` generates and parses the 24-word
+# recovery phrase; `hmac`/`sha2` implement SLIP-0010 ed25519 derivation for the
+# SEP-5 path `m/44'/148'/index'` (no separate derivation crate needed).
+# `zeroize` wipes the seed and phrase buffers after use; the `zeroize` feature
+# also wipes the parsed mnemonic's word indices.
+bip39 = { version = "2.1", features = ["zeroize"] }
+hmac = "0.12"
+zeroize = "1.8"
+
+# Step W11a: `executor_sign_pay` decodes the Soroban invocation itself, so the
+# executor key can sign ONLY the guard's `pay_executor` call. Decoding arbitrary
+# XDR by hand is exactly where a parser bug becomes a signature over a different
+# transaction, so this uses the audited `stellar-xdr` reader instead of the
+# parse-free envelope slicing the bridge uses. `base64` gates `from_xdr_base64`;
+# the default `std` face is left off to keep the feature surface minimal (28.x
+# dropped the old `curr` feature — the generated types ARE the current protocol).
+stellar-xdr = { version = "28", default-features = false, features = ["base64"] }
 
 # The overlay's window level / collection behaviour come from AppKit directly,
 # because Tauri's window API does not expose them. Versions are pinned to the
@@ -99,3 +110,11 @@ core-foundation = "0.10"
 # does not drag in `objc2-image-io` / `objc2-media-toolbox`, which onboarding
 # never touches.
 objc2-av-foundation = { version = "0.3", default-features = false, features = ["std", "AVCaptureDevice", "AVMediaFormat", "block2"] }
+
+# Step W10: the embedded wallet's seed storage. `security-framework`'s
+# generic-password API stores each seed as a login-Keychain item (service
+# `dev.polaris.wallet`, account `signer-<address>`). Data-protection /
+# biometric ACLs need entitlements an ad-hoc dev build lacks, so the item is a
+# plain generic password; macOS may show a one-time "Always Allow" prompt when
+# the app's ad-hoc signature changes between builds.
+security-framework = "3"

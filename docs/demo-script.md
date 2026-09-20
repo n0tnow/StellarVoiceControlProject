@@ -1,63 +1,68 @@
-# Polaris — Live Demo Script (3–4 min)
+# Polaris — Live Demo Script (≈4 min)
 
-> **Testnet only.** Every step below is implemented in this repo; `[verify live]`
-> marks what still needs a human on a real Mac (mic, Touch ID, Freighter, real
-> windows). Public addresses: owner **acc1**
+> **Testnet only.** Every step is implemented in this repo; `[verify live]` marks what
+> still needs a human on a real Mac (mic, STT, Touch ID, real windows, live anchor).
+> The **notch is the only surface**: the menu-bar tray is gone and there are no
+> popup windows; every screen (History, Tasks, Rules, Wallet, Trade, Settings) is a
+> page inside the notch. Addresses: owner **acc1**
 > `GAJW5V7VXHIRTJBGNVYTGXJ6CLDM7IEIPAYD3XLKKTKJKPRBYOTAC25A`, recipient **acc2**
 > `GB25QEDATQREAQQHBW3DAGLOZ3EURS44URZETXLLREPPYCX2ABCORNLV`.
-> Panels/tray: `docs/ui-panels.md`. Signing path: `docs/ui-panels.md` §9.
+> Notch UI: `docs/notch-ui.md`. Wallet design: `docs/wallet-track.md`.
 
-## Pre-flight (do 5 min before)
-- [ ] `make setup` — installs deps, creates `.env` from `.env.example`, generates icons.
+## Pre-flight (5 min before)
+- [ ] `make setup` — npm install + `.env` from `.env.example` + icons.
 - [ ] `.env` filled: `OPENCODE_API_KEY`, `GROQ_API_KEY`, `FISH_AUDIO_API_KEY`,
-  `POLARIS_OWNER_ADDRESS=<acc1>`, `POLARIS_ALIASES=acc2=GB25QEDA…`,
-  `GUARD_CONTRACT_ID=CDRLSFJ5WIC5UMF2LWPF3NRVDOKE7CN3DAYGKDWQ5TJJMVB7FRHRCK4D`.
-- [ ] acc1 funded (testnet XLM; PGUSD trustline + balance for the guard scene).
-- [ ] Freighter installed in the default browser, **network = Testnet**, account = acc1, unlocked.
+  `GUARD_CONTRACT_ID=CDRLSFJ5WIC5UMF2LWPF3NRVDOKE7CN3DAYGKDWQ5TJJMVB7FRHRCK4D`,
+  `POLARIS_P2P_CONTRACT_ID=CBMXLTXS76S72SIPLVMCQOSS6SN2CR4V3Q73GZPRA4GRIBEM7RE5OLJW`.
+  The shell finds the repo-root `.env`; a Finder-launched bundle falls back to
+  `~/Library/Application Support/Polaris/.env`.
+- [ ] `make build` then `make run` (or `make dev` for HMR).
 - [ ] Keeper running: `export KEEPER_SECRET=$(stellar keys show keeper)` then
   `caffeinate -i npm run keeper -w @polaris/stellar` (rehearse once with `--dry-run`).
-- [ ] `make dev` starts the shell; the menu-bar tray icon appears, no Dock icon.
-- [ ] `tray → Debug…`: `app`, `network`, `voice`, `approval`, `bridge` are green.
-- [ ] Anchor dry run: `npm run anchor:check -w @polaris/stellar -- --live --payout-check`.
+- [ ] `⋯ → Debug…`: `app`, `network`, `voice`, `approval`, `wallet`, `anchor`, `bank`
+  green. `[verify live: value checks need the Mac]`
 
-## Scene 1 — Voice payment, owner-approved (0:00–1:20)
+## Scene 1 — Create the wallet (0:00–0:40)
+- Wallet gate auto-opens. **Create** → a 24-word phrase is shown **once**; store it in
+  the macOS Keychain. (Or **Import** an `S…`/phrase.) `[verify live: Keychain + Touch ID]`
+- **Fund** with Friendbot; the dashboard shows network, key + QR, balances.
+
+## Scene 2 — Recipient + voice payment (0:40–1:50)
+- Wallet → recipients: add **acc2**
+  `GB25QEDATQREAQQHBW3DAGLOZ3EURS44URZETXLLREPPYCX2ABCORNLV` as a "rumuz".
 - **Say:** hold **Control+Option**, say **“Send 10 XLM to acc2.”**, release.
-- **On screen:** notch pill expands `Listening → Thinking`; on release it stays open
-  and speaks **“Sending 10 XLM to acc2. Do you confirm?”** `[verify live: mic + STT]`
-- **Open:** the Approval window opens by itself (`#/approval`): decoded XDR summary,
-  From acc1 / To acc2 / 10 XLM, focus on **Deny**.
-- **Do:** Touch ID. The Freighter bridge page then opens in your browser; approve there.
-- **On screen:** notch speaks **“Sent 10 XLM to acc2.”** and the `tx_submitted` link
-  (stellar.expert testnet) appears.
-- **Fallbacks:** mic fail → Debug panel `network`/`bridge` checks, or
-  `npm run e2e:build-xdr` prints a real unsigned acc1→acc2 XDR; Freighter fail →
-  `npm run bridge:fixture -- --selftest` proves the bridge offline; network fail → show the
-  recorded transaction.
+- Notch: `Listening → Thinking`, then the spoken read-back **“Sending 10 XLM to
+  acc2. Do you confirm?”** `[verify live: mic + STT]`
+- Approval card opens from the decoded XDR (From acc1 / To acc2 / 10 XLM, Deny
+  focused). **Touch ID** → the embedded wallet signs in-app; no browser. Speaks
+  **“Sent 10 XLM to acc2.”** with an explorer link.
+- **Fallback:** mic/STT fail → `npm run e2e:build-xdr` prints a real acc1→acc2 XDR;
+  network fail → show the recorded explorer tx.
 
-## Scene 2 — On-chain guard rules (1:20–2:00)
-- **Open:** `tray → Security & rules…` — limits, allowance, executor and alias book read
-  live from the deployed `polaris_guard` (demo asset **PGUSD**, SAC `CC2V2R6J…`, `contracts/DEPLOYED.md`).
-- **Say:** **“Don’t ask me for payments under 25 PGUSD.”** Read-back, then **one** card lists
-  `approve → set_rule → set_executor` (D13), **one** Touch ID. `[verify live]`
-- **Say:** **“Send 40 PGUSD to acc2”** (above the limit): rejected on-chain, falls back to the
-  `pay_owner` card path. `[verify live]`
-- **Fallback:** `contracts/scripts/demo.sh` replays the same guard behaviour headless
-  (payment, `#105` NeedsOwnerApproval, owner re-send).
+## Scene 3 — Rules by voice → autonomous payment (1:50–3:00)
+- **Say:** **“Don’t ask me for payments under 10 XLM.”** One batch card lists
+  `approve → set_rule → set_executor` (D13) and **one** Touch ID arms auto-pay.
+  `[verify live: Touch ID]`
+- **Say:** **“Send 1 XLM to acc2.”** No card: the executor key settles it on-chain via
+  `pay_executor` (recorded as `auto` in History). `[verify live]`
+- **Say:** **“Send 15 XLM to acc2.”** Above the limit → on-chain `#105`, falls back to
+  the owner approval card + Touch ID. `[verify live]`
+- **Fallback:** `npm run e2e:autopay` replays the same guard behaviour headless
+  (unattended 1 XLM SUCCESS, 15 XLM `#105`).
 
-## Scene 3 — Scheduled payment + keeper (2:00–2:40)
-- **Open:** `tray → Schedules…`; create a one-shot **“Send 5 PGUSD to acc2 in 1 minute”**
-  `[verify live]`. The card shows local **and** UTC time.
-- **Watch:** ~15–25 s after due, the keeper submits `execute_schedule`; the keeper log shows
-  `executed` and the explorer link.
-- **Fallback:** `npm run keeper:once -w @polaris/stellar` for one deterministic tick.
+## Scene 4 — Bank ⇄ anchor (3:00–3:40)
+- **Say:** **“Deposit 10 dollars.”** The simulated bank debits its IBAN, the SDF test
+  anchor (`testanchor.stellar.org`) quotes and pays out SRT/SRT→USD; the panel shows the
+  bank ledger + anchor steps. `[verify live: anchor payout needs the network]`
+- **Say:** **“Withdraw 10 SRT.”** Same loop in reverse (credit-once), both directions.
+- **Fallback:** `npm run anchor:check -w @polaris/stellar -- --live --home-domain
+  testanchor.stellar.org --payout-check`; verified flow in `docs/anchor-sdf-flow.md`.
 
-## Scene 4 — Panels tour (2:40–3:30)
-- **Anchor…**: SEP-1 discovery → SEP-10 login → SEP-38 quote → SEP-6. `[verify live]`
-- **P2P…**: Soroban escrow create/accept/confirm (`POLARIS_P2P_CONTRACT_ID` currently unset).
-- **Privacy…**: SPP private payments, **read-only** (status/contracts/evidence); value-moving
-  forms are disabled pending a bridge `signAuthEntry`.
-- **Wallet…**: balances, alias book, last 10 payments from Horizon.
-
-## Scene 5 — Close (3:30–3:45)
-- **Say:** “The model proposes; you dispose.” Every value-moving step is gated by Touch ID +
-  Freighter and bounded by on-chain rules. **Testnet only**; the app never holds a key.
+## Scene 5 — P2P offer + History + close (3:40–4:15)
+- P2P panel: create an offer (seller locks a token, asks TRY). The contract ID is
+  `CBMXLTXS76…`. `[verify live: panel + Touch ID]`
+- History: timeline with filters, search, detail drawer, paging across payments,
+  auto-pay and anchor/P2P rows.
+- **Close:** “The model proposes; you dispose.” Touch ID gates every value-moving step,
+  the embedded wallet signs in-app, and `polaris_guard` bounds what runs unattended.
+  Testnet only.

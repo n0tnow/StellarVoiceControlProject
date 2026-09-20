@@ -13,6 +13,7 @@ import { applyNavigation } from "@/lib/navigation";
 import { speakSentence, speakTurnResult } from "@/lib/speech";
 import { failureSentence, submittedSentence } from "@polaris/agent";
 import { TurnFlow } from "@/lib/turnFlow";
+import { decideWalletGateForTurn } from "@/lib/walletGate";
 import {
   recordTurnAnswer,
   recordTurnOutcome,
@@ -96,8 +97,8 @@ export default function App() {
   const [permissionHint, setPermissionHint] = useState(false);
   const [session, dispatchTurn] = useReducer(reduceTurnSession, null);
   // NAV: the latest voice navigation request, handed to the shell so it can
-  // select a notch page or open a panel window. A fresh object per command is
-  // what re-triggers an identical request.
+  // select a notch page. A fresh object per command is what re-triggers an
+  // identical request.
   const [navigation, setNavigation] = useState<NavigationRequest | null>(null);
   // Admission/freshness policy for spoken turns: it dedupes a re-emitted
   // transcript and, the M2 fix, lets a genuine second utterance supersede an
@@ -222,9 +223,9 @@ export default function App() {
           // reply/voice (A14), so it also drives the notch labels from here on.
           dispatchTurn({ type: "language", language: run.outcome.language ?? null });
           recordTurnAnswer(logId, run.outcome.answer);
-          // NAV: a voice navigation request opens a screen. ShellSurface applies
-          // the notch page; panel windows open here. The spoken confirmation is
-          // the outcome's answer, spoken below like any conversational turn.
+          // NAV: a voice navigation request selects a notch page. ShellSurface
+          // applies the page; the spoken confirmation is the outcome's answer,
+          // spoken below like any conversational turn.
           if (run.outcome.navigation) {
             setNavigation(run.outcome.navigation);
             void applyNavigation(run.outcome.navigation);
@@ -255,7 +256,8 @@ export default function App() {
             if (disposed || !isCurrentTurn(sessionRef.current, turnId)) return;
             dispatchTurn({ type: "stage", stage });
           };
-          void executeApprovedIntent(intent, { onStage })
+          const runExecution = (): void => {
+            void executeApprovedIntent(intent, { onStage })
             .then((outcome) => {
               if (disposed) return;
               // M1: a non-submitted stale result is still dropped. W4b-2: a tx
@@ -299,6 +301,29 @@ export default function App() {
               recordTurnOutcome(logId, { label: "failed: Chain error" });
               dispatchTurn({ type: "failed", label: "Chain error" });
             });
+          };
+
+          // W10b onboarding gate: a value-moving intent with no active wallet is
+          // refused before any chain call — one short sentence and the Wallet
+          // page. A build without the wallet engine passes through (the chain
+          // tool's own owner check stays the fail-closed gate).
+          void decideWalletGateForTurn(intent).then((gate) => {
+            if (disposed || !isCurrentTurn(sessionRef.current, turnId)) return;
+            if (gate.block) {
+              void speakSentence(gate.sentence, run.outcome.language);
+              // NAV: reuse the voice-navigation mechanism so the notch selects
+              // the Wallet page (ShellSurface applies notch targets).
+              setNavigation({
+                target: "wallet",
+                spoken: gate.sentence,
+                ...(run.outcome.language ? { language: run.outcome.language } : {}),
+              });
+              recordTurnOutcome(logId, { label: "failed: Connect wallet" });
+              dispatchTurn({ type: "failed", label: "Connect wallet" });
+              return;
+            }
+            runExecution();
+          });
         })
         .finally(() => flowRef.current.settle(ticket));
     };

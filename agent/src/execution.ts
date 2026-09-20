@@ -337,7 +337,7 @@ export interface ExecutionOutcome {
   payloadHash?: string;
   /**
    * The gate-assigned approval id (W4b). Present iff `status === "executed"` and
-   * the approver supplied one; the signing step passes it to `bridge_sign` to
+   * the approver supplied one; the signing step passes it to `wallet_sign` to
    * release the approved blob. Absent for the deny/auto placeholders.
    */
   approvalId?: string;

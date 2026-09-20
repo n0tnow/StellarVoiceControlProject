@@ -5,10 +5,10 @@
 > for plugging a feature in. A later milestone adds **one file** and touches
 > nothing else.
 
-The panel lives in a normal W0 window (`Debug…` in the tray, route `#/debug`);
-its Rust registration is in `app/src-tauri/src/panels.rs` and its UI in
-`app/src/panels/DebugPanel.tsx`. This doc owns the check contract; the panel
-window itself is covered by `docs/ui-panels.md`.
+The checks are rendered inside the notch Settings page's Diagnostics section
+(`app/src/notch/settings/DiagnosticsSection.tsx`), which runs the registry on
+demand ("Run all checks"). This doc owns the check contract; the notch surface
+itself is covered by `docs/notch-ui.md`.
 
 ## 1. The contract
 

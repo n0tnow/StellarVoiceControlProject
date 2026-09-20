@@ -668,6 +668,13 @@ struct RuntimeState {
     focusable: bool,
     /// The focusable value the OS flag was last set to.
     native_focusable: Option<bool>,
+    /// True while the UI is deliberately holding an interactive gate open (the
+    /// W13b wallet login/unlock panel). The click-through watchdog must not
+    /// force-collapse it just because the cursor is outside: the UI intends the
+    /// panel to stay, and a collapse here left React rendering the full panel
+    /// into the small collapsed window (notch-clip). Cleared by an explicit
+    /// unpin and by [`ShellRuntime::mark_forced_collapse`].
+    pinned: bool,
     /// Whether the window is currently the key window (Tauri `WindowEvent`).
     /// Used only to keep the click-through watchdog from collapsing a prompt the
     /// user is actively typing into; the moment focus is lost the watchdog
@@ -728,6 +735,11 @@ pub struct HoverHealth {
     pub interactive: bool,
     /// Whether the native window accepts keyboard input (the prompt state).
     pub focusable: bool,
+    /// True while a pinned gate (the wallet login/unlock panel) owns the shell.
+    pub pinned: bool,
+    /// Native OS window height in points, so a React/native size mismatch (the
+    /// notch-clip bug) is visible in the Debug panel.
+    pub window_height: f64,
     /// `NSApplication.isActive`. macOS pauses the global mouse monitor while
     /// Polaris is the active app, so this is the key signal for the hover bug.
     pub active: bool,
@@ -751,6 +763,7 @@ impl ShellRuntime {
                 native_interactive: None,
                 focusable: false,
                 native_focusable: None,
+                pinned: false,
                 focused: false,
                 content_height: None,
                 last_inside: None,
@@ -842,6 +855,35 @@ impl ShellRuntime {
         self.lock().focusable
     }
 
+    /// Records whether the UI is holding an interactive gate open. The watchdog
+    /// reads this; see [`RuntimeState::pinned`].
+    pub fn set_pinned(&self, pinned: bool) {
+        self.lock().pinned = pinned;
+    }
+
+    /// Grants the native window keyboard input for the **active** interactive
+    /// state (a text field inside the panel was clicked). Returns whether the
+    /// state accepts it. The grant is per state activation: `set_active` and the
+    /// forced collapse reset `focusable`, so leaving the panel always hands the
+    /// keyboard back.
+    pub fn request_keyboard(&self) -> bool {
+        let mut rt = self.lock();
+        let interactive = rt
+            .geometry
+            .states
+            .get(rt.active_index)
+            .is_some_and(|state| state.interactive);
+        if interactive {
+            rt.focusable = true;
+        }
+        interactive
+    }
+
+    /// True while a UI-held gate owns the shell.
+    pub fn is_pinned(&self) -> bool {
+        self.lock().pinned
+    }
+
     /// Records the value the native focusable flag was just set to. Only
     /// [`sync_native_focusability`] may call this.
     pub fn note_native_focusable(&self, focusable: bool) {
@@ -916,15 +958,18 @@ impl ShellRuntime {
     }
 
     /// True once the cursor has been outside the active shell rect for
-    /// `grace`, **and** the window is not the focused/key window. A focused
-    /// window is not stranded: the user is in it, and clicks outside its own
-    /// rect already reach the app underneath. The moment focus is lost the
-    /// predicate resumes guarding, so a frozen webview that never sees the blur
-    /// is still restored by the watchdog.
+    /// `grace`, **and** the window is not the focused/key window, **and** the UI
+    /// is not deliberately holding this gate open. A focused window is not
+    /// stranded: the user is in it, and clicks outside its own rect already
+    /// reach the app underneath. A pinned gate is more of the same — the UI wants
+    /// it interactive, so the watchdog leaves it alone. The moment either is
+    /// relinquished the predicate resumes guarding, so a frozen webview that
+    /// never sees the blur is still restored by the watchdog.
     pub fn outside_for_longer_than(&self, grace: std::time::Duration) -> bool {
         let rt = self.lock();
         rt.interactive
             && !rt.focused
+            && !rt.pinned
             && rt
                 .outside_since
                 .is_some_and(|since| since.elapsed() >= grace)
@@ -995,6 +1040,7 @@ impl ShellRuntime {
         }
         rt.interactive = false;
         rt.focusable = false;
+        rt.pinned = false;
         rt.content_height = None;
         rt.outside_since = None;
         let hover_changed = rt.last_inside != Some(false);
@@ -1137,6 +1183,30 @@ pub fn set_focused(app: &AppHandle, focused: bool) {
     }
 }
 
+/// Resigns Polaris from the **active** app state. Main thread only on macOS.
+///
+/// This is the hover fix's core: the overlay is click-through, so it relies on
+/// the global `mouseMoved` monitor, and macOS does not deliver global monitors
+/// while the app is active. Opening the onboarding window activates this
+/// accessory app; hiding it does not deactivate it, so before this the global
+/// monitor stayed paused and hover was dead after the first run. Resigning
+/// active hands focus back to the app the user came from and resumes the
+/// monitor.
+#[cfg(target_os = "macos")]
+pub fn resign_active(_app: &AppHandle) -> Result<(), String> {
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::NSApplication;
+    let marker = MainThreadMarker::new().ok_or("resigning active requires the main thread")?;
+    NSApplication::sharedApplication(marker).deactivate();
+    Ok(())
+}
+
+/// Non-macOS: there is no AppKit activation to resign.
+#[cfg(not(target_os = "macos"))]
+pub fn resign_active(_app: &AppHandle) -> Result<(), String> {
+    Ok(())
+}
+
 /// Safety net: restores native click-through and non-focusability and collapses
 /// the runtime to the resting state. The whole sequence runs as one
 /// main-thread task so it is serialized with the state commands: no concurrent
@@ -1225,30 +1295,6 @@ fn sync_native_focusability(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// Resigns Polaris from the **active** app state. Main thread only on macOS.
-///
-/// This is the hover fix's core: the overlay is click-through, so it relies on
-/// the global `mouseMoved` monitor, and macOS does not deliver global monitors
-/// while the app is active. Opening a panel (`panels::open_spec` →
-/// `set_focus`) activates this accessory app; hiding the panel does not
-/// deactivate it, so before this the global monitor stayed paused and hover was
-/// dead after any panel or approval interaction. Resigning active hands focus
-/// back to the app the user came from and resumes the monitor.
-#[cfg(target_os = "macos")]
-pub fn resign_active(_app: &AppHandle) -> Result<(), String> {
-    use objc2::MainThreadMarker;
-    use objc2_app_kit::NSApplication;
-    let marker = MainThreadMarker::new().ok_or("resigning active requires the main thread")?;
-    NSApplication::sharedApplication(marker).deactivate();
-    Ok(())
-}
-
-/// Non-macOS: there is no AppKit activation to resign.
-#[cfg(not(target_os = "macos"))]
-pub fn resign_active(_app: &AppHandle) -> Result<(), String> {
-    Ok(())
-}
-
 /// Whether Polaris is the frontmost/active app. Main thread only on macOS (the
 /// caller's contract); false where AppKit does not exist.
 #[cfg(target_os = "macos")]
@@ -1274,21 +1320,24 @@ pub fn hover_health(app: &AppHandle) -> HoverHealth {
     let last_sample = hover.as_ref().and_then(|state| state.last_sample());
     let last_sample_age_ms = last_sample.map(|at| at.elapsed().as_millis() as u64);
     let last_inside = hover.as_ref().and_then(|state| state.last_inside());
-    let (state, shell_rect, interactive, focusable) = match app.try_state::<ShellRuntime>() {
-        Some(runtime) => (
-            runtime.active_state_name().to_string(),
-            runtime.active_shell_rect(),
-            runtime.is_interactive(),
-            runtime.is_focusable(),
-        ),
-        None => ("none".to_string(), None, false, false),
-    };
+    let (state, shell_rect, interactive, focusable, pinned) =
+        match app.try_state::<ShellRuntime>() {
+            Some(runtime) => (
+                runtime.active_state_name().to_string(),
+                runtime.active_shell_rect(),
+                runtime.is_interactive(),
+                runtime.is_focusable(),
+                runtime.is_pinned(),
+            ),
+            None => ("none".to_string(), None, false, false, false),
+        };
+    let window_height = window::frame(app).map_or(0.0, |frame| frame.height);
     let active = app_is_active();
     let trusted = crate::hotkey_flags::is_trusted();
     let detail = if !monitors_installed {
         "the mouse monitor could not be installed; hover expansion is disabled".to_string()
     } else if active {
-        "Polaris is the active app, so macOS pauses the global mouse monitor; close the open panel to restore hover".to_string()
+        "Polaris is the active app, so macOS pauses the global mouse monitor".to_string()
     } else if !trusted {
         "monitor installed; if hover still does nothing, grant Accessibility to Polaris in \
          System Settings → Privacy & Security → Accessibility"
@@ -1310,6 +1359,8 @@ pub fn hover_health(app: &AppHandle) -> HoverHealth {
         click_through: !interactive,
         interactive,
         focusable,
+        pinned,
+        window_height,
         active,
         activation_policy: window::activation_policy(),
         trusted,
@@ -1426,6 +1477,40 @@ pub async fn shell_resize_content(app: AppHandle, height: f64) -> Result<f64, St
         let current = window::frame(&handle)?;
         window::set_frame(&handle, grow_union(current, target))?;
         Ok(clamped)
+    })
+    .await
+}
+
+/// Tells Rust whether the UI is deliberately holding the active interactive
+/// gate open (the W13b wallet login/unlock panel). While pinned the
+/// click-through watchdog does **not** force-collapse the shell just because the
+/// cursor is outside, so a pinned screen rendered by React keeps a native window
+/// that matches. Unpinning (unlock, dismissal) re-arms the watchdog.
+#[tauri::command]
+pub async fn shell_set_pinned(app: AppHandle, pinned: bool) -> Result<(), String> {
+    let handle = app.clone();
+    on_main(&app, move || {
+        let runtime = handle.state::<ShellRuntime>();
+        runtime.set_pinned(pinned);
+        Ok(())
+    })
+    .await
+}
+
+/// A text field inside the interactive panel was clicked: give the overlay
+/// keyboard focus so it can be typed into. The hover-opened panel is otherwise
+/// not focusable (hovering must never steal the keyboard from the user's app);
+/// only an explicit click on a field asks for it. The grant ends with the state.
+#[tauri::command]
+pub async fn shell_request_keyboard(app: AppHandle) -> Result<bool, String> {
+    let handle = app.clone();
+    on_main(&app, move || {
+        let runtime = handle.state::<ShellRuntime>();
+        let granted = runtime.request_keyboard();
+        if granted {
+            sync_native_focusability(&handle)?;
+        }
+        Ok(granted)
     })
     .await
 }
@@ -1927,6 +2012,35 @@ mod tests {
     }
 
     #[test]
+    fn watchdog_does_not_collapse_a_pinned_gate() {
+        let runtime = ShellRuntime::new(fallback_geometry(1512.0, 982.0), 0.0, 0.0);
+        let panel = index_of(&runtime, "panel");
+        runtime.set_active(panel).unwrap();
+        runtime.set_pinned(true);
+
+        // Cursor outside and the grace elapsed, but the UI is holding the wallet
+        // login gate open: the watchdog must not force it shut, or React would
+        // render the panel into the collapsed window (notch-clip).
+        let stale = Instant::now() - Duration::from_secs(5);
+        assert!(!runtime.outside_for_longer_than(Duration::ZERO));
+        assert!(!runtime.watchdog_decision(0.0, 0.0, stale, Duration::ZERO));
+
+        // Unpinning re-arms it, so a stranded interactive panel is still recovered.
+        runtime.set_pinned(false);
+        assert!(runtime.watchdog_decision(0.0, 0.0, stale, Duration::ZERO));
+    }
+
+    #[test]
+    fn forced_collapse_clears_the_pin() {
+        let runtime = ShellRuntime::new(fallback_geometry(1512.0, 982.0), 0.0, 0.0);
+        let panel = index_of(&runtime, "panel");
+        runtime.set_active(panel).unwrap();
+        runtime.set_pinned(true);
+        runtime.mark_forced_collapse();
+        assert!(!runtime.is_pinned());
+    }
+
+    #[test]
     fn native_focusable_log_matches_the_guarded_state() {
         // `sync_native_focusability` is the only writer of both values; this
         // pins the invariant the safety argument depends on.
@@ -2087,6 +2201,8 @@ mod tests {
             click_through: true,
             interactive: false,
             focusable: false,
+            pinned: true,
+            window_height: 468.0,
             active: false,
             activation_policy: NotchActivationPolicy::Accessory,
             trusted: true,
@@ -2098,6 +2214,8 @@ mod tests {
         assert_eq!(json["lastInside"], true);
         assert_eq!(json["shellRect"]["width"], 3.0);
         assert_eq!(json["clickThrough"], true);
+        assert_eq!(json["pinned"], true);
+        assert_eq!(json["windowHeight"], 468.0);
         assert_eq!(json["activationPolicy"], "accessory");
     }
 

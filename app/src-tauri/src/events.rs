@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 
 use crate::types::{CaptureStatus, Intent, TxSummary};
+use crate::wallet::WalletSession;
 
 /// Channel name; `app/src/lib/polaris.ts` listens on the same string.
 pub const POLARIS_EVENT_NAME: &str = "polaris-event";
@@ -147,6 +148,9 @@ pub enum PolarisEvent {
         hash: String,
         explorer_url: String,
     },
+    /// Wallet session transitions (step W13a: login/logout/auto-lock). Carries
+    /// the full `WalletSession` so the UI never has to poll.
+    WalletSessionChanged(WalletSession),
     Error {
         message: String,
     },
@@ -166,6 +170,7 @@ impl PolarisEvent {
             Self::ApprovalRequest { .. } => "approval_request",
             Self::ApprovalResult { .. } => "approval_result",
             Self::TxSubmitted { .. } => "tx_submitted",
+            Self::WalletSessionChanged(_) => "wallet_session_changed",
             Self::Error { .. } => "error",
         }
     }
@@ -358,5 +363,24 @@ mod tests {
         assert_eq!(json, r#"{"prompt":true}"#);
         let json = serde_json::to_string(&NotchHotkey { prompt: false }).unwrap();
         assert_eq!(json, r#"{"prompt":false}"#);
+    }
+
+    #[test]
+    fn wallet_session_event_matches_the_ts_union() {
+        let session = crate::wallet::WalletSession {
+            state: crate::wallet::session::SessionState::Unlocked,
+            active: Some(crate::wallet::ActiveWallet {
+                address: "GABC".into(),
+                label: "Main".into(),
+            }),
+            count: 1,
+            unlocked_at: Some(1_700_000_000_000),
+            auto_lock_minutes: 30,
+        };
+        let json = serde_json::to_string(&PolarisEvent::WalletSessionChanged(session.clone())).unwrap();
+        assert_eq!(PolarisEvent::WalletSessionChanged(session).kind(), "wallet_session_changed");
+        assert!(json.starts_with(r#"{"type":"wallet_session_changed","#), "{json}");
+        assert!(json.contains(r#""autoLockMinutes":30"#), "{json}");
+        assert!(json.contains(r#""unlockedAt":1700000000000"#), "{json}");
     }
 }

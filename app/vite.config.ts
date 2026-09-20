@@ -61,15 +61,12 @@ export default defineConfig({
   build: {
     // macOS 15 = Safari 18; WKWebView is always current on the target machine.
     target: "safari15",
-    // Three entries: the Tauri shell (`index.html`), the Freighter signing
-    // bridge (`bridge.html`) served in the user's normal browser by the W4b
-    // localhost server, and the first-run onboarding window (`onboarding.html`).
-    // Wallets Kit is imported only from the bridge entry, so it lands in a chunk
-    // the main app never loads.
+    // Two entries: the Tauri shell (`index.html`) and the first-run onboarding
+    // window (`onboarding.html`). The Freighter signing bridge is gone — the W10
+    // embedded wallet replaced it, so `bridge.html` no longer exists.
     rollupOptions: {
       input: {
         main: path.resolve(import.meta.dirname, "index.html"),
-        bridge: path.resolve(import.meta.dirname, "bridge.html"),
         onboarding: path.resolve(import.meta.dirname, "onboarding.html"),
       },
     },

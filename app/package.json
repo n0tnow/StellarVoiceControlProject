@@ -17,12 +17,12 @@
   },
   "dependencies": {
     "@blobatar/react": "2.7.0",
-    "@creit.tech/stellar-wallets-kit": "2.6.0",
     "@polaris/agent": "*",
     "@polaris/interfaces": "*",
     "@polaris/stellar": "*",
     "@tauri-apps/api": "2.11.1",
     "blobatar": "2.7.0",
+    "buffer": "^6.0.3",
     "class-variance-authority": "0.7.1",
     "clsx": "2.1.1",
     "lucide-react": "1.47.0",

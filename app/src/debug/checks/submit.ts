@@ -4,7 +4,7 @@
  * It answers one question without doing anything: is the submit path importable
  * and shaped correctly? It never builds, signs or submits a transaction, so it
  * is safe to run automatically. The live end-to-end proof is the real payment a
- * human makes with Freighter.
+ * human makes with the embedded wallet.
  *
  * The chain package is imported **inside** `run`, not at module scope: the check
  * registry globs every check eagerly, so a static import here would pull the

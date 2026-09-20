@@ -4,14 +4,13 @@
  * The page renders only [`TaskRow`]s; this hook adapts the real `listUpcoming`
  * view models (via `@/lib/schedules`) into that shape. The mock rows in
  * `@/lib/mockData` are an explicit **demo** fallback, used only when the app is
- * not inside Tauri or when `stellar_config` has no owner address. A real read
- * failure is surfaced as an error with a Retry — never silently replaced by
- * mock data.
+ * not inside Tauri (the browser preview). A real read failure — including a
+ * missing owner — is surfaced as an error with a Retry, never mock data.
  *
- * Cancel is the only value-moving action here: it builds the unsigned
- * `cancel_schedule` (`@/lib/schedulesLive`) and pushes it through the shared
- * `@/lib/useTxRun` pipeline (approval card → Touch ID → Freighter → submit),
- * exactly like the Schedules panel. Nothing else on the page moves value.
+ * Cancel and create are the only value-moving actions here: each builds an
+ * unsigned `@/lib/schedulesLive` call and pushes it through the shared
+ * `@/lib/useTxRun` pipeline (approval card → Touch ID → wallet signing →
+ * submit). Nothing else on the page moves value.
  */
 import { useCallback, useEffect, useState } from "react";
 import { isTauri } from "@tauri-apps/api/core";
@@ -19,12 +18,7 @@ import { isTauri } from "@tauri-apps/api/core";
 import type { Intent } from "@polaris/interfaces";
 import type { schedule } from "@polaris/stellar";
 
-import {
-  deviceTimeZone,
-  keeperStatus,
-  toScheduleRows,
-  type KeeperStatus,
-} from "../../lib/schedules.ts";
+import { buildScheduleForm, deviceTimeZone, toScheduleRows, type ScheduleForm } from "../../lib/schedules.ts";
 import { MOCK_SCHEDULED_TASKS, formatNextRun, type ScheduledTask } from "../../lib/mockData.ts";
 import { useTxRun, type UseTxRun } from "../../lib/useTxRun.ts";
 import type { TxRunOutcome } from "../../lib/txPipeline.ts";
@@ -84,12 +78,16 @@ export function rowsFromMock(tasks: readonly ScheduledTask[]): TaskRow[] {
 }
 
 /**
- * Which source the page uses: real data only inside Tauri with an owner
- * address; anything else is the explicit demo fallback. Pure so the rule is
- * tested without a runtime.
+ * Which source the page uses: real data inside Tauri with an owner address;
+ * inside Tauri without an owner there is no real source (an honest empty +
+ * error, never mock); outside Tauri the browser preview uses the labelled demo.
+ * Pure so the rule is tested without a runtime.
  */
-export function tasksSource(input: { inTauri: boolean; ownerAddress: string | null }): "demo" | "live" {
-  return input.inTauri && input.ownerAddress ? "live" : "demo";
+export function tasksSource(
+  input: { inTauri: boolean; ownerAddress: string | null },
+): "demo" | "live" | "unconfigured" {
+  if (!input.inTauri) return "demo";
+  return input.ownerAddress ? "live" : "unconfigured";
 }
 
 /** The `cancel_schedule` intent for a cancellable row, or `null` for demo rows. */
@@ -104,16 +102,6 @@ export function cancelIntentFor(row: TaskRow): Intent | null {
   };
 }
 
-/** Seconds until the earliest upcoming run across rows, or `null` if none. */
-function nextDueSeconds(rows: readonly TaskRow[]): number | null {
-  let earliest = Number.POSITIVE_INFINITY;
-  for (const row of rows) {
-    const ms = Date.parse(row.nextRunUtc);
-    if (Number.isFinite(ms)) earliest = Math.min(earliest, ms);
-  }
-  return Number.isFinite(earliest) ? Math.floor(earliest / 1000) : null;
-}
-
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -125,9 +113,10 @@ interface TasksLoad {
 }
 
 /**
- * Loads the list: demo fallback outside Tauri / without an owner, real
- * `listUpcoming` otherwise. Never throws — a read failure is returned as the
- * `error` so the page can show it with a Retry.
+ * Loads the list: the labelled demo outside Tauri, real `listUpcoming` inside
+ * Tauri. Never throws — a read failure (or a missing owner) is returned as the
+ * `error` so the page can show it with a Retry; mock rows never appear once a
+ * real runtime is available.
  */
 async function loadTasks(timeZone: string): Promise<TasksLoad> {
   if (!isTauri()) {
@@ -141,8 +130,8 @@ async function loadTasks(timeZone: string): Promise<TasksLoad> {
   } catch (failure) {
     return { rows: [], demo: false, error: messageOf(failure) };
   }
-  if (tasksSource({ inTauri: true, ownerAddress }) === "demo") {
-    return { rows: rowsFromMock(MOCK_SCHEDULED_TASKS), demo: true, error: null };
+  if (tasksSource({ inTauri: true, ownerAddress }) === "unconfigured") {
+    return { rows: [], demo: false, error: "POLARIS_OWNER_ADDRESS is not set" };
   }
 
   try {
@@ -161,13 +150,13 @@ export interface TasksData {
   error: string | null;
   /** True when the rows are the demo fallback, not real chain data. */
   demo: boolean;
-  /** Keeper strip facts: whether a keeper is needed and how to start one. */
-  keeper: KeeperStatus;
   timeZone: string;
   refresh: () => void;
   /** Runs the row's cancel through the shared tx pipeline; never throws. */
   cancel: (row: TaskRow) => Promise<TxRunOutcome | null>;
-  /** Short human error from the last cancel (build/approval/sign), or `null`. */
+  /** Creates a schedule through the shared tx pipeline; never throws. */
+  create: (form: ScheduleForm) => Promise<TxRunOutcome | null>;
+  /** Short human error from the last cancel/create (build/approval/sign), or `null`. */
   actionError: string | null;
   tx: UseTxRun;
 }
@@ -232,11 +221,30 @@ export function useTasksData(): TasksData {
     [run, refresh],
   );
 
-  const keeper = keeperStatus({
-    hasSchedules: rows.length > 0,
-    nextDueSeconds: nextDueSeconds(rows),
-    nowSeconds: Math.floor(Date.now() / 1000),
-  });
+  const create = useCallback(
+    async (form: ScheduleForm): Promise<TxRunOutcome | null> => {
+      setActionError(null);
+      const built = buildScheduleForm(form);
+      if (!built.ok) {
+        setActionError(built.error);
+        return null;
+      }
+      const label = `Schedule ${form.amount} ${form.asset} to ${form.recipient}`;
+      try {
+        const { scheduleChainTool } = await import("@/lib/schedulesLive");
+        const result = await scheduleChainTool(built.intent);
+        const [outcome] = await run([{ result, intent: built.intent, label }]);
+        if (outcome?.status === "submitted") refresh();
+        else setActionError(outcome?.detail ?? "The schedule was not created.");
+        return outcome ?? null;
+      } catch (failure) {
+        const detail = messageOf(failure);
+        setActionError(detail);
+        return { status: "failed", label, detail, atMs: Date.now() };
+      }
+    },
+    [run, refresh],
+  );
 
-  return { rows, loading, error, demo, keeper, timeZone, refresh, cancel, actionError, tx };
+  return { rows, loading, error, demo, timeZone, refresh, cancel, create, actionError, tx };
 }

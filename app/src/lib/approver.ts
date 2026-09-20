@@ -5,8 +5,9 @@
  * transaction's `summary`, `payloadHash` and `unsignedXdr`, shows the user what
  * they are about to authorise, and answers `{ approved }`. This module is the
  * composition-root implementation that binds that seam to the **Rust gate**
- * (W3): the XDR and its hash go to Rust, the approval card window is opened, and
- * the decision comes back from the gate — never from this module.
+ * (W3): the XDR and its hash go to Rust, the decision comes back from the gate —
+ * never from this module. Since W15g the card renders inside the notch, which
+ * picks up the `approval_request` event itself; this module opens no window.
  *
  * ## Fail-closed by construction
  *
@@ -25,9 +26,9 @@
  * begins, a listener is attached so a decision that lands between the begin and
  * the first poll is not missed; a poll of `approval_status` runs concurrently as
  * the fallback, covering a dropped event or a gate that only exposes the
- * command. The bounded wait is armed **before** the card is opened and opening
- * is fire-and-forget, so a hanging `open` can neither delay nor unbind the
- * approval. The first terminal observation wins; later ones are ignored. The
+ * command. The bounded wait is armed as soon as the request is registered, so a
+ * missed event can neither delay nor unbind the approval. The first terminal
+ * observation wins; later ones are ignored. The
  * whole wait is bounded by [`APPROVER_TIMEOUT_MS`], after which the answer is a
  * fail-closed `false`.
  *
@@ -35,7 +36,7 @@
  *
  * This module never sees a secret and never returns one. The XDR it hands to
  * Rust is the unsigned envelope; the signed envelope only exists inside Rust
- * after the wallet signs and is released on the separate `bridge_sign` path.
+ * after the wallet signs and is released on the separate `wallet_sign` path.
  * `approve()` returns only the boolean decision and the gate-assigned id, never
  * the payload.
  */
@@ -80,8 +81,6 @@ export type SubscribeApprovalEvents = (
 /** Injected shell access. Production callers use the defaults. */
 export interface ApproverDeps {
   invoke: InvokeFn;
-  /** Opens the approval card window by name. */
-  open: (name: string) => Promise<unknown>;
   /** Subscribes to approval_result events; returns the unsubscribe function. */
   subscribe: SubscribeApprovalEvents;
   /** Injectable clock/timer seam so the wait is testable without real time. */
@@ -204,14 +203,12 @@ function waitForDecision(
 export async function defaultApproverDeps(
   onStage?: (stage: PaymentStage) => void,
 ): Promise<ApproverDeps> {
-  const [{ listenPolarisEvents }, { invoke }, { openPanel }] = await Promise.all([
+  const [{ listenPolarisEvents }, { invoke }] = await Promise.all([
     import("@/lib/polaris"),
     import("@tauri-apps/api/core"),
-    import("@/lib/panels"),
   ]);
   return {
     invoke,
-    open: (name) => openPanel(name as Parameters<typeof openPanel>[0]),
     subscribe: async (handler) =>
       listenPolarisEvents((event) => {
         if (event.type === "approval_result") {
@@ -252,17 +249,12 @@ export function createTouchIdApprover(deps: ApproverDeps): IntentApprover {
         deps.invoke,
       );
 
-      // Arm the bounded wait (deadline + subscription + first poll) before the
-      // card is opened, so the listener cannot miss an early decision.
+      // Arm the bounded wait (deadline + subscription + first poll) as soon as
+      // the request is registered, so the listener cannot miss an early decision.
       const decision = waitForDecision(id, request.payloadHash, deps);
 
-      // Open the card only after the gate accepted the request, so the panel's
-      // hydration always finds something. Opening is fire-and-forget: a hanging
-      // or failed opener must never delay or unbind the wait above.
-      void deps.open("approval").catch((error: unknown) => {
-        console.warn("could not open the approval panel", error);
-      });
-
+      // The in-notch overlay hydrates itself from the gate's `approval_request`
+      // event (W15g); nothing here opens a window.
       const status = await decision;
       if (status === null) {
         webLog("error", `approval timed out after ${APPROVER_TIMEOUT_MS} ms`, true);
