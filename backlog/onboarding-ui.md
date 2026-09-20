@@ -195,3 +195,44 @@ gate was dead; and `tapEventFor` had to be handed the timestamp rather than fabr
   `capture.start(app)`, so passing page 3 natively records a real WAV. Arguably correct for
   a "now you try it" lesson, but the coordinator should decide whether first run should
   suppress it.
+
+## 7. Merge resolution — rebased onto `d864627` (main after #33 and #34)
+
+The branch was **rebased** (not merged) onto `d864627` — main carrying the
+UI-sound layer (#33) and the native first-run window plus rehearsal mode (#34).
+Four conflicts came up and were resolved like this:
+
+- **`app/src/lib/sfx.ts`** — the merge stub from §2 is **gone, not merged**: the
+  add/add conflict was resolved in main's favour, so `@/lib/sfx` is #33's real
+  module. `app/src/onboarding/sfx.ts` remains the single import site, which is
+  the reason that re-export layer existed in the first place.
+- **`app/onboarding.html` + `app/src/onboarding/main.tsx`** — **one copy, this
+  branch's**. The native worker's placeholder occupied the same two paths, so
+  the add/add pair was kept from here and the placeholder discarded.
+  `app/vite.config.ts` arrived with #34 and already lists `onboarding.html` in
+  `rollupOptions.input`, so the window is in the production build: a clean
+  `vite build` emits `dist/onboarding.html` plus its own `assets/onboarding-*.js`
+  chunk. The stale merge note at the top of `main.tsx` was replaced with that
+  fact, so nobody later reads an instruction that no longer applies.
+- **`backlog.md`** — both index rows kept (UI-SFX from #33, ONBOARDING-UI from
+  this branch), and this row's old caveat ("`app/src/lib/sfx.ts` is a merge stub
+  and `onboarding.html` still needs a `vite.config.ts` entry") was dropped
+  because it no longer describes the tree.
+- Nothing else needed a decision: the six pages, the step machine, the two
+  probes and the media touch no file #33 or #34 changed.
+
+### §6's open item is closed by #34, not by this branch
+
+Section 6 ended with *"a native Control+Option hold will start a real capture …
+the coordinator should decide whether first run should suppress it."* #34
+answered it with **rehearsal mode**: while the onboarding window is visible,
+`onboarding::is_rehearsing` makes `hotkey::apply` and `notch::tap` inert, so
+both gesture lessons are side-effect free. This side needed no change —
+`useShortcutProbe` reads the native events *and* plain DOM key events on the
+focused window, so the lessons still gate while the Rust pipeline stays silent.
+
+### Verified on the rebased branch
+
+`tsc -p tsconfig.json` clean; `npm test -w @polaris/app` **437/437**;
+`vite build` green with the onboarding entry emitted.
+
