@@ -8,6 +8,7 @@
 
 mod agent;
 mod approval;
+mod bank;
 mod biometric;
 mod bridge;
 mod capture;
@@ -107,6 +108,18 @@ pub fn run() {
             wallet::session::wallet_unlock,
             wallet::session::wallet_lock,
             wallet::session::wallet_set_auto_lock,
+            // BANK-SIM: the simulated demo bank ledger + the active anchor
+            // scenario (the webview cannot read arbitrary env).
+            bank::bank_account,
+            bank::bank_history,
+            bank::bank_debit,
+            bank::bank_credit,
+            bank::bank_settle,
+            bank::bank_refund,
+            bank::bank_reset,
+            bank::bank_set_currency,
+            bank::bank_anchor_config,
+            bank::bank_health,
         ])
         // Step W0: a panel's close button hides it instead of quitting the app
         // (the overlay's `main` window is never closed, so the close handler is
@@ -199,6 +212,11 @@ pub fn run() {
             );
             app.manage(wallet);
             app.manage(session);
+
+            // BANK-SIM: the demo bank ledger lives beside the recordings, never
+            // in the repo. It holds no secret (holder name, IBAN, amounts).
+            let bank_path = app.path().app_data_dir()?.join("bank.json");
+            app.manage(bank::BankStore::load(bank_path));
 
             // Registers the Control+Option monitor and the Control+Option+Space
             // fallback; both feed the same capture latch.

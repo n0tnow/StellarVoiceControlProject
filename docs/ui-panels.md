@@ -278,3 +278,15 @@ sequence 0), `submit.ts` (static importability only).
   panel actually runs a transaction. `docs/ui-panels.md` rules still hold: the
   digest is the XDR digest, not the tx hash; `POLARIS_ALLOW_AUTO_APPROVE` stays
   off; a denial is final.
+
+## 11. Bank on/off-ramp card (`#/anchor`, BANK-SIM)
+
+The Anchor panel's top card simulates the customer's bank and automates the loop.
+Ledger = Rust (`bank.rs`, `bank.json`, atomic, no secrets, "demo"); the webview
+uses `@/lib/bank.ts` + `@/lib/bankFlow.ts` (pure) + `@/lib/bankAnchor.ts`.
+Deposit: reserve → quote → SEP-10 → SEP-12/trustline → `startDeposit` → sandbox
+bank transfer → poll → settle. Withdraw: quote → login → prepare →
+`startWithdraw` → pay on-chain (Touch ID) → poll → credit payout once. Failure
+refunds the reservation; restart reconciles in-flight work. Amounts validated
+(min 50 fiat / min 1 token, max per the anchor order); currency follows the
+anchor's quoted fiat. Debug check: `bank.ts`.
