@@ -11,6 +11,7 @@ import {
   type ApprovalFlowState,
 } from "@/panels/approval/approvalFlow";
 import { ApprovalCard } from "@/panels/approval/ApprovalCard";
+import { BatchApprovalCard } from "@/panels/approval/BatchApprovalCard";
 import { createDemoCommands } from "@/panels/approval/demo";
 import { usePolarisEvents } from "@/panels/events";
 import { parseApprovalDemo } from "@/panels/panelRoutes";
@@ -89,8 +90,12 @@ export function ApprovalPanel() {
     const snapshot = currentSnapshot(current);
     if (snapshot === null) return;
     dispatch({ type: "approveClicked" });
-    commands
-      .authorize(snapshot.id)
+    // A batch is authorised with ONE Touch ID; the single-item card is unchanged.
+    const authorize =
+      snapshot.batch && commands.authorizeBatch
+        ? () => commands.authorizeBatch!(snapshot.id)
+        : () => commands.authorize(snapshot.id);
+    authorize()
       .then((next) => dispatch({ type: "authorizeOk", snapshot: next }))
       .catch((error: unknown) => {
         const failure = toApprovalError(error);
@@ -115,17 +120,31 @@ export function ApprovalPanel() {
       title="Approve transaction"
       subtitle="Review the exact transaction before it is signed"
     >
-      <ApprovalCard
-        stage={state.stage}
-        snapshot={currentSnapshot(state)}
-        remainingMs={remainingMs(state)}
-        hint={hintOf(state)}
-        error={errorOf(state)}
-        canApprove={canApprove(state)}
-        demo={demo !== null}
-        onApprove={onApprove}
-        onDeny={onDeny}
-      />
+      {currentSnapshot(state)?.batch ? (
+        <BatchApprovalCard
+          stage={state.stage}
+          batch={currentSnapshot(state)!.batch!}
+          remainingMs={remainingMs(state)}
+          hint={hintOf(state)}
+          error={errorOf(state)}
+          canApprove={canApprove(state)}
+          demo={demo !== null}
+          onApprove={onApprove}
+          onDeny={onDeny}
+        />
+      ) : (
+        <ApprovalCard
+          stage={state.stage}
+          snapshot={currentSnapshot(state)}
+          remainingMs={remainingMs(state)}
+          hint={hintOf(state)}
+          error={errorOf(state)}
+          canApprove={canApprove(state)}
+          demo={demo !== null}
+          onApprove={onApprove}
+          onDeny={onDeny}
+        />
+      )}
     </PanelShell>
   );
 }
