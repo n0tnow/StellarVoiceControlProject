@@ -83,8 +83,12 @@ export function MoreMenu() {
               ref={index === 0 ? firstItemRef : undefined}
               type="button"
               role="menuitem"
+              // Hover only: opening the menu focuses the first item
+              // programmatically (the effect above), so an `onFocus` cue would
+              // chirp on every open with no pointer involved, and click-through
+              // focus restoration would repeat it. A pointer actually entering
+              // an item is the discovery moment this cue is for.
               onMouseEnter={() => playSfx("hover")}
-              onFocus={() => playSfx("hover")}
               onClick={() => {
                 playSfx("select");
                 setOpen(false);
