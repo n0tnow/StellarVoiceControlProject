@@ -63,6 +63,17 @@ turn log. The mock timeline is used **only** when not running in Tauri or when
 `stellar_config` has no owner address; a failed real read shows its error with a
 Retry. The turn log stores no XDR and no secret material.
 
+## HISTORY-UI — pro History timeline
+
+`HistoryPage` now renders `notch/history/`: pure `model.ts` (rich rows, kind/status/
+route/approval, 7-decimal `bigint` signed amounts), `group.ts` (filter chips
+All/Sent/Received/Auto/P2P/Anchor/Voice with counts, search, sticky day groups,
+relative/exact time), `csv.ts` (visible-row CSV copy) and best-effort
+`p2pHistory.ts`/`anchorHistory.ts` (open offers of the active wallet; session anchor
+explain rows). Rows expand into a detail drawer; `useHistoryData` adds Horizon cursor
+pagination (20/page, 200 cap), Refresh/Load more and an offline notice. Demo/mock is
+unchanged (no Tauri or no owner). `turnLog` gained optional metadata fields.
+
 ## W10b — Wallet login + recipients (notch)
 
 `WalletPage.tsx` now drives the Rust wallet engine (feature-detected; "not in this build" falls back
