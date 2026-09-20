@@ -84,12 +84,24 @@ test("the panel gets the large presentation and every other state the strip one"
   assert.equal(facePlacementFor("some-future-state"), FACE_PLACEMENTS.strip);
 });
 
-test("the panel face is several times the strip face", () => {
-  // The whole fix for "it does not move": the library's idle layer is authored
+test("the panel face is much larger than the strip face", () => {
+  // The whole fix for the ambient layer being invisible: the library authors it
   // in viewBox units, so its amplitude in screen pixels is whatever the face is
   // multiplied by. Measured in the browser, 22px put every ambient channel
-  // between 0.24px and 0.48px — real, running, and far too small to see.
-  assert.ok(FACE_PLACEMENTS.panel.size >= 3 * FACE_PLACEMENTS.strip.size);
+  // between 0.24px and 0.48px — real, running, and far too small to see. Round 3
+  // bounds the panel face by the 128px nav column instead of the content header,
+  // so the ratio is smaller than it was at 104px but still several times the
+  // strip.
+  assert.ok(FACE_PLACEMENTS.panel.size >= 2.5 * FACE_PLACEMENTS.strip.size);
+});
+
+test("the panel placement is the nav-column size and gaze excursion", () => {
+  // Pinned so a re-tune is a deliberate edit rather than silent drift. 80px
+  // leaves 24px of shoulder inside the 128px nav column; 10 viewBox units is
+  // ~7.6px of eye travel on that face. See `faceState.ts` for the empirical
+  // limit, measured with the library's own `project` against the fitted head.
+  assert.equal(FACE_PLACEMENTS.panel.size, 80);
+  assert.equal(FACE_PLACEMENTS.panel.travel, 10);
 });
 
 test("the strip face stays inside a one-cutout-tall shell", () => {
@@ -101,16 +113,22 @@ test("the strip face stays inside a one-cutout-tall shell", () => {
 test("every placement asks for a gaze excursion the library can honour", () => {
   // `--mo-track-travel` is registered with an initial value of 0px: a placement
   // that forgot `travel` would render a face whose eyes never move, which is
-  // indistinguishable from gaze not being wired at all. The useful band is
-  // roughly 1.5-4 viewBox units; the ceiling is the eyes leaving the body.
+  // indistinguishable from gaze not being wired at all. The floor is the
+  // library's "imperceptible below ~1.5"; the ceiling is a sanity cap, not the
+  // library's generic 1.5-4 band. That band is authored for the whole roster
+  // (where `triangle`'s head is ~9 units tall); Polaris' fitted head has radius
+  // ~34 units, its eye only reaches the silhouette near travel 36, and the panel
+  // is deliberately at 10 — still ~89% of its width through `project`.
   for (const placement of Object.values(FACE_PLACEMENTS)) {
-    assert.ok(placement.travel >= 1.5 && placement.travel <= 4, String(placement.travel));
+    assert.ok(placement.travel >= 1.5 && placement.travel <= 12, String(placement.travel));
   }
 });
 
-test("the smaller face is given the wider excursion", () => {
-  // travel is in viewBox units, so it already scales with size; this is the
-  // perceptual correction on top - a 28px face needs a near-maximum excursion
-  // before tracking registers at all.
-  assert.ok(FACE_PLACEMENTS.strip.travel > FACE_PLACEMENTS.panel.travel);
+test("the interactive panel face is given the wider excursion", () => {
+  // The intent flipped in round 3. Round 2 gave the tiny strip face the wider
+  // excursion because at 28px only a near-maximum one registers. The owner then
+  // reported the panel face barely tracked, and the panel is the surface the
+  // pointer actually drives, so it now carries the excursion; the strip face
+  // keeps a calmer value and its motion comes from the pose morph.
+  assert.ok(FACE_PLACEMENTS.panel.travel > FACE_PLACEMENTS.strip.travel);
 });

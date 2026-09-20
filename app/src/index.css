@@ -284,8 +284,8 @@
  * the idle phase and the gaze position — see `BlobatarFace`), so *this* is
  * where it is moved: absolutely positioned, with every state class supplying
  * its own box. All four properties tween on the shell's own curve, so the
- * face travels between the ear and the panel header with the notch rather
- * than jumping when the state flips.
+ * face travels between the ear and the panel's nav header with the notch
+ * rather than jumping when the state flips.
  *
  * `--face-size` is set inline by the component from the tested placement
  * table, so the size cannot drift between the stylesheet and the module that
@@ -341,22 +341,33 @@
   --face-top: calc((var(--cutout-height) - var(--face-size)) / 2);
 }
 
-/* The panel: the header band at the top of the content column, left of the
-   page's own icon buttons. Anchored to the nav's fixed 128px column plus the
-   body's padding, so it lands correctly at every panel width instead of at one
-   screenshot's coordinates. */
+/* The panel: the identity mark at the top of the LEFT nav column, above
+   History / Tasks / Rules / Wallet and visible on all four pages. Centred on
+   the nav's fixed 128px column (see `.notch-panel-inner`) rather than on the
+   content column, so it never costs the page body a header band. */
 .notch.shell-panel .notch-face {
-  --face-left: 140px;
-  --face-top: calc(var(--cutout-height) + 14px);
+  --face-left: calc((128px - var(--face-size)) / 2);
+  --face-top: calc(var(--cutout-height) + 12px);
 }
 
-/* The band the panel face sits in. Reserved rather than overlaid: the face is
+/* The panel has no status strip. Its "Ready" label is a voice-state affordance
+   and in `panel` it would paint over the nav column's own header (the face).
+   `display: none` rather than `opacity: 0` so it also leaves the accessibility
+   tree, not just the view. Every other state keeps its strip exactly as it was;
+   the face is a sibling of this node, so hiding it does not touch the face. */
+.notch.shell-panel .notch-content {
+  display: none;
+}
+
+/* The nav header the face sits in. Reserved rather than overlaid: the face is
    absolutely positioned (it has to be, to survive the state change without a
-   remount), so nothing else can push the page content out from under it.
-   Derived from the face's own size so the two cannot drift; the page's toolbar
-   and rows begin just below it. */
-.notch.shell-panel .panel-body {
-  padding-top: calc(var(--face-size) + 20px);
+   remount), so nothing else can push the nav buttons out from under it.
+   Derived from the face's own size so the two cannot drift. The content
+   column is untouched: removing the old header band returns the ~124px it was
+   eating to `.panel-body`'s natural padding, so each page's toolbar and rows
+   sit where they did before the face existed. */
+.notch.shell-panel .panel-nav {
+  padding-top: calc(var(--face-size) + 28px);
 }
 
 .state-recording .prompt-voice span {
@@ -1246,7 +1257,7 @@
 
   /* The face's own loops and pose morph are already dropped by
      `blobatar/motion.css`, which honours the same query internally. This is
-     only our own travel between the ear and the panel header. */
+     only our own travel between the ear and the panel's nav header. */
   .notch-face {
     transition: none;
   }

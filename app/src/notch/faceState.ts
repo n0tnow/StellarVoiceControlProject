@@ -64,9 +64,10 @@ export interface FacePlacement {
   /**
    * The gaze excursion, in **viewBox units** — not pixels. The blobatar is 100
    * units across, so this is a *percentage of the face*: it scales with `size`
-   * on its own, and the two numbers below differ for a perceptual reason rather
-   * than a geometric one (see [`FACE_PLACEMENTS`]). The library's useful range
-   * is about 1.5–4; the ceiling is the eyes crossing the silhouette.
+   * on its own. The library documents a generic 1.5–4 band for its whole roster,
+   * but the honest ceiling for one specific face is where its eyes reach the
+   * silhouette, which for Polaris is far outside that band (see
+   * [`FACE_PLACEMENTS`] for the measured limit).
    */
   readonly travel: number;
 }
@@ -80,35 +81,52 @@ export interface FacePlacement {
  * exactly one cutout tall, ~32 px, and that is a Rust state-table value. 28 px
  * is as large as a face can be there without standing proud of the black pill.
  *
- * **`panel`** — the hover surface. The panel is 420 px tall, so the face can be
- * what it should have been all along, and it sits in the content column's
- * header band rather than in the ear.
+ * **`panel`** — the hover surface. The face is the persistent identity mark at
+ * the top of the 128 px left nav column, above History / Tasks / Rules / Wallet
+ * and visible on all four pages. 80 px is chosen against that column rather than
+ * the content body: it leaves 24 px of shoulder on each side, and the creature
+ * (whose silhouette is ~68 of the 100 viewBox units) draws ~55 px across. It is
+ * deliberately a little smaller than the 104 px content-header face it replaces,
+ * which the owner asked to move out of the content column.
  *
- * The size gap is the whole fix for "hareketsiz". The library's ambient idle
- * layer is authored in viewBox units — the bob is 1.1 units, the breathe 2.2%,
- * the saccade ~1.3 units — so its amplitude in *screen pixels* is whatever the
- * face is multiplied by. Measured in the running page at the old 22 px, the
- * entire idle layer moved between 0.24 px and 0.48 px: a sub-pixel drift eased
- * over 2.8–3.4 s, which is not "broken", it is invisible. The same numbers at
- * 104 px are 1.1–2.4 px, which reads. Nothing about the animation was ever
- * switched off (`--mo-amp` computes to `1`, `mo-always` is on the root, and all
- * seven loops are running) — it was drawn too small to see.
+ * The size gap is the fix for "hareketsiz". The library's ambient idle layer is
+ * authored in viewBox units — the bob is 1.1 units, the breathe 2.2%, the
+ * saccade ~1.3 units — so its amplitude in *screen pixels* is whatever the face
+ * is multiplied by. Measured in the running page at the old 22 px, the entire
+ * idle layer moved between 0.24 px and 0.48 px: a sub-pixel drift eased over
+ * 2.8–3.4 s, which is not "broken", it is invisible. At 80 px the same numbers
+ * are ~0.9–1.8 px, which reads. Nothing about the animation was ever switched
+ * off (`--mo-amp` computes to `1`, `mo-always` is on the root, and all seven
+ * loops are running) — it was drawn too small to see.
  *
- * `travel` is *larger* on the smaller face for the same reason, and it is the
- * one lever that does not simply follow size: a strip face has so few pixels
- * that only a near-maximum excursion registers at all, while the panel face
- * would look deranged at that amplitude and wants a calmer, more lifelike
- * pursuit. Both sit inside the documented 1.5–4 band.
+ * `travel` is the fix for "mouseye çok az bakıyor". It is in viewBox units, so
+ * it already scales with `size`; the old panel value, 2.8, put the eye ~3.75
+ * units out (2.9 px on the old 104 px face, under 2 px on an 80 px one), which
+ * reads as not tracking. It is now **10**: at 80 px that is ~7.6 px of eye
+ * travel, obvious at a glance.
  *
- * Even so, be honest about the ceiling: at 28 px a 3.6-unit excursion is about
- * 1 px. The strip face's visible motion is carried by the **pose morph** (an
- * eye-height change of 4× between `speaking` and `listening`) and by the blink,
- * not by the ambient layer, and no setting in this library changes that — there
- * is no amplitude dial, only `--mo-rate`, which is a slow-motion debugging aid.
+ * The ceiling is empirical, not the library's roster-wide 1.5–4. That band is
+ * authored for the whole roster, where `triangle`'s head is only ~9 units tall.
+ * For *this* character the fitted head is an ellipse of radius ≈34.32 × 34.07
+ * viewBox units (`_layout('polaris', …).face`), with the eye marks at
+ * (-0.37, -0.19) and (0.24, -0.19) of that radius. Feeding those through the
+ * library's own `project` turn (`yaw = travel / rx`, `pitch = travel / ry`)
+ * saturates at `LIMB` 0.97 — the pupil stops at the silhouette and foreshortens
+ * rather than leaving the head — and for this face that limb is not reached
+ * until travel ≈ 36. At travel 10 the eye has moved ~9.5 of its 34-unit radius
+ * and is still ~89% of its width: a big, clear glance with no vanishing and no
+ * clipping. `FACE_PLACEMENTS.panel` is pinned by a unit test.
+ *
+ * Even so, be honest about the other presentation's ceiling: at 28 px a 3.6-unit
+ * excursion is about 1 px. The strip face's visible motion is carried by the
+ * **pose morph** (an eye-height change of 4× between `speaking` and `listening`)
+ * and by the blink, not by the ambient layer, and no setting in this library
+ * changes that — there is no amplitude dial, only `--mo-rate`, which is a
+ * slow-motion debugging aid.
  */
 export const FACE_PLACEMENTS = {
   strip: { size: 28, travel: 3.6 },
-  panel: { size: 104, travel: 2.8 },
+  panel: { size: 80, travel: 10 },
 } as const satisfies Record<string, FacePlacement>;
 
 /**
