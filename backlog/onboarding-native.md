@@ -145,3 +145,29 @@ const).
 
 - Merge the React onboarding UI on top of this contract, then run the live Mac
   checklist above.
+
+## Review fixes applied
+
+Applied against `backlog/onboarding-native-review.md` (verdict: APPROVE WITH
+NITS; all three nits fixed).
+
+- **Finding 1 — startup `?` could brick first launch.** `lib.rs` `setup()` now
+  logs and continues on an `open_if_needed` error instead of propagating it, so
+  a transient window-server failure on a fresh install no longer prevents
+  Polaris from starting. `open_if_needed` stays fallible for the command path.
+- **Finding 2 — no label-collision tolerance on concurrent opens.**
+  `onboarding::open()` now mirrors `panels::open_spec`: the create result is
+  matched, and `WindowLabelAlreadyExists`/`WebviewLabelAlreadyExists` fall
+  through to a shared `show_and_focus(app)` helper instead of returning a
+  spurious error. Added `onboarding::tests::concurrent_create_label_collisions_are_recognized`
+  for the newly testable `is_label_collision` predicate (the race itself still
+  needs a live app to exercise).
+- **Finding 3 — poll stopped before the hide succeeds.** `hide_window()` now
+  hides first and calls `stop_permission_poll()` only after a successful hide,
+  so a failed hide cannot strand a visible window with a dead permission poll.
+  The no-window path still stops the poll, keeping the command idempotent. The
+  ordering itself is not unit-testable without a real `AppHandle`/window, so it
+  is verified by reading; `cargo test` covers the rest of the module.
+
+Verification after fixes: `cargo clippy --all-targets -- -D warnings` clean;
+`cargo test` 329 passed / 0 failed / 5 ignored (was 328; +1 new test).
