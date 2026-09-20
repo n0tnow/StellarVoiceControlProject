@@ -16,18 +16,21 @@ that as the main flow: *“approve once, the wallet signs, no web page.”*
   account index). The derived address is shown before storing; the secret never
   reaches the agent, logs, URL or localStorage, and Rust zeroizes its buffers.
 * Each seed lives in its own macOS login-Keychain item (service
-  `dev.polaris.wallet`, account `signer-<address>`). Metadata (label, address,
-  created, active) is non-secret JSON in
+  `dev.polaris.wallet`, account `signer-<address>`) — the only store by default.
+  Metadata (label, address, created, active, `store`) is non-secret JSON in
   `~/Library/Application Support/Polaris/wallets.json`. If the Keychain is
-  unavailable the service falls back to a `0600` file store and reports
-  `store: "file (testnet only)"` in status/Debug.
+  unavailable the service refuses create/import/sign with an actionable
+  `keychain` error and reports `store: "keychain unavailable"`; only with
+  `POLARIS_WALLET_ALLOW_FILE_STORE=1` does it use a `0600` file store and report
+  `store: "file (testnet only, plaintext)"`.
 * `POLARIS_SIGNER` defaults to `embedded`; `POLARIS_SIGNER=freighter` keeps the
   browser bridge as an advanced, documented option.
 
 Data-protection / biometric Keychain ACLs need entitlements an ad-hoc dev build
 lacks, so the item is a plain generic password. The first time a rebuild reads an
 item a previous build created, macOS shows its standard “Always Allow / Deny”
-prompt; denying it makes the probe fail and the file fallback take over.
+prompt; denying it makes the probe fail, so the wallet stays locked unless the
+opt-in file flag is set.
 
 ## 1.2 Command contract
 
@@ -37,7 +40,7 @@ prompt; denying it makes the probe fail and the file fallback take over.
 Touch-ID gated; `wallet_sign` consumes the approval gate's one-time id; a
 `wallet_changed` event fires whenever the active wallet changes. Failures are
 typed `{ kind, message }` (`exists`, `invalid`, `notFound`, `cancelled`,
-`keychain`, `unauthorized`).
+`keychain`, `file`, `unauthorized`).
 
 The webview client is `app/src/lib/wallet.ts`; the Debug check is
 `app/src/debug/checks/wallet.ts`. The wallet UI lives in the notch UI track.

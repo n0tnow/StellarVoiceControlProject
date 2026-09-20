@@ -31,3 +31,13 @@ Friendbot + a real testnet payment; importing a Freighter/Lobstr phrase.
 accept/repeat secrets by voice" agent rule lives in `agent/` (out of scope).
 `docs/wallet-track.md` did not exist; created one. `bridge/commands.rs` got one
 additive `signer` test-fixture field (required to compile `StellarConfig`).
+
+**Review fixes (2026-09-20, `fix/w10-review`).** Applied the L4 review: Keychain
+is now the only default store; the plaintext `0600` fallback requires
+`POLARIS_WALLET_ALLOW_FILE_STORE=1`, otherwise create/import/sign fail with an
+actionable `keychain` error and status shows `keychain unavailable`; per-account
+`store: "keychain" | "file"` stops orphaned seeds when availability flips;
+`wallet_sign` refuses when the active account changed; owner override only with
+`embedded`; one shared signer resolver; Debug warns on non-Keychain stores;
+zeroize/temp-0600/label/Debug-redaction NITs fixed. `cargo test` 362/0/5-ignored,
+clippy clean; app 385/0, agent 190/0, check/build green — `backlog/w10-review-fixes.md`.
