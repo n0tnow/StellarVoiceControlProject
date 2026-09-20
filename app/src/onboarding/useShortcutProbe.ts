@@ -66,7 +66,7 @@ import type { UnlistenFn } from "@tauri-apps/api/event";
 // `node --test`, which resolves imports itself and knows nothing about the
 // `@/` alias Vite and tsc share. Every module a node test can reach has to be
 // importable by Node on its own — the same reason `lib/useTxRun.ts` does this.
-import { listenNotchHotkey } from "../notch/shellBridge.ts";
+import { listenNotchHotkey, listenNotchHover } from "../notch/shellBridge.ts";
 import { listenPolarisEvents } from "../lib/polaris.ts";
 
 /* ------------------------------------------------------------------ *
@@ -400,4 +400,52 @@ export function useDoubleControlProbe(onPass: () => void, active: boolean): void
       window.removeEventListener("blur", onBlur);
     };
   }, [active]);
+}
+
+/**
+ * Watches for a real hover of the notch — opportunistically, never as a gate.
+ *
+ * ## Why this one cannot be a gate, with the evidence
+ *
+ * Hover is observed by a `mouseMoved` monitor pair in
+ * `app/src-tauri/src/notch/hover.rs`, shaped exactly like the keyboard pair. The
+ * symmetry is where the reasoning usually stops, and it is wrong here, because
+ * mouse events and key events are delivered by completely different rules:
+ *
+ * * The **global** monitor is paused while Polaris is the active application.
+ *   That is not inference — `notch.rs::hover_health` reports it as a diagnostic
+ *   in plain words ("Polaris is the active app, so macOS pauses the global mouse
+ *   monitor; close the open panel to restore hover"), and `lib.rs` resigns
+ *   active when the last panel closes *specifically* to bring hover back. The
+ *   onboarding window is focusable and will be frontmost, so it puts the app in
+ *   exactly that state.
+ * * The **local** monitor only sees events delivered to one of our own windows.
+ *   The notch overlay is `set_ignore_cursor_events(true)` — hover.rs' own header
+ *   opens by saying CSS `:hover` can never fire there — so a cursor over the
+ *   notch is not delivered to us at all, and the onboarding card is 900x640 in
+ *   the middle of the screen, nowhere near it.
+ *
+ * Both halves of the pair are therefore blind at once, and `notch_hover` cannot
+ * be expected to arrive. A step gated on it would be unpassable, which is the
+ * one outcome a first-run window must never ship — so `notch` is not in
+ * `GATED_STEPS` and the page teaches by illustration instead.
+ *
+ * This hook exists anyway because the cost is one subscription and the payoff is
+ * real: if the Rust side ever gains a local monitor that covers this case (see
+ * the hand-off note in `backlog/onboarding-ui.md`), or if the user hovers the
+ * notch in some state we have not predicted, the page notices and says so. It
+ * can only ever add a confirmation, never withhold one.
+ */
+export function useNotchHoverProbe(onHover: () => void, active: boolean): void {
+  const passRef = useRef(onHover);
+  passRef.current = onHover;
+
+  useTauriSubscription(
+    () =>
+      listenNotchHover((inside) => {
+        if (inside) passRef.current();
+      }),
+    active,
+    "notch hover events",
+  );
 }
