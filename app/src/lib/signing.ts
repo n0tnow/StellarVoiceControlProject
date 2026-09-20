@@ -180,8 +180,8 @@ export async function signAndSubmit(
       outcome,
       "Approval required",
       "this payment has no gate-registered approval, so it cannot be signed " +
-        "(automatic payments are not available yet — approve it via the card, " +
-        "or lower the amount)",
+        "(automatic payments are not available yet — approve it via the " +
+        "approval card, or lower the amount)",
     );
   }
 
