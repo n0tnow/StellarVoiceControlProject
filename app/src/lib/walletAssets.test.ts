@@ -7,6 +7,7 @@ import {
   formatReserved,
   formatStellarAmount,
   mapAccountDetail,
+  requestFriendbotFund,
   reservedTenths,
   shortIssuer,
   sortAccountBalances,
@@ -89,4 +90,28 @@ test("a 404 is an unfunded account and a failure is offline", async () => {
   });
   assert.equal(offline.status, "offline");
   if (offline.status === "offline") assert.match(offline.message, /timeout/);
+});
+
+test("Friendbot funding calls the faucet in-process with the public address", async () => {
+  const calls: string[] = [];
+  const ok = await requestFriendbotFund("GABC", {
+    endpoint: "https://friendbot.test/",
+    fetchImpl: (url) => {
+      calls.push(String(url));
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({}) });
+    },
+  });
+  assert.equal(ok.status, "ok");
+  assert.deepEqual(calls, ["https://friendbot.test/?addr=GABC"]);
+
+  const failed = await requestFriendbotFund("GABC", {
+    fetchImpl: () => Promise.resolve({ ok: false, status: 503, json: () => Promise.resolve({}) }),
+  });
+  assert.equal(failed.status, "failed");
+
+  const unreachable = await requestFriendbotFund("GABC", {
+    fetchImpl: () => Promise.reject(new Error("timeout")),
+  });
+  assert.equal(unreachable.status, "failed");
+  if (unreachable.status === "failed") assert.match(unreachable.message, /timeout/);
 });
