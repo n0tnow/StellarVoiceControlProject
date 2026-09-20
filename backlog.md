@@ -10,8 +10,13 @@
 
 ## Open Tasks
 
+> Most rows below were merged into `integration/wallet-login` and are pending final review/merge
+> to `main`; the genuinely open items are listed in `sprints.md` **Milestone 5**. Rows are not
+> rewritten (history).
+
 | Date | Task | Worker/Agent | Status | Report | Priority |
 |---|---|---|---|---|---|
+| 2026-09-20 | **DOCS-FINAL — bring README / sprints / backlog / demo docs in line with the current product** (SHORT): README status/setup; `sprints.md` Milestone 5 summary + superseded V/C/A rows; `docs/wallet-track.md` design record (session/autonomy/anchor); `docs/demo-script.md` + `docs/pitch.md` rewritten; `contracts/DEPLOYED.md` escrow-review limitations; `docs/reviews/` archive; branch `docs/final-sync` | opencode worker (deepseek-v4.1-flash) | open (review) | `backlog/docs-final-sync.md` | P1 |
 | 2026-09-20 | **MERGE-FINAL — merge `feat/w11a-executor-rust`, `feat/w11b-autopay-ui`, `chore/remove-freighter-bridge` into `integration/wallet-login`**: `lib.rs` union once (bank + executor + approval batch, no `bridge_*`), `approval.rs` doc / `RulesPage.tsx` / `package.json` / Cargo.lock resolved; check/app 416/agent 213/stellar 1044/build/cargo 364/clippy green, `git grep bridge_sign` empty in code/lockfiles, `e2e:autopay OK`; committed not pushed | opencode worker (deepseek-v4.1-flash) | open (review) | `backlog/w12-remove-freighter.md` | P0 |
 | 2026-09-20 | **W12 — remove the Freighter bridge**: deleted the Rust loopback server/launcher + `bridge_*` commands + `tiny_http`, the bridge page/`app/src/bridge`/Wallets Kit dep/fixture/docs, and the `POLARIS_SIGNER`/`bridge_sign` branches; kept `verify.rs`/`strkey.rs` + a new `bridge/outcome.rs`; check/app 396/agent 213/stellar 112/build/cargo 348/clippy green, no wallets-kit chunk in `dist` | opencode worker (deepseek-v4.1-flash) | open (review) | `backlog/w12-remove-freighter.md` | P0 |
 | 2026-09-20 | **MERGE-BANK — merge `feat/bank-sim-automation` into `integration/wallet-login`**: resolved `lib.rs` (both command lists + setup blocks once), `backlog.md`/`sprints.md` unions; deposit/withdraw route to `runBankIntent` behind the wallet session gate + Touch ID pipeline; SEP-10 challenge via `wallet_sign_challenge`, no Freighter in new paths; check clean, app 431/0, agent 213/0, stellar 970/0, build OK, cargo 386/0/5-ignored, clippy clean | opencode worker (deepseek-v4.1-flash) | open (review) | `backlog/bank-sim.md` | P0 |
