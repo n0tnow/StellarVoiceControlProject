@@ -2,6 +2,7 @@ import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { PanelShell } from "@/panels/PanelShell";
+import { BankSection } from "@/panels/anchor/BankSection";
 import { useAnchorFlow } from "@/panels/anchor/useAnchorFlow";
 import {
   ANCHOR_STEPS,
@@ -49,6 +50,8 @@ export function AnchorPanel() {
   return (
     <PanelShell title="Anchor" subtitle="Deposit and withdraw via an anchor (testnet)">
       <div className="space-y-4 text-xs">
+        <BankSection />
+
         <section className="rounded-lg border border-polaris-line bg-polaris-panel/60 px-3 py-2">
           <div className="flex items-center justify-between gap-2">
             <span className="font-semibold text-polaris-text">SEP-1 discovery</span>

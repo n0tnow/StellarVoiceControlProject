@@ -152,7 +152,12 @@ async function ensurePaymentsConfigured(): Promise<void> {
     // wallet-only Rust command and everything else to the Touch ID pipeline.
     const { anchor } = await import("@polaris/stellar");
     const { createAnchorSigner } = await import("@/lib/anchor");
-    anchor.configureAnchor({ signer: createAnchorSigner() });
+    // BANK-SIM: the anchor scenario is selectable via POLARIS_ANCHOR_HOME_DOMAIN
+    // (read in Rust; default the SDF test anchor). Keeps the voice and panel
+    // flows on the same home domain.
+    const { getBankAnchorConfig } = await import("@/lib/bank");
+    const anchorConfig = await getBankAnchorConfig();
+    anchor.configureAnchor({ signer: createAnchorSigner(), homeDomain: anchorConfig.homeDomain });
     configured = true;
   })();
   try {
@@ -226,8 +231,10 @@ export async function executeApprovedIntent(
   // signed wallet-only and every value-moving step goes through the Touch ID
   // pipeline. This also keeps a sequence-0 challenge out of `bridge_sign`.
   if (intent.kind === "deposit" || intent.kind === "withdraw") {
-    const { runAnchorIntent } = await import("@/lib/anchor");
-    return runAnchorIntent(intent);
+    // BANK-SIM: deposit/withdraw now drive the demo bank ↔ anchor automation,
+    // which includes the on-chain steps (through the same Touch ID pipeline).
+    const { runBankIntent } = await import("@/lib/bankAnchor");
+    return runBankIntent(intent);
   }
   const chainTools = {
     send: sendPayment,

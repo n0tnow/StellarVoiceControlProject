@@ -8,6 +8,7 @@
 
 mod agent;
 mod approval;
+mod bank;
 mod biometric;
 mod bridge;
 mod capture;
@@ -82,6 +83,18 @@ pub fn run() {
             bridge::commands::bridge_health,
             bridge::commands::bridge_sign_challenge,
             bridge::commands::anchor_signing_health,
+            // BANK-SIM: the simulated demo bank ledger + the active anchor
+            // scenario (the webview cannot read arbitrary env).
+            bank::bank_account,
+            bank::bank_history,
+            bank::bank_debit,
+            bank::bank_credit,
+            bank::bank_settle,
+            bank::bank_refund,
+            bank::bank_reset,
+            bank::bank_set_currency,
+            bank::bank_anchor_config,
+            bank::bank_health,
         ])
         // Step W0: a panel's close button hides it instead of quitting the app
         // (the overlay's `main` window is never closed, so the close handler is
@@ -153,6 +166,11 @@ pub fn run() {
             // Managed as a trait object so tests can install a fake and never
             // open a real browser.
             app.manage(bridge::commands::system_launcher());
+
+            // BANK-SIM: the demo bank ledger lives beside the recordings, never
+            // in the repo. It holds no secret (holder name, IBAN, amounts).
+            let bank_path = app.path().app_data_dir()?.join("bank.json");
+            app.manage(bank::BankStore::load(bank_path));
 
             // Registers the Control+Option monitor and the Control+Option+Space
             // fallback; both feed the same capture latch.
