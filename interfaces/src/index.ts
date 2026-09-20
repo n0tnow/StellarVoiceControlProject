@@ -106,26 +106,86 @@ export interface CaptureStatus {
 }
 
 /**
- * The notch shell's dimensions and corner radii in AppKit **points** (not
- * CSS-relative units), so the webview never has to guess the physical notch.
- * The radii are derived on the Rust side from the measured safe area rather
- * than hardcoded in CSS. On a display without a notch the Rust side returns a
- * centred-pill fallback.
+ * One named shell state, already resolved against the display. Width/height and
+ * radii are concrete AppKit points and `interactive` says whether the native
+ * window should accept mouse clicks in this state. The list and order come from
+ * the single Rust table (`notch::SHELL_STATES`); the webview never derives
+ * geometry itself.
  */
-export interface NotchGeometry {
-  idleWidth: number;
-  idleHeight: number;
-  expandedWidth: number;
-  expandedHeight: number;
-  /** Convex radius of the resting pill's top corners (hardware cutout, ~4 pt). */
-  pillTopRadius: number;
-  /** Convex radius of the resting pill's bottom corners (hardware cutout, ~8 pt). */
-  pillBottomRadius: number;
-  /** Concave "ear" radius where the expanded shell melts into the screen edge. */
-  shellEarRadius: number;
-  /** Convex radius of the expanded shell's bottom corners. */
-  shellBottomRadius: number;
+export interface ShellStateGeometry {
+  /**
+   * `"collapsed" | "compact" | "prompt" | "panel"` today; new names are added
+   * in Rust.
+   */
+  name: string;
+  width: number;
+  height: number;
+  /** Does the native window accept mouse clicks in this state? */
+  interactive: boolean;
+  /**
+   * Does the native window accept keyboard input in this state? Only the typed
+   * `prompt` state is focusable; the overlay must never steal focus while
+   * push-to-talk is idle. The native flag has a single writer in Rust.
+   */
+  focusable: boolean;
+  /**
+   * Content-driven states (`prompt`) may resize between these two heights; the
+   * webview reports its measured content and Rust clamps. Equal to `height` for
+   * fixed states.
+   */
+  minHeight: number;
+  maxHeight: number;
+  /** Top-left/top-right convex radius (0 for grown states: their ears own it). */
+  topRadius: number;
+  /** Bottom convex radius. */
+  bottomRadius: number;
+  /** Concave "ear" radius that melts the shell into the screen edge. */
+  earRadius: number;
 }
+
+/** The measured display the states were resolved against. */
+export interface NotchMetrics {
+  cutoutWidth: number;
+  cutoutHeight: number;
+  screenWidth: number;
+  screenHeight: number;
+  /** Centre of the measured cutout, in points from the screen's left edge. */
+  cutoutCenterX: number;
+  /** `NSScreen.safeAreaInsets().top` — the menu-bar/notch inset. */
+  safeTop: number;
+}
+
+/**
+ * Everything the shell needs to render, in AppKit **points** (not CSS-relative
+ * units), so the webview never has to guess the physical notch. The radii are
+ * derived on the Rust side from the measured safe area rather than hardcoded in
+ * CSS. On a display without a notch the Rust side returns a centred-pill
+ * fallback. Replaces step A0's flat two-state `NotchGeometry`.
+ */
+export interface ShellGeometry {
+  states: ShellStateGeometry[];
+  notch: NotchMetrics;
+}
+
+/**
+ * Pre-first-command placeholder only: the webview renders one frame before
+ * `notch_geometry` resolves, and the OS window is already sized/positioned by
+ * Rust. Deliberately carries **no state rows**: the state list is owned by the
+ * Rust `SHELL_STATES` table, so enumerating it here would make adding a state a
+ * second edit and break the "one table row" promise. The shell simply renders
+ * nothing until the first `notch_geometry` resolves.
+ */
+export const FALLBACK_SHELL_GEOMETRY: ShellGeometry = {
+  states: [],
+  notch: {
+    cutoutWidth: 216,
+    cutoutHeight: 34,
+    screenWidth: 1512,
+    screenHeight: 982,
+    cutoutCenterX: 756,
+    safeTop: 34,
+  },
+};
 
 /* ------------------------------------------------------------------ *
  * 5. Status / event stream for the UI

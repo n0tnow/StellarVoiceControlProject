@@ -16,8 +16,8 @@
       {
         "label": "main",
         "title": "Polaris",
-        "width": 780,
-        "height": 120,
+        "width": 900,
+        "height": 520,
         "resizable": false,
         "fullscreen": false,
         "decorations": false,

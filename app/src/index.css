@@ -59,6 +59,23 @@
   }
 }
 
+/* Visually hidden, still read by assistive tech. Defined here rather than
+   relying on Tailwind's `sr-only` utility, which is not emitted because this
+   design uses almost no utility classes — without it the live-region sentence
+   was painted on screen. Unlayered, so it wins over any generated utility. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 /* ------------------------------------------------------------------ *
  * Notch overlay shell
  * ------------------------------------------------------------------ */
@@ -73,67 +90,76 @@
   pointer-events: none;
 }
 
-/* Registered so the concave "ear" radius can be transitioned: the pseudo
-   elements below inherit it, so their box and their gradient radius animate in
-   lockstep instead of popping in at the end of the expansion. */
-@property --ear {
+/* Registered so the concave "ear" radius has a typed initial value: the pseudo
+   elements below inherit it, so their box and their gradient radius stay in
+   lockstep. */
+@property --shell-ear {
   syntax: "<length>";
   inherits: true;
   initial-value: 0px;
 }
 
 .notch {
-  /* Resting pill: the measured hardware cutout. Its top corners are tighter
-     than its bottom corners (notchbay.com measures ~4 pt vs ~8 pt), and every
-     radius arrives from Rust through the custom properties below. */
-  --ear: var(--shell-ear-radius);
+  /* Every dimension below arrives from Rust through a custom property set on
+     this element (`ShellSurface` maps `ShellGeometry.states[applied]` onto
+     `--shell-*`). The class name only selects which state's values are in
+     play, so adding a state is a Rust table row, not new CSS geometry. */
   --shell-motion: 470ms;
   --shell-ease: cubic-bezier(0.32, 0.72, 0, 1);
-  --top-radius: var(--pill-top-radius);
-  --bottom-radius: var(--pill-bottom-radius);
   position: relative;
   flex-shrink: 0;
-  width: var(--idle-width);
-  height: var(--idle-height);
+  width: var(--shell-width);
+  height: var(--shell-height);
   background: #000;
-  border-radius: var(--top-radius) var(--top-radius) var(--bottom-radius)
-    var(--bottom-radius);
-  /* Horizontal-only expansion. The width (and the radii/ears that ride with it)
-     uses the spring curve; the height is deliberately NOT transitioned.
-     Animating the 32 -> 66 pt height over the same 300 ms is what made the shell
-     read as "inflating"; snapping it on the first frame — while `.notch-stage`
-     keeps the shell top-anchored — leaves the perceived motion purely
-     left/right. A <= 80 ms height tween was the alternative, rejected because a
-     visible vertical pop still reads as growth at these sizes. */
-  /* One curve, one duration, both directions — opening and closing must feel
-     the same. `--ear` is deliberately NOT animated: it drives the radial
-     gradients on the pseudo-elements, and interpolating a gradient stop forces
-     a full repaint of both of them on every frame, which is what made the
-     expansion stutter. The ears keep a fixed size and fade instead, which the
-     compositor can do on the GPU. */
+  border-radius: var(--shell-top-radius) var(--shell-top-radius)
+    var(--shell-bottom-radius) var(--shell-bottom-radius);
+  /* BUG-2: the voice strip (`collapsed` <-> `compact`) uses main's animation
+     **verbatim** — width and border-radius on one spring curve, and the height
+     is deliberately NOT transitioned. Main sized the strip at the cutout height
+     and snapped it on the first frame so the perceived motion stayed purely
+     left/right; the state table keeps `collapsed` and `compact` the same height,
+     so this is the same motion with the same properties, duration and easing.
+     `--shell-ear` is not transitioned either: it drives the radial gradients on
+     the pseudo-elements, and interpolating a gradient stop forces a full repaint
+     of both on every frame. The ears keep a fixed size and fade instead, which
+     the compositor does on the GPU. */
   will-change: width;
   transition:
     width var(--shell-motion) var(--shell-ease),
     border-radius var(--shell-motion) var(--shell-ease);
 }
 
+/* The new, downward-growing states (the folded prompt, the future menus) add the
+   height tween on top of the voice-strip transition. Scoped to them so the voice
+   strip rule above stays main's word for word; the additions do not change how
+   the voice animation looks or times. */
+.notch.shell-panel,
+.notch.shell-prompt {
+  will-change: width, height;
+  transition:
+    width var(--shell-motion) var(--shell-ease),
+    height var(--shell-motion) var(--shell-ease),
+    border-radius var(--shell-motion) var(--shell-ease);
+}
+
 /* The transparent quarter circles preserve the screen behind the concave
    shoulders. Both pseudo-elements sit in the screen above the shell's top edge,
-   so they must stay visually outside the black body. `--ear` is 0 while idle,
-   which is exactly what lets the resting shape coincide with the cutout. */
+   so they must stay visually outside the black body. While collapsed they are
+   transparent, which is exactly what lets the resting shape coincide with the
+   cutout. */
 .notch::before,
 .notch::after {
   content: "";
   position: absolute;
   top: 0;
-  width: var(--ear);
-  height: var(--ear);
+  width: var(--shell-ear);
+  height: var(--shell-ear);
   opacity: 0;
   transition: opacity var(--shell-motion) var(--shell-ease);
 }
 
-.notch.is-expanded::before,
-.notch.is-expanded::after {
+.notch:not(.shell-collapsed)::before,
+.notch:not(.shell-collapsed)::after {
   opacity: 1;
 }
 
@@ -141,8 +167,8 @@
   right: 100%;
   background: radial-gradient(
     circle at 0 100%,
-    transparent calc(var(--ear) - 0.5px),
-    #000 var(--ear)
+    transparent calc(var(--shell-ear) - 0.5px),
+    #000 var(--shell-ear)
   );
 }
 
@@ -150,25 +176,13 @@
   left: 100%;
   background: radial-gradient(
     circle at 100% 100%,
-    transparent calc(var(--ear) - 0.5px),
-    #000 var(--ear)
+    transparent calc(var(--shell-ear) - 0.5px),
+    #000 var(--shell-ear)
   );
 }
 
-.notch.is-expanded {
-  /* The shell grows out of the cutout: the top edge stays flush with the screen
-     edge through the concave ears, while the convex bottom corners loosen. */
-  --top-radius: 0px;
-  --bottom-radius: var(--shell-bottom-radius);
-  width: var(--expanded-width);
-  height: var(--expanded-height);
-}
-
 .notch-content {
-  height: var(--expanded-height);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
+  height: var(--cutout-height);
   position: relative;
   overflow: hidden;
   border-radius: inherit;
@@ -177,7 +191,7 @@
      empty spacer exactly as wide as the resting pill. Nothing may ever be
      placed there — it would simply not be displayed. */
   display: grid;
-  grid-template-columns: 1fr var(--idle-width) 1fr;
+  grid-template-columns: 1fr var(--cutout-width) 1fr;
   align-items: center;
   padding: 0 18px;
   opacity: 0;
@@ -187,7 +201,7 @@
 
 /* The copy rides the same curve as the shell in both directions, so the close
    does not snap while the open eases. */
-.is-expanded .notch-content {
+.notch:not(.shell-collapsed) .notch-content {
   opacity: 1;
 }
 
@@ -295,15 +309,18 @@
   box-shadow: 0 0 12px #f05adc70;
 }
 
-.state-recording .notch-indicator span {
+.state-recording .notch-indicator span,
+.state-recording .prompt-voice span {
   animation: listen 850ms ease-in-out infinite alternate;
 }
 
-.state-recording .notch-indicator span:nth-child(2) {
+.state-recording .notch-indicator span:nth-child(2),
+.state-recording .prompt-voice span:nth-child(2) {
   animation-delay: -300ms;
 }
 
-.state-recording .notch-indicator span:nth-child(3) {
+.state-recording .notch-indicator span:nth-child(3),
+.state-recording .prompt-voice span:nth-child(3) {
   animation-delay: -550ms;
 }
 
@@ -314,24 +331,30 @@
    rule so the two states cannot drift apart. (A9 dropped the `checking` state:
    the intent-validation step is synchronous and unreadable.) */
 .state-transcribing .notch-indicator span,
-.state-speaking .notch-indicator span {
+.state-transcribing .prompt-voice span,
+.state-speaking .notch-indicator span,
+.state-speaking .prompt-voice span {
   animation: listen 1150ms ease-in-out infinite alternate;
 }
 
 .state-transcribing .notch-indicator span:nth-child(2),
-.state-speaking .notch-indicator span:nth-child(2) {
+.state-transcribing .prompt-voice span:nth-child(2),
+.state-speaking .notch-indicator span:nth-child(2),
+.state-speaking .prompt-voice span:nth-child(2) {
   animation-delay: -380ms;
 }
 
 .state-transcribing .notch-indicator span:nth-child(3),
-.state-speaking .notch-indicator span:nth-child(3) {
+.state-transcribing .prompt-voice span:nth-child(3),
+.state-speaking .notch-indicator span:nth-child(3),
+.state-speaking .prompt-voice span:nth-child(3) {
   animation-delay: -700ms;
 }
 
-/* The error state must never add height: the shell is `--expanded-height` in
-   every expanded state, error included. The message shares the existing
-   `notch-detail` line — truncating with an ellipsis — and the retry hint stays
-   pinned as a non-shrinking suffix instead of stacking a second row. */
+/* The error state carries no height of its own: it renders inside whatever
+   named state is active (step A5), and the message shares the existing
+   `notch-detail` line — truncating with an ellipsis — while the retry hint
+   stays pinned as a non-shrinking suffix instead of stacking a second row. */
 .notch-detail-error {
   display: flex;
   align-items: baseline;
@@ -356,6 +379,225 @@
   background: #ffb0c5;
 }
 
+/* Placeholder panel body (step A5). It fills everything below the top strip so
+   future menus have the full panel; only the panel state shows it. Pointer
+   events are re-enabled for the body while `shell-panel` is the interactive
+   state, so a future menu is clickable even though the window starts
+   click-through. */
+.notch-panel {
+  position: absolute;
+  top: var(--cutout-height);
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 20px;
+  border-radius: 0 0 var(--shell-bottom-radius) var(--shell-bottom-radius);
+  opacity: 0;
+  transition: opacity var(--shell-motion) var(--shell-ease);
+  pointer-events: none;
+}
+
+.notch.shell-panel .notch-panel {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.notch-panel-placeholder {
+  margin: 0;
+  padding: 14px 18px;
+  width: 100%;
+  max-width: 380px;
+  border: 1px dashed #3b3b45;
+  border-radius: 12px;
+  color: var(--color-notch-muted);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-align: center;
+}
+
+/* Folded A6 typed prompt (step A5-fold).
+   The prompt is the notch itself, grown just enough for a text row — not a
+   sheet, so there is deliberately no backdrop, drop shadow or own card radius
+   here: the shell's background and `--shell-bottom-radius` carry it. Everything
+   is scoped under `.notch-prompt`, which only exists while the prompt state is
+   applied, so nothing can bleed into the resting pill. */
+.notch-prompt {
+  position: absolute;
+  /* Anchored to `safe_top`, not the strip height: no prompt pixel may ever be
+     drawn behind the camera housing. */
+  top: var(--safe-top);
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 0 16px 12px;
+  border-radius: 0 0 var(--shell-bottom-radius) var(--shell-bottom-radius);
+  /* The shell is content-sized up to its maximum; past that, the area below the
+     top inset scrolls instead of the window growing further. The body is
+     measured unclamped and Rust clamps the requested shell height. */
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: #ffffff24 transparent;
+  overscroll-behavior: contain;
+  pointer-events: auto;
+  color: var(--color-notch-text);
+  font-size: 13px;
+}
+
+.notch-prompt-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  /* Grows to its natural height; the scroll cap lives on `.notch-prompt`. */
+  flex: none;
+}
+
+/* The whole prompt is one surface: a single text row with its glyphs at the
+   right. There is no card, border, background or radius inside the shell. */
+.notch-prompt .prompt-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+}
+
+.notch-prompt .prompt-field {
+  flex: 1;
+  min-width: 0;
+  min-height: 22px;
+  max-height: 140px;
+  padding: 0;
+  border: none;
+  outline: none;
+  resize: none;
+  overflow-y: auto;
+  background: transparent;
+  color: var(--color-notch-text);
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 22px;
+  scrollbar-width: thin;
+  scrollbar-color: #ffffff24 transparent;
+}
+
+.notch-prompt .prompt-field::placeholder {
+  color: #8a8691;
+}
+
+/* The send and speaker affordances share one small, low-contrast treatment.
+   The send glyph only exists once there is text; the speaker is always present
+   and shows its on/off state through shape and opacity. */
+.notch-prompt .prompt-send,
+.notch-prompt .prompt-speaker {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--color-notch-muted);
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.5;
+  transition: opacity 160ms ease, color 160ms ease;
+}
+
+.notch-prompt .prompt-send:hover:not(:disabled),
+.notch-prompt .prompt-speaker:hover {
+  opacity: 1;
+  color: var(--color-notch-text);
+}
+
+.notch-prompt .prompt-send:disabled {
+  cursor: default;
+}
+
+.notch-prompt .prompt-speaker.is-on {
+  opacity: 0.85;
+  color: var(--color-notch-text);
+}
+
+.notch-prompt .prompt-send svg,
+.notch-prompt .prompt-speaker svg {
+  display: block;
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Co-active voice turn: while the prompt is applied a voice turn can still be
+   running, so its stage rides here — three small bars at the right end of the
+   input row, the same corner as the speaker glyph. They are the strip's bars
+   (same accent, glow and `listen` animation) at the prompt's own scale; the
+   `state-*` rules further down drive them, so the two surfaces can never drift.
+   The element is not rendered when no turn is live. */
+.notch-prompt .prompt-voice {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  gap: 3px;
+  width: 15px;
+  height: 22px;
+}
+
+.notch-prompt .prompt-voice span {
+  width: 3px;
+  height: 3px;
+  border-radius: 3px;
+  background: var(--color-notch-accent);
+  box-shadow: 0 0 8px #f05adc66;
+}
+
+/* The answer is separated from the input row by the shell's own spacing plus
+   one hairline; there is no second card. */
+.notch-prompt .prompt-answer {
+  padding-top: 10px;
+  border-top: 1px solid #ffffff12;
+  color: var(--color-notch-text);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.notch-prompt .prompt-thinking {
+  margin: 0;
+  color: var(--color-notch-muted);
+}
+
+.notch-prompt .prompt-text {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.notch-prompt .prompt-intent {
+  margin: 0 0 4px;
+  color: var(--color-notch-muted);
+  font-size: 12px;
+}
+
+/* One compact muted line; overflow ellipsises and the full text stays in the
+   element's `title`. */
+.notch-prompt .prompt-error {
+  margin: 0;
+  color: var(--color-notch-muted);
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 @keyframes listen {
   from {
     transform: scaleY(1);
@@ -368,7 +610,10 @@
 /* Accessibility: keep the state change, drop the motion. */
 @media (prefers-reduced-motion: reduce) {
   .notch,
-  .notch-content {
+  .notch::before,
+  .notch::after,
+  .notch-content,
+  .notch-panel {
     transition: none;
   }
 
@@ -378,9 +623,17 @@
   }
 
   .state-recording .notch-indicator span,
+  .state-recording .prompt-voice span,
   .state-transcribing .notch-indicator span,
-  .state-speaking .notch-indicator span {
+  .state-transcribing .prompt-voice span,
+  .state-speaking .notch-indicator span,
+  .state-speaking .prompt-voice span {
     animation: none;
+  }
+
+  .notch-prompt .prompt-send,
+  .notch-prompt .prompt-speaker {
+    transition: none;
   }
 }
 

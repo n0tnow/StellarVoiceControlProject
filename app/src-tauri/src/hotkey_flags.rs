@@ -2,11 +2,18 @@
 //!
 //! The key-code shortcut API cannot express "hold both modifiers and release
 //! either". That gesture is only visible as `NSEventTypeFlagsChanged`, so this
-//! module installs a process-global `flagsChanged` monitor pair — a **global**
-//! monitor for events delivered to other apps and a **local** monitor for
-//! events delivered to our own — and forwards each masked sample over a
-//! channel. The channel keeps the AppKit callback minimal: no state machine,
-//! no capture, no locks beyond the send.
+//! module installs a process-global monitor pair — a **global** monitor for
+//! events delivered to other apps and a **local** monitor for events delivered
+//! to our own — and forwards each masked sample over a channel. The channel
+//! keeps the AppKit callback minimal: no state machine, no capture, no locks
+//! beyond the send.
+//!
+//! Each monitor also covers `NSEventMask::KeyDown` next to `FlagsChanged`. A
+//! `flagsChanged` sample cannot see an ordinary key press, so step A6's
+//! double-Control detector would read `Ctrl+C` (or tmux's `Ctrl+B`) as a bare
+//! Control tap; the ordered key-down observation is what lets it tell an
+//! ordinary Control chord from a deliberate tap. Key-downs are only *observed*
+//! and never swallowed, so ordinary typing is unaffected.
 //!
 //! Everything here is macOS-only; the non-macOS stub keeps the crate building
 //! on other hosts (where the app is not shipped).
@@ -26,6 +33,108 @@
 //! (`AXIsProcessTrusted`); the local monitor does not. See
 //! `docs/reports/2026-09-19-modifier-only-hotkey.md` §4.
 
+use std::sync::{Arc, Mutex};
+
+use crate::gesture::ModifierSample;
+
+/// Extra, permanent sample observers, fed every masked `flagsChanged` sample
+/// next to the push-to-talk driver.
+///
+/// Step A6's double-Control prompt detector needs the same events as the
+/// Control+Option latch but must not disturb it. Rather than register a second
+/// AppKit monitor (the object returned by `add*Monitor…` *is* the
+/// subscription), the one monitor pair fans out to every observer here. The
+/// hotkey driver keeps using its own channel; these are additive and never
+/// change the gesture's semantics.
+type SampleObserver = Arc<dyn Fn(ModifierSample) + Send + Sync + 'static>;
+
+/// Permanent key-down observers, fed once per non-modifier `keyDown`.
+///
+/// A `flagsChanged` sample cannot see an ordinary key press. Step A6's double
+/// Control detector would read two quick `Ctrl+C` chords as two bare taps
+/// without this ordered signal (see [`crate::ctrl_tap`]).
+type KeyObserver = Arc<dyn Fn() + Send + Sync + 'static>;
+
+/// Per-observer registries. Each observer is itself an `Arc`, so the
+/// notification path can clone the list under the lock, release it, and only
+/// then run the callbacks: an observer that re-enters `add_*` would otherwise
+/// deadlock, and a blocking observer would stall AppKit's event dispatch.
+static SAMPLE_OBSERVERS: Mutex<Vec<SampleObserver>> = Mutex::new(Vec::new());
+static KEY_OBSERVERS: Mutex<Vec<KeyObserver>> = Mutex::new(Vec::new());
+
+/// Registers a callback invoked for every masked modifier sample, for the
+/// process lifetime. Must stay cheap: it runs on the AppKit monitor callback's
+/// thread, so it should only forward the sample (e.g. into a channel).
+pub fn add_sample_observer<F>(observer: F)
+where
+    F: Fn(ModifierSample) + Send + Sync + 'static,
+{
+    match SAMPLE_OBSERVERS.lock() {
+        Ok(mut observers) => observers.push(Arc::new(observer)),
+        // A previous observer panicked while the lock was held; the data is not
+        // corrupt, so recover it rather than losing the registration.
+        Err(poisoned) => poisoned.into_inner().push(Arc::new(observer)),
+    }
+}
+
+/// Registers a callback invoked for every non-modifier key-down, for the
+/// process lifetime. Same contract as [`add_sample_observer`].
+pub fn add_key_observer<F>(observer: F)
+where
+    F: Fn() + Send + Sync + 'static,
+{
+    match KEY_OBSERVERS.lock() {
+        Ok(mut observers) => observers.push(Arc::new(observer)),
+        Err(poisoned) => poisoned.into_inner().push(Arc::new(observer)),
+    }
+}
+
+/// Forwards one masked sample to every registered observer.
+///
+/// Only the macOS monitor callbacks call this; other hosts keep the function so
+/// the module's API stays uniform, hence the explicit allow there.
+///
+/// The lock is released *before* the observers run (the `Arc` snapshot is
+/// cloned under it). Every body runs inside `catch_unwind`: it is called from
+/// an Objective-C block, and a panic unwinding across that FFI boundary is
+/// undefined behaviour that aborts the process. A faulty observer must not be
+/// able to tear down the AppKit event loop.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn notify_sample_observers(sample: ModifierSample) {
+    let observers = match SAMPLE_OBSERVERS.lock() {
+        Ok(guard) => guard.clone(),
+        Err(poisoned) => poisoned.into_inner().clone(),
+    };
+    notify_all(&observers, &mut |observer| observer(sample));
+}
+
+/// Forwards one non-modifier key-down to every registered observer. See
+/// [`notify_sample_observers`] for the locking and panic-boundary contract.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn notify_key_observers() {
+    let observers = match KEY_OBSERVERS.lock() {
+        Ok(guard) => guard.clone(),
+        Err(poisoned) => poisoned.into_inner().clone(),
+    };
+    notify_all(&observers, &mut |observer| observer());
+}
+
+/// Runs every observer, containing each one's panic.
+///
+/// Split out from the two `notify_*` functions so the panic boundary is
+/// unit-testable against a local list rather than the process-global registry.
+/// The callbacks are invoked from an Objective-C block, where unwinding is
+/// undefined behaviour; a panic must be caught here, not allowed to reach
+/// AppKit.
+fn notify_all<T: ?Sized, F>(observers: &[Arc<T>], call: &mut F)
+where
+    F: FnMut(&T),
+{
+    for observer in observers {
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| call(observer)));
+    }
+}
+
 #[cfg(target_os = "macos")]
 mod imp {
     use std::ptr::NonNull;
@@ -33,11 +142,20 @@ mod imp {
     use block2::RcBlock;
     use objc2::rc::Retained;
     use objc2::runtime::AnyObject;
-    use objc2_app_kit::{NSEvent, NSEventMask, NSEventModifierFlags};
+    use objc2_app_kit::{NSEvent, NSEventMask, NSEventModifierFlags, NSEventType};
 
     use crate::gesture::ModifierSample;
 
-    /// Keeps both `flagsChanged` subscriptions alive for the app's lifetime.
+    use super::{notify_key_observers, notify_sample_observers};
+
+    /// The two event types the monitors observe: modifier transitions for the
+    /// push-to-talk latch and the double-Control detector, and non-modifier
+    /// key-downs so the detector can tell a Control chord (`Ctrl+C`) from a
+    /// bare tap. Key-downs are observed, never swallowed.
+    const OBSERVED_MASK: NSEventMask =
+        NSEventMask::FlagsChanged.union(NSEventMask::KeyDown);
+
+    /// Keeps both monitor subscriptions alive for the app's lifetime.
     pub struct FlagsMonitor {
         global: *mut AnyObject,
         local: *mut AnyObject,
@@ -72,7 +190,7 @@ mod imp {
         let registering_thread = std::thread::current().id();
         static LOGGED_DELIVERY_THREAD: std::sync::Once = std::sync::Once::new();
 
-        // Global monitor: observe `flagsChanged` in every app.
+        // Global monitor: observe modifiers and key-downs in every app.
         let global_callback = on_sample.clone();
         let global_block = RcBlock::new(move |event: NonNull<NSEvent>| {
             LOGGED_DELIVERY_THREAD.call_once(|| {
@@ -84,33 +202,42 @@ mod imp {
                 );
             });
             // SAFETY: AppKit hands us a valid NSEvent for the duration of the
-            // call; we only read its modifier flags.
-            let flags = unsafe { event.as_ref() }.modifierFlags();
-            global_callback(sample(flags));
+            // call; we only read its type and modifier flags.
+            let event = unsafe { event.as_ref() };
+            if event.r#type() == NSEventType::KeyDown {
+                notify_key_observers();
+                return;
+            }
+            let masked = sample(event.modifierFlags());
+            global_callback(masked);
+            // Step A6: the same sample drives the double-Control detector.
+            notify_sample_observers(masked);
         });
-        let global = NSEvent::addGlobalMonitorForEventsMatchingMask_handler(
-            NSEventMask::FlagsChanged,
-            &global_block,
-        )?;
+        let global = NSEvent::addGlobalMonitorForEventsMatchingMask_handler(OBSERVED_MASK, &global_block)?;
         // AppKit copied the block at registration; only the returned token
         // subscribes, so the RcBlock itself can go.
         drop(global_block);
 
-        // Local monitor: observe `flagsChanged` in our own app. The event must
-        // be returned unchanged so the webview keeps receiving key state.
+        // Local monitor: observe modifiers and key-downs in our own app. The
+        // event must be returned unchanged so the webview keeps receiving key
+        // state.
         let local_block = RcBlock::new(move |event: NonNull<NSEvent>| -> *mut NSEvent {
+            let raw = event.as_ptr();
             // SAFETY: see the global block above.
-            let flags = unsafe { event.as_ref() }.modifierFlags();
-            on_sample(sample(flags));
-            event.as_ptr()
+            let event = unsafe { event.as_ref() };
+            if event.r#type() == NSEventType::KeyDown {
+                notify_key_observers();
+                return raw;
+            }
+            let masked = sample(event.modifierFlags());
+            on_sample(masked);
+            notify_sample_observers(masked);
+            raw
         });
         // SAFETY: the closure returns the same non-null event pointer it was
         // handed, which is the required pass-through contract.
         let local = unsafe {
-            NSEvent::addLocalMonitorForEventsMatchingMask_handler(
-                NSEventMask::FlagsChanged,
-                &local_block,
-            )
+            NSEvent::addLocalMonitorForEventsMatchingMask_handler(OBSERVED_MASK, &local_block)
         }?;
         drop(local_block);
 
@@ -219,3 +346,65 @@ mod imp {
 }
 
 pub use imp::{current_sample, install, is_trusted, prompt_for_trust, remove, FlagsMonitor};
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
+
+    use super::*;
+
+    fn sample(control: bool) -> ModifierSample {
+        ModifierSample {
+            control,
+            option: false,
+            command: false,
+            shift: false,
+        }
+    }
+
+    /// A panic in one observer must not stop the others and must not escape:
+    /// `notify_*` runs inside an Objective-C block, where unwinding is
+    /// undefined behaviour.
+    #[test]
+    fn notify_all_contains_a_panicking_observer() {
+        let ran = AtomicUsize::new(0);
+        let observers: Vec<Arc<dyn Fn() + Send + Sync>> = vec![
+            Arc::new(|| panic!("observer boom")),
+            Arc::new(|| {
+                ran.fetch_add(1, Ordering::Relaxed);
+            }),
+        ];
+        // Would abort the whole test process if the panic escaped.
+        notify_all(&observers, &mut |observer| observer());
+        assert_eq!(
+            ran.load(Ordering::Relaxed),
+            1,
+            "observers after a panicking one must still run"
+        );
+    }
+
+    /// The fan-out must not hold the registry lock while an observer runs:
+    /// registering another observer from inside one would otherwise deadlock.
+    #[test]
+    fn a_sample_observer_can_register_another_observer() {
+        // Serialize against other tests that touch the global registry.
+        static TEST_LOCK: Mutex<()> = Mutex::new(());
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        let hit = Arc::new(AtomicUsize::new(0));
+        let inner_hit = Arc::clone(&hit);
+        // Registered once; on every notification it registers another observer
+        // and bumps the counter. Before the fix this deadlocked on the held
+        // lock.
+        add_sample_observer(move |_| {
+            let nested = Arc::clone(&inner_hit);
+            add_sample_observer(move |_| {
+                nested.fetch_add(1, Ordering::Relaxed);
+            });
+        });
+        // Must return rather than deadlock. The first call runs the original
+        // observer; the observer it registers is not part of this snapshot.
+        notify_sample_observers(sample(true));
+    }
+}

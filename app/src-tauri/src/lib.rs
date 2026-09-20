@@ -9,6 +9,7 @@
 mod agent;
 mod capture;
 mod commands;
+mod ctrl_tap;
 mod env;
 mod events;
 mod gesture;
@@ -24,7 +25,7 @@ use tauri::Manager;
 
 pub use commands::{AppInfo, NETWORK};
 pub use events::{AgentStage, HotkeyState, PolarisEvent, SpeechState, POLARIS_EVENT_NAME};
-pub use notch::{NotchActivationPolicy, NotchGeometry, NotchWindowFlags};
+pub use notch::{NotchActivationPolicy, ShellGeometry};
 pub use types::CaptureStatus;
 
 /// Starts the desktop shell. Called from `main.rs`.
@@ -45,7 +46,9 @@ pub fn run() {
             agent::agent_chat,
             timing::polaris_phase,
             notch::notch_geometry,
-            notch::notch_window_flags,
+            notch::shell_request_state,
+            notch::shell_commit_state,
+            notch::shell_resize_content,
             hotkey::hotkey_permission,
         ])
         .setup(|app| {
@@ -81,7 +84,9 @@ pub fn run() {
             // fallback; both feed the same capture latch.
             hotkey::setup(app)?;
 
-            // Configures AppKit geometry, then reveals the (initially hidden) window.
+            // Configures AppKit geometry, reveals the (initially hidden) window,
+            // and registers the double-Control detector that proposes the folded
+            // `prompt` shell state.
             notch::setup(app)?;
 
             println!(
@@ -101,9 +106,26 @@ pub fn run() {
 
     app.run(|app_handle, event| {
         // The monitors are process-global AppKit objects; unregister them on
-        // the main thread before the process goes away.
-        if matches!(event, tauri::RunEvent::Exit) {
-            hotkey::teardown(app_handle);
+        // the main thread before the process goes away. The overlay also drops
+        // back to click-through so a dying process never strands an
+        // interactive window over the desktop.
+        match event {
+            tauri::RunEvent::Exit => {
+                hotkey::teardown(app_handle);
+                notch::teardown(app_handle);
+            }
+            tauri::RunEvent::WindowEvent {
+                event: tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed,
+                ..
+            } => notch::teardown(app_handle),
+            // The click-through watchdog must not collapse a prompt the user is
+            // actively typing into, so it needs to know whether our window is
+            // the key window. Losing focus re-arms the watchdog immediately.
+            tauri::RunEvent::WindowEvent {
+                event: tauri::WindowEvent::Focused(focused),
+                ..
+            } => notch::set_focused(app_handle, focused),
+            _ => {}
         }
     });
 }

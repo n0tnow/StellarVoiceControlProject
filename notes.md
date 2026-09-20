@@ -883,3 +883,11 @@
 - **What/where:** the test UI branch (`local/test-ui`) and the privacy/passkey spikes on local branches `spike/ct`, `spike/spp`, `spike/passkey`. Their reports live on those branches (local-only), not under `backlog/` in this PR.
 - **Pointer:** chain-lane scope check in `backlog/final-gate-chain-lane.md` (Step 1: no `stellar/src/spike` or live-UI code in the diff).
 - **Status:** decided
+
+## 2026-09-20 — Notch Shell Ported onto `main`; a Per-State Window Width Was the Left-Edge Flash
+- **Idea:** The expandable notch shell and the double-Control typed prompt are re-applied on top of current `main` (which already owns the good voice chain, #16). `main` is the base; only our two contributions cross; #21 (`9a9b89a`, accessory activation policy) is preserved inside the new `SHELL_STATES` structure.
+- **BUG-1 root cause:** the OS window was sized per state and centred on the cutout, so its left edge moved on every transition. The webview relayouts one frame behind the native `setFrame`, so the CSS-centred shell painted off-centre for those frames — a one-frame flash at the left. Reproduced with `screencapture -v` + `ffmpeg` frame scan (frame 215 centre ~452 pt instead of 735 pt).
+- **Fix:** one fixed window width for every state (`ShellGeometry::window_width`); only the height varies, and the shell is top-anchored, so the voice animation now resizes nothing and the new states only grow downward. Pinned by the `every_state_shares_one_centred_window_column` test.
+- **BUG-2:** the voice-strip transition (`width` + `border-radius`, 470 ms, `cubic-bezier(0.32,0.72,0,1)`, `will-change: width`, ear fade, no height tween) is taken from `main` verbatim; the new `panel`/`prompt` states add the height tween in their own rule.
+- **Pointer:** `backlog/2026-09-20-notch-shell-port.md`; `app/src-tauri/src/notch.rs`; `app/src/index.css`.
+- **Status:** decided (BUG-1 "after" recording still pending — machine screen locked mid-verification)

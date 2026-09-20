@@ -15,6 +15,7 @@
 | 2026-09-19 | **A0 — harness**: global hotkey (press/release) + microphone capture to WAV + wire both into the existing log pane; delete the temporary `dev_self_test` command | Owner A | open | `backlog/2026-09-19-monorepo-skeleton.md` | P0 |
 | 2026-09-19 | Owner B: fill in `stellar/` (anchor SEP-10/38/6 client, `sendPayment` tool) — stubs throw `NotImplementedError` today | Owner B | open | `backlog/2026-09-19-monorepo-skeleton.md` | P0 |
 | 2026-09-19 | **TTS voice**: no professional Turkish voice on Fish Audio; decide spoken-output language. Also: expose a user-facing male/female voice choice (Sarah / Ethan) in a later milestone | Owner A | open | `backlog/2026-09-19-tts-voice-selection.md` | P1 |
+| 2026-09-20 | **Notch shell port onto `main`** + BUG-1 left-edge flash + BUG-2 voice animation. Port and both fixes are in; only the BUG-1 "after" screen recording is blocked (machine locked its screen mid-verification) | opencode worker (`opencode-go/deepseek-v4.1-flash`) | open (verification pending) | `backlog/2026-09-20-notch-shell-port.md` | P1 |
 
 ## Completed Tasks (Archive)
 

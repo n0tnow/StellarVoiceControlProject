@@ -13,6 +13,33 @@ use crate::types::{CaptureStatus, Intent, TxSummary};
 /// Channel name; `app/src/lib/polaris.ts` listens on the same string.
 pub const POLARIS_EVENT_NAME: &str = "polaris-event";
 
+/// Separate channel for cursor hover on the shell (step A5). Kept off
+/// `POLARIS_EVENT_NAME` because it is high-frequency and shell-only: the rest of
+/// the event stream is the voice/agent domain.
+pub const NOTCH_HOVER_EVENT_NAME: &str = "notch_hover";
+
+/// Payload of [`NOTCH_HOVER_EVENT_NAME`]; emitted only on an inside/outside
+/// change (dwell timing lives in React).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotchHover {
+    pub inside: bool,
+}
+
+/// Separate channel for the hotkey-sourced shell mode (folded A6 prompt). Shell
+/// state is a shell concern, so it stays off `POLARIS_EVENT_NAME`; the payload
+/// is deliberately a boolean proposal the reducer resolves, not a command.
+pub const NOTCH_HOTKEY_EVENT_NAME: &str = "notch_hotkey";
+
+/// Payload of [`NOTCH_HOTKEY_EVENT_NAME`]. `prompt: true` proposes the `prompt`
+/// state; `false` clears the proposal (second tap, Escape/click-away in the
+/// webview, or the Rust watchdog's forced collapse).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotchHotkey {
+    pub prompt: bool,
+}
+
 /// Press/release of the push-to-talk hotkey (step A0).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -130,6 +157,21 @@ impl PolarisEvent {
 pub fn emit(app: &AppHandle, event: PolarisEvent) {
     if let Err(error) = app.emit(POLARIS_EVENT_NAME, &event) {
         eprintln!("polaris: failed to emit {}: {error}", event.kind());
+    }
+}
+
+/// Pushes a cursor hover change to the shell. Same failure policy as [`emit`]:
+/// a lost hover edge must never be fatal.
+pub fn emit_notch_hover(app: &AppHandle, inside: bool) {
+    if let Err(error) = app.emit(NOTCH_HOVER_EVENT_NAME, &NotchHover { inside }) {
+        eprintln!("polaris: failed to emit notch_hover: {error}");
+    }
+}
+
+/// Pushes a hotkey-sourced shell proposal. Same failure policy as [`emit`].
+pub fn emit_notch_hotkey(app: &AppHandle, prompt: bool) {
+    if let Err(error) = app.emit(NOTCH_HOTKEY_EVENT_NAME, &NotchHotkey { prompt }) {
+        eprintln!("polaris: failed to emit notch_hotkey: {error}");
     }
 }
 
@@ -269,5 +311,19 @@ mod tests {
         assert!(json.starts_with(r#"{"type":"approval_request""#));
         assert!(json.contains(r#""payloadHash":"deadbeef""#));
         assert_eq!(serde_json::from_str::<PolarisEvent>(&json).unwrap(), event);
+    }
+
+    #[test]
+    fn hover_event_matches_the_ts_shape() {
+        let json = serde_json::to_string(&NotchHover { inside: true }).unwrap();
+        assert_eq!(json, r#"{"inside":true}"#);
+    }
+
+    #[test]
+    fn hotkey_event_matches_the_ts_shape() {
+        let json = serde_json::to_string(&NotchHotkey { prompt: true }).unwrap();
+        assert_eq!(json, r#"{"prompt":true}"#);
+        let json = serde_json::to_string(&NotchHotkey { prompt: false }).unwrap();
+        assert_eq!(json, r#"{"prompt":false}"#);
     }
 }

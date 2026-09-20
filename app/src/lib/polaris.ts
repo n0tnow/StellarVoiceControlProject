@@ -12,7 +12,6 @@ import {
   isPolarisEvent,
   type AppInfo,
   type CaptureStatus,
-  type NotchGeometry,
   type PolarisEvent,
 } from "@polaris/interfaces";
 
@@ -46,15 +45,11 @@ export async function captureStop(): Promise<CaptureStatus> {
 }
 
 /**
- * Notch size in AppKit points. Polled so a display connect/disconnect or a
- * resolution change repositions the overlay; there is no Tauri event for it.
- */
-export async function getNotchGeometry(): Promise<NotchGeometry> {
-  return invoke<NotchGeometry>("notch_geometry");
-}
-
-/**
  * Reports one agent-loop phase to the Rust per-turn timing trace (step A11).
+ *
+ * Step A5: shell-state geometry moved to `app/src/notch/shellBridge.ts`, which
+ * owns the `notch_geometry` / `shell_request_state` / `shell_commit_state` /
+ * `shell_resize_content` seam. This module stays the voice/agent event seam.
  *
  * The webview console is invisible to the owner, so the phases that only exist
  * in TypeScript (request built, intent parsed, sentence built) are forwarded to

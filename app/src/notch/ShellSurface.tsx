@@ -1,0 +1,149 @@
+/**
+ * The notch shell surface (step A5, folded A6 prompt).
+ *
+ * Pure presentation: it reads a [`ShellGeometry`] and the shell state controller
+ * and renders the pill/compact/prompt/panel shape. All geometry arrives from Rust
+ * as concrete CSS custom properties; the class name is the only state switch, so
+ * adding a state is a Rust table row plus (if it has new body) a CSS block.
+ *
+ * The `prompt` state's body is the folded A6 [`PromptPanel`]: the typed prompt
+ * grows the *notch itself* slightly sideways and downward — no second window, no
+ * floating sheet. The prompt owns the whole surface: the status strip is a
+ * voice-state affordance and is not rendered while the prompt is applied. A
+ * voice turn can still be live underneath it, so [`PromptPanel`] carries the
+ * turn's stage as a small inline indicator (see `inlineVoiceStage`). The panel
+ * placeholder remains for the menus we design later.
+ */
+import { useCallback, type CSSProperties } from "react";
+
+import type { ShellGeometry } from "@polaris/interfaces";
+
+import { StageLabel } from "@/components/StageLabel";
+import { PromptPanel } from "./PromptPanel";
+import { inlineVoiceStage } from "./shellState";
+import { useShellState, type ShellStateName } from "./useShellState";
+
+export interface ShellSurfaceProps {
+  geometry: ShellGeometry;
+  /** Voice visual state name ("idle" | "recording" | …) for the animation class. */
+  visual: string;
+  /** The voice source's proposal for the shell state, resolved by the reducer. */
+  voiceState: ShellStateName;
+  /**
+   * Whether the voice proposal is an attention state (recording/transcribing/…)
+   * that must outrank hover, or just the ready/error dwell label.
+   */
+  voiceAttention: boolean;
+  label: string;
+  detail: string;
+}
+
+export function ShellSurface({
+  geometry,
+  visual,
+  voiceState,
+  voiceAttention,
+  label,
+  detail,
+}: ShellSurfaceProps) {
+  const {
+    applied,
+    onTransitionEnd,
+    contentHeight,
+    applyContentHeight,
+    dismiss,
+  } = useShellState(voiceState, { voiceAttention });
+
+  // `PromptPanel` measures the body below the top inset; the state's min/max
+  // are **whole-shell** heights, so add the inset before reporting. It is the
+  // same `safe_top` the prompt body is anchored to, so the shell grows by
+  // exactly the measured body. Declared before the early return so the hook
+  // order never changes (the first frame has no states in
+  // `FALLBACK_SHELL_GEOMETRY`).
+  const safeTop = geometry.notch.safeTop;
+  const handleContentHeight = useCallback(
+    (bodyHeight: number) => applyContentHeight(bodyHeight + safeTop),
+    [applyContentHeight, safeTop],
+  );
+
+  const active = geometry.states.find((state) => state.name === applied) ?? geometry.states[0];
+  if (!active) return null;
+  const expanded = applied !== "collapsed";
+  // The prompt owns the whole surface: the status strip (and its purple
+  // indicator wash) is a voice-state affordance and is removed from the tree
+  // entirely while the prompt is applied.
+  const showStrip = applied !== "prompt";
+  // A voice turn can run while the prompt is latched (the reducer keeps the
+  // prompt on top). Because the strip is not rendered in `prompt`, the turn's
+  // stage travels into the prompt as this inline stage instead.
+  const voiceStage = inlineVoiceStage(visual);
+
+  // A content-driven state (the prompt) uses its measured, Rust-clamped height;
+  // every other state uses the table value.
+  const shellHeight = contentHeight ?? active.height;
+
+  const style = {
+    "--shell-width": `${active.width}px`,
+    "--shell-height": `${shellHeight}px`,
+    "--shell-top-radius": `${active.topRadius}px`,
+    "--shell-bottom-radius": `${active.bottomRadius}px`,
+    "--shell-ear": `${active.earRadius}px`,
+    "--cutout-width": `${geometry.notch.cutoutWidth}px`,
+    "--cutout-height": `${geometry.notch.cutoutHeight}px`,
+    // `safe_top` is the menu-bar/notch inset. On a notched display it equals the
+    // cutout height, but the prompt anchors to it explicitly so no prompt pixel
+    // can ever be drawn behind the camera housing.
+    "--safe-top": `${geometry.notch.safeTop}px`,
+  } as CSSProperties;
+
+  return (
+    <section
+      className={`notch shell-${applied} state-${visual}${
+        active.interactive ? " is-interactive" : ""
+      }${active.focusable ? " is-focusable" : ""}`}
+      style={style}
+      onTransitionEnd={onTransitionEnd}
+      aria-label={
+        expanded
+          ? `${label}. ${detail}`
+          : "Polaris ready. Hold Control and Option to record, or hold Control, Option and Space."
+      }
+    >
+      {/* Voice states only. The `prompt` state removes the strip from the tree
+          rather than hiding it, so its label and indicator cannot occupy space
+          or paint the purple wash behind the prompt body. */}
+      {showStrip ? (
+        <div className="notch-content" aria-hidden={!expanded}>
+          <div className="notch-copy">
+            {/* Label only. `detail` and the error text are not drawn — the ear is
+                too narrow for them and the housing to its right cannot be used —
+                but they still reach assistive tech via the live region in App. */}
+            <StageLabel label={label} />
+          </div>
+          {/* The camera housing: no pixels exist here, so it stays empty. */}
+          <span className="notch-gap" aria-hidden="true" />
+          <div className="notch-indicator" aria-hidden="true">
+            <span />
+            <span />
+            <span />
+          </div>
+        </div>
+      ) : null}
+
+      {/* The folded A6 typed prompt: mounted only while its state is applied, so
+          it starts clean and measured on every open. */}
+      {applied === "prompt" ? (
+        <PromptPanel
+          voiceStage={voiceStage}
+          onContentHeight={handleContentHeight}
+          onDismiss={dismiss}
+        />
+      ) : null}
+
+      {/* Placeholder panel body. Menus land here. */}
+      <div className="notch-panel" aria-hidden={applied !== "panel"}>
+        <p className="notch-panel-placeholder">menus land here</p>
+      </div>
+    </section>
+  );
+}
