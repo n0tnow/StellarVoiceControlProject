@@ -161,6 +161,59 @@ pub fn parse_aliases(raw: &str) -> BTreeMap<String, String> {
     aliases
 }
 
+/// `POLARIS_ASSET_DECIMALS`: a `hex64=decimals,...` allow-list mapping an asset
+/// SAC contract hash to its decimals. The executor signer scales its whole-unit
+/// amount cap by the matched asset's decimals and refuses an asset it does not
+/// find here, so the cap is never silently calibrated for the wrong scale.
+pub const ENV_ASSET_DECIMALS: &str = "POLARIS_ASSET_DECIMALS";
+/// The largest accepted `decimals` (mirrors the SAC limit).
+const ASSET_DECIMALS_MAX: u32 = 18;
+
+/// Parses `POLARIS_ASSET_DECIMALS`, dropping malformed entries. A dropped entry
+/// means "unknown asset" to the signer, which is a fail-closed refusal.
+pub fn parse_asset_decimals(raw: &str) -> BTreeMap<String, u32> {
+    let mut assets = BTreeMap::new();
+    for pair in raw.split(',') {
+        let pair = pair.trim();
+        if pair.is_empty() {
+            continue;
+        }
+        let Some((hash, decimals)) = pair.split_once('=') else {
+            eprintln!("polaris: ignoring a malformed POLARIS_ASSET_DECIMALS entry");
+            continue;
+        };
+        let (hash, decimals) = (hash.trim(), decimals.trim());
+        if hash.len() != 64 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            eprintln!("polaris: ignoring a POLARIS_ASSET_DECIMALS entry whose key is not a 32-byte hex hash");
+            continue;
+        }
+        let Ok(decimals) = decimals.parse::<u32>() else {
+            eprintln!("polaris: ignoring a POLARIS_ASSET_DECIMALS entry with invalid decimals");
+            continue;
+        };
+        if decimals > ASSET_DECIMALS_MAX {
+            eprintln!("polaris: ignoring a POLARIS_ASSET_DECIMALS entry with too many decimals");
+            continue;
+        }
+        assets.insert(hash.to_ascii_lowercase(), decimals);
+    }
+    assets
+}
+
+/// The testnet native-XLM SAC contract hash: always 7 decimals, so it is known
+/// without configuration and autopay in XLM works on a fresh install.
+const NATIVE_XLM_SAC_HASH: &str = "d7928b72c2703ccfeaf7eb9ff4ef4d504a55a8b979fc9b450ea2c842b4d1ce61";
+
+/// The asset-decimal allow-list: native XLM plus whatever `POLARIS_ASSET_DECIMALS`
+/// adds (the env value may override the built-in entry).
+pub fn asset_decimals() -> BTreeMap<String, u32> {
+    let mut assets = BTreeMap::from([(NATIVE_XLM_SAC_HASH.to_owned(), 7)]);
+    if let Some(raw) = crate::env::var(ENV_ASSET_DECIMALS) {
+        assets.extend(parse_asset_decimals(&raw));
+    }
+    assets
+}
+
 /// Builds the config from an injected environment lookup, so the allow-list and
 /// validation are testable without touching the real process environment.
 ///
@@ -401,6 +454,21 @@ mod tests {
         assert_eq!(aliases.len(), 2);
         assert_eq!(aliases.get("acc2").map(String::as_str), Some(ACC2));
         assert_eq!(aliases.get("ok_alias").map(String::as_str), Some(ACC2));
+    }
+
+    #[test]
+    fn asset_decimals_parse_hex_keys_and_drop_malformed_entries() {
+        let good = "0909090909090909090909090909090909090909090909090909090909090909";
+        let raw = format!(
+            "{good}=7,{good}=abc,{good}=19,NOTHEX=7,{good}",
+        );
+        let decimals = parse_asset_decimals(&raw);
+        assert_eq!(decimals.len(), 1);
+        assert_eq!(decimals.get(good), Some(&7));
+        // Uppercase hex is normalised to lowercase, matching the decoded hash.
+        let upper = format!("{}={}", good.to_uppercase(), 7);
+        assert_eq!(parse_asset_decimals(&upper).get(good), Some(&7));
+        assert!(parse_asset_decimals("").is_empty());
     }
 
     #[test]

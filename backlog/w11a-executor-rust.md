@@ -11,3 +11,9 @@
 **Human-verify.** Real Touch ID for `executor_create`, real Keychain item, live on-chain `pay_executor` with a funded executor.
 
 **Handoff.** W11b consumes these commands; `funded` stays `null` (read Horizon on the TS side).
+
+**Review fixes** (branch `fix/w11a-review`; `backlog/w11a-executor-rust-review-fixes.md`).
+- MAJOR-1: `executor_sign_pay` now caps `tx.fee` (`POLARIS_AUTOPAY_MAX_FEE_STROOPS`, downward-only), Soroban `resource_fee`, requires finite `TimeBounds` (`min_time ≤ now`, `max_time` within 5 min; no V2/ledger bounds) and `Memo::None`.
+- MAJOR-2: 16 KiB base64 input cap, `stellar_xdr::Limits { depth: 32, len: 64 KiB }` for the decode; deep-nesting/oversize tests run on a 128 KiB stack.
+- MINORs: batch deny/lock emit every step hash; `wallet_remove` deletes the executor seed + metadata; auth `root_invocation` must equal the op with no sub-invocations; `executor_create` is atomic under the metadata lock.
+- NITs: `read_seed` follows the owner's recorded store kind; batch `approval_request` carries the batch id; the amount cap is scaled by an `POLARIS_ASSET_DECIMALS` allow-list (unknown asset → refuse); mutation fuzz extended with nesting/size.

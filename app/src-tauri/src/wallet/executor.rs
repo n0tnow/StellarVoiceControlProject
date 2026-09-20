@@ -23,21 +23,27 @@
 //! `pay_executor`, the `executor`/`owner` arguments match the registered key and
 //! the active wallet, no auth entry asks for the owner, the sequence is positive,
 //! and the amount is positive and within a **Rust-side hard cap** independent of
-//! the on-chain rule. Anything else is a typed refusal, never a signature.
+//! the on-chain rule. The signer also bounds what it can cost the executor whose
+//! fees it pays: a capped `tx.fee`/Soroban `resource_fee`, finite time bounds no
+//! further than a few minutes out, no memo, and an amount cap scaled by the
+//! configured decimals of the asset actually being moved. Anything else is a
+//! typed refusal, never a signature.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use serde::Serialize;
 use stellar_xdr::{
-    AccountId, ContractId, Hash, HostFunction, Int128Parts, Limits, MuxedAccount, OperationBody,
-    PublicKey, ReadXdr, ScAddress, ScVal, SorobanCredentials, TransactionEnvelope, Uint256,
+    AccountId, ContractId, Hash, HostFunction, Int128Parts, Limits, Memo, MuxedAccount,
+    OperationBody, Preconditions, PublicKey, ReadXdr, ScAddress, ScVal, SorobanAuthorizedFunction,
+    SorobanCredentials, TransactionEnvelope, TransactionExt, Uint256,
 };
 use tauri::State;
 use zeroize::Zeroizing;
 
 use super::commands::{join_error, WalletCommandError};
 use super::session::SessionStore;
-use super::{keys, WalletError, WalletService};
+use super::{keys, StoreKind, WalletError, WalletService};
 use crate::biometric::Authenticator;
 use crate::bridge::strkey::decode_public_key;
 use crate::health::{FeatureHealth, HealthStatus};
@@ -57,9 +63,26 @@ pub const PAY_EXECUTOR: &str = "pay_executor";
 pub const ENV_HARD_CAP: &str = "POLARIS_AUTOPAY_HARD_CAP";
 /// Default whole-unit cap when the env var is unset.
 pub const DEFAULT_HARD_CAP_WHOLE: i128 = 100;
-/// The asset decimals the whole-unit cap is scaled by. Stellar SACs and the
-/// guard's demo asset (PGUSD) use 7, like USDC.
-pub const ASSET_DECIMALS: u32 = 7;
+/// `POLARIS_AUTOPAY_MAX_FEE_STROOPS`: the inclusion-fee cap for a signed
+/// payment. It can only be lowered by the env var, never raised.
+pub const ENV_MAX_FEE: &str = "POLARIS_AUTOPAY_MAX_FEE_STROOPS";
+/// Default inclusion-fee cap: 2 XLM (10^7 stroops each).
+pub const DEFAULT_MAX_FEE_STROOPS: i64 = 20_000_000;
+/// Cap on a Soroban transaction's `resource_fee` (1 XLM): the executor pays
+/// this too, so it needs its own bound even though `tx.fee` is also capped.
+pub const MAX_RESOURCE_FEE_STROOPS: i64 = 10_000_000;
+/// How far in the future a signed transaction's `max_time` may sit. Short
+/// enough that a compromised webview cannot park a long-lived authorization.
+pub const TIME_BOUND_WINDOW_SECS: u64 = 300;
+/// The largest asset `decimals` the cap scaling accepts (mirrors the SAC limit).
+pub const MAX_ASSET_DECIMALS: u32 = 18;
+/// The base64 input cap (matches the approval gate's `MAX_XDR_BYTES`): a real
+/// Soroban envelope is a few KiB, so a larger blob is refused before decoding.
+pub const MAX_INPUT_BYTES: usize = 16 * 1024;
+/// Decode bounds for `stellar_xdr`: finite depth (no recursive `ScVal` stack
+/// overflow) and a finite byte budget.
+pub const MAX_DECODE_DEPTH: u32 = 32;
+pub const MAX_DECODE_BYTES: usize = 64 * 1024;
 
 /// `executor_status` result, mirrored in `@polaris/interfaces`. `funded` is
 /// always `null` from Rust: funding a `G…` account needs a network read, which
@@ -93,8 +116,8 @@ pub enum ExecutorError {
     WrongSource,
     /// The invoked contract is not the configured guard.
     WrongContract,
-    /// The decoded amount exceeds `POLARIS_AUTOPAY_HARD_CAP`.
-    OverHardCap(i128),
+    /// The decoded amount exceeds the configured whole-unit hard cap.
+    OverHardCap { cap_raw: i128, decimals: u32 },
     /// The envelope does not have the one exact shape this signer accepts.
     Invalid(&'static str),
     /// A storage or signing failure.
@@ -109,7 +132,7 @@ impl ExecutorError {
             Self::NotPayExecutor => "not_pay_executor",
             Self::WrongSource => "wrong_source",
             Self::WrongContract => "wrong_contract",
-            Self::OverHardCap(_) => "over_hard_cap",
+            Self::OverHardCap { .. } => "over_hard_cap",
             Self::Invalid(_) => "invalid",
             Self::Error(_) => "error",
         }
@@ -131,9 +154,9 @@ impl ExecutorError {
             Self::WrongContract => {
                 "the transaction does not call the configured guard contract".to_string()
             }
-            Self::OverHardCap(cap) => format!(
+            Self::OverHardCap { cap_raw, decimals } => format!(
                 "the payment is over the autopay hard cap of {} whole units",
-                cap / 10i128.pow(ASSET_DECIMALS)
+                cap_raw / 10i128.pow(*decimals)
             ),
             Self::Invalid(reason) => reason.to_string(),
             Self::Error(detail) => format!("the executor signature failed: {detail}"),
@@ -179,19 +202,53 @@ impl PayOutcome {
     }
 }
 
-/// The whole-unit hard cap scaled to raw units; an unparseable or negative value
-/// falls back to [`DEFAULT_HARD_CAP_WHOLE`] (fail-closed to the strict default).
-pub fn hard_cap_raw(explicit: Option<&str>) -> i128 {
-    let whole = explicit
+/// The whole-unit hard cap; an unparseable or negative value falls back to
+/// [`DEFAULT_HARD_CAP_WHOLE`] (fail-closed to the strict default). The raw cap
+/// is this scaled by the moved asset's configured decimals in [`validate_pay`].
+pub fn hard_cap_whole(explicit: Option<&str>) -> i128 {
+    explicit
         .and_then(|value| value.trim().parse::<i128>().ok())
         .filter(|value| *value >= 0)
-        .unwrap_or(DEFAULT_HARD_CAP_WHOLE);
-    whole.saturating_mul(10i128.pow(ASSET_DECIMALS))
+        .unwrap_or(DEFAULT_HARD_CAP_WHOLE)
 }
 
-/// Reads the hard cap from the process environment.
-pub fn read_hard_cap_raw() -> i128 {
-    hard_cap_raw(crate::env::var(ENV_HARD_CAP).as_deref())
+/// Reads the whole-unit hard cap from the process environment.
+pub fn read_hard_cap_whole() -> i128 {
+    hard_cap_whole(crate::env::var(ENV_HARD_CAP).as_deref())
+}
+
+/// The inclusion-fee cap in stroops. Configurable **downward only**: a value
+/// that is unset, unparseable or not below [`DEFAULT_MAX_FEE_STROOPS`] leaves
+/// the default in place, so the env can never raise the cap.
+pub fn max_fee_stroops(explicit: Option<&str>) -> i64 {
+    explicit
+        .and_then(|value| value.trim().parse::<i64>().ok())
+        .filter(|value| *value > 0 && *value < DEFAULT_MAX_FEE_STROOPS)
+        .unwrap_or(DEFAULT_MAX_FEE_STROOPS)
+}
+
+/// Reads the inclusion-fee cap from the process environment.
+pub fn read_max_fee_stroops() -> i64 {
+    max_fee_stroops(crate::env::var(ENV_MAX_FEE).as_deref())
+}
+
+/// The Rust-side caps a signed autopay is held to, independent of (and a
+/// backstop to) the on-chain rule: a whole-unit amount cap, the per-asset
+/// decimals needed to scale it, and an inclusion-fee cap in stroops.
+#[derive(Clone, Copy)]
+pub struct PayCaps<'a> {
+    pub hard_cap_whole: i128,
+    pub assets: &'a BTreeMap<String, u32>,
+    pub max_fee_stroops: i64,
+}
+
+/// Seconds since the Unix epoch, for the time-bound window check. `0` only if
+/// the system clock predates the epoch, which then refuses every finite bound.
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or(0)
 }
 
 /// The store item id for one owner's executor seed.
@@ -217,34 +274,34 @@ pub fn status(wallet: &WalletService) -> ExecutorStatus {
     }
 }
 
-/// Reads the executor seed: the Keychain first, then the opted-in plaintext file
-/// store, mirroring the wallet's store rules.
+/// The store recorded for `owner`'s wallet seed. The executor seed lives in the
+/// **same** store as its owner's wallet seed, so every read follows the recorded
+/// kind exactly like `WalletService::active_key` (no silent fallback).
+fn account_store_kind(wallet: &WalletService, owner: &str) -> Option<StoreKind> {
+    wallet
+        .lock()
+        .meta
+        .accounts
+        .iter()
+        .find(|account| account.address == owner)
+        .map(|account| account.store)
+}
+
+/// Reads the executor seed from the owner's recorded store, exactly like the
+/// wallet's own key lookup: a seed written during a Keychain outage is still
+/// found in the plaintext file store after the Keychain returns, and a
+/// Keychain-stored seed is never silently read from the file store.
 fn read_seed(wallet: &WalletService, owner: &str) -> Result<Zeroizing<[u8; 32]>, WalletError> {
-    let stores = &wallet.stores;
-    let id = item_id(owner);
-    if stores.keychain_available {
-        if let Ok(seed) = stores.keychain.get(&id) {
-            return Ok(seed);
-        }
-    }
-    if stores.file_allowed {
-        if let Ok(seed) = stores.file.get(&id) {
-            return Ok(seed);
-        }
-    }
-    if stores.keychain_available {
-        stores.keychain.get(&id)
-    } else if stores.file_allowed {
-        stores.file.get(&id)
-    } else {
-        Err(WalletError::KeychainUnavailable)
-    }
+    let kind = account_store_kind(wallet, owner).ok_or(WalletError::UnknownAccount)?;
+    wallet.stores.get(kind, &item_id(owner))
 }
 
 /// `executor_create`: an unlocked session plus Touch ID, generating and storing
 /// one executor seed for the active owner. Idempotent: an existing executor
 /// address is returned unchanged (regenerating would orphan the on-chain
-/// registration).
+/// registration). The idempotency re-check, the seed write and the metadata
+/// insert all happen under the metadata lock, so two concurrent creates can
+/// never leave the Keychain seed and `executors[owner]` naming different keys.
 pub fn create(
     wallet: &WalletService,
     session: &SessionStore,
@@ -255,14 +312,21 @@ pub fn create(
     if let Some(address) = executor_address(wallet, &owner) {
         return Ok(ExecutorAddress { address });
     }
+    let kind = account_store_kind(wallet, &owner).ok_or(WalletError::UnknownAccount)?;
     authenticate(authenticator, CREATE_REASON)?;
     let mut seed = Zeroizing::new([0u8; 32]);
     getrandom::fill(seed.as_mut())
         .map_err(|error| WalletError::Storage(format!("the OS random source failed: {error}")))?;
     let address = keys::address_of(&seed);
-    let kind = wallet.stores.write_kind()?;
-    wallet.stores.set(kind, &item_id(&owner), &seed)?;
     let mut inner = wallet.lock();
+    // A concurrent create may have won while this one was prompting/generating:
+    // return its address and never overwrite the seed that names it.
+    if let Some(existing) = inner.meta.executors.get(&owner) {
+        return Ok(ExecutorAddress {
+            address: existing.clone(),
+        });
+    }
+    wallet.stores.set(kind, &item_id(&owner), &seed)?;
     inner.meta.executors.insert(owner, address.clone());
     super::file::save_metadata(&wallet.root, &inner.meta)?;
     Ok(ExecutorAddress { address })
@@ -275,7 +339,7 @@ pub fn sign_pay(
     session: &SessionStore,
     unsigned_xdr: &str,
     guard_contract_id: &str,
-    hard_cap: i128,
+    caps: PayCaps<'_>,
     passphrase: &str,
 ) -> Result<super::SignedTx, ExecutorError> {
     session
@@ -293,7 +357,7 @@ pub fn sign_pay(
         &executor_public,
         &owner_public,
         guard_contract_id,
-        hard_cap,
+        caps,
     )?;
     super::signing::sign_transaction(unsigned_xdr, &seed, &executor_public, passphrase)
         .map(|mut signed| {
@@ -311,15 +375,71 @@ pub fn validate_pay(
     executor_public: &[u8; 32],
     owner_public: &[u8; 32],
     guard_contract_id: &str,
-    hard_cap: i128,
+    caps: PayCaps<'_>,
 ) -> Result<(), ExecutorError> {
-    let decoded = TransactionEnvelope::from_xdr_base64(unsigned_xdr.trim(), Limits::none())
+    // Bound the input before decoding: a real Soroban envelope is a few KiB, so
+    // a larger blob is a hostile payload, not a payment.
+    if unsigned_xdr.len() > MAX_INPUT_BYTES {
+        return Err(ExecutorError::Invalid("the transaction is too large"));
+    }
+    // Finite decode limits: a crafted, valid-up-to-the-args envelope with a
+    // deeply nested `ScVal` must fail as a typed error instead of recursing
+    // until the stack aborts the process.
+    let limits = Limits {
+        depth: MAX_DECODE_DEPTH,
+        len: MAX_DECODE_BYTES,
+    };
+    let decoded = TransactionEnvelope::from_xdr_base64(unsigned_xdr.trim(), limits)
         .map_err(|_| ExecutorError::Invalid("the transaction is not valid XDR"))?;
     let envelope = match decoded {
         TransactionEnvelope::Tx(v1) => v1,
         _ => return Err(ExecutorError::Invalid("only a plain v1 transaction may be signed")),
     };
     let tx = envelope.tx;
+
+    // MAJOR-1: cost and preconditions. This signer pays the fee, so a
+    // compromised webview must not be able to make it sign a maximal fee or an
+    // open-ended authorization.
+    if i64::from(tx.fee) > caps.max_fee_stroops {
+        return Err(ExecutorError::Invalid("the transaction fee is over the autopay cap"));
+    }
+    if let TransactionExt::V1(data) = &tx.ext {
+        if data.resource_fee > MAX_RESOURCE_FEE_STROOPS {
+            return Err(ExecutorError::Invalid(
+                "the Soroban resource fee is over the autopay cap",
+            ));
+        }
+    }
+    match &tx.cond {
+        Preconditions::Time(bounds) => {
+            let now = now_secs();
+            let min_time = bounds.min_time.0;
+            let max_time = bounds.max_time.0;
+            if max_time == 0 {
+                return Err(ExecutorError::Invalid("the transaction time bounds never expire"));
+            }
+            if min_time > now {
+                return Err(ExecutorError::Invalid(
+                    "the transaction time bounds start in the future",
+                ));
+            }
+            if max_time > now.saturating_add(TIME_BOUND_WINDOW_SECS) {
+                return Err(ExecutorError::Invalid(
+                    "the transaction time bounds are too far in the future",
+                ));
+            }
+        }
+        // No time bounds, a V2 set (extra signers/min-seq surprises) or a ledger
+        // bound is never what an unattended payment looks like.
+        _ => {
+            return Err(ExecutorError::Invalid(
+                "the transaction must carry finite time bounds",
+            ))
+        }
+    }
+    if !matches!(tx.memo, Memo::None) {
+        return Err(ExecutorError::Invalid("a memo is not allowed"));
+    }
 
     let source = match &tx.source_account {
         MuxedAccount::Ed25519(Uint256(key)) => *key,
@@ -368,8 +488,27 @@ pub fn validate_pay(
     if sc_key(&values[1]) != Some(*owner_public) {
         return Err(ExecutorError::Invalid("the owner argument is not the active wallet"));
     }
-    // The recipient and asset are free (the contract enforces `allowed_assets`
-    // and `known_recipients_only`); only the amount is capped here too.
+    // The recipient is free (the contract enforces `known_recipients_only`). The
+    // asset must be one whose decimals the app has configured, so the whole-unit
+    // cap is scaled correctly for the token actually moving.
+    let asset_hash = match &values[3] {
+        ScVal::Address(ScAddress::Contract(ContractId(Hash(bytes)))) => *bytes,
+        _ => return Err(ExecutorError::Invalid("the payment asset is not a contract")),
+    };
+    let decimals = caps
+        .assets
+        .get(&hex::encode(asset_hash))
+        .copied()
+        .ok_or(ExecutorError::Invalid(
+            "the payment asset is not in the configured decimals allow-list",
+        ))?;
+    if decimals > MAX_ASSET_DECIMALS {
+        return Err(ExecutorError::Invalid("the configured asset decimals are invalid"));
+    }
+    let cap_raw = 10i128
+        .checked_pow(decimals)
+        .map(|scale| caps.hard_cap_whole.saturating_mul(scale))
+        .ok_or(ExecutorError::Invalid("the configured asset decimals are invalid"))?;
     let amount = match &values[4] {
         ScVal::I128(Int128Parts { hi, lo }) => ((*hi as i128) << 64) | (*lo as i128),
         _ => return Err(ExecutorError::Invalid("the payment amount is not an i128")),
@@ -377,10 +516,26 @@ pub fn validate_pay(
     if amount <= 0 {
         return Err(ExecutorError::Invalid("the payment amount is not positive"));
     }
-    if amount > hard_cap {
-        return Err(ExecutorError::OverHardCap(hard_cap));
+    if amount > cap_raw {
+        return Err(ExecutorError::OverHardCap {
+            cap_raw,
+            decimals,
+        });
     }
     for entry in invoke.auth.iter() {
+        // MINOR-3: a no-prompt signer must never attach a signature for an auth
+        // tree that is not exactly this operation. CAP-46-11 ignores unmatched
+        // entries, but requiring the root invocation (and no sub-invocations)
+        // keeps the signed authorization tree byte-equal to the operation.
+        let matches_operation = matches!(
+            &entry.root_invocation.function,
+            SorobanAuthorizedFunction::ContractFn(call) if call == args
+        ) && entry.root_invocation.sub_invocations.as_slice().is_empty();
+        if !matches_operation {
+            return Err(ExecutorError::Invalid(
+                "an auth entry does not match this operation",
+            ));
+        }
         match &entry.credentials {
             SorobanCredentials::SourceAccount => {}
             SorobanCredentials::Address(credentials)
@@ -555,8 +710,8 @@ pub async fn executor_create(
 }
 
 /// `executor_sign_pay`: the no-Touch-ID signature, valid only for a guard
-/// `pay_executor` call. The guard id and passphrase come from `stellar_config`;
-/// the hard cap is a Rust-side backstop.
+/// `pay_executor` call. The guard id, asset decimals and passphrase come from
+/// `stellar_config`; the fee and amount caps are Rust-side backstops.
 #[tauri::command]
 pub fn executor_sign_pay(
     wallet: State<'_, Arc<WalletService>>,
@@ -569,12 +724,18 @@ pub fn executor_sign_pay(
             "the guard contract is not configured",
         ));
     };
+    let assets = crate::stellar_config::asset_decimals();
+    let caps = PayCaps {
+        hard_cap_whole: read_hard_cap_whole(),
+        assets: &assets,
+        max_fee_stroops: read_max_fee_stroops(),
+    };
     match sign_pay(
         wallet.inner(),
         session.inner(),
         &xdr,
         guard,
-        read_hard_cap_raw(),
+        caps,
         &config.network_passphrase,
     ) {
         Ok(signed) => PayOutcome::ok(signed.signed_xdr, signed.tx_hash),
@@ -592,7 +753,17 @@ pub fn executor_health(wallet: State<'_, Arc<WalletService>>) -> FeatureHealth {
 mod tests {
     use super::*;
     use crate::biometric::AuthError;
-    use crate::wallet::{memory, session::SessionStore, Stores};
+    use crate::wallet::{memory, session::SessionStore, AccountMeta, KeyStore, Stores};
+    use stellar_xdr::{
+        InvokeContractArgs, LedgerFootprint, PreconditionsV2, ScMap, ScMapEntry, ScString, ScVec,
+        SorobanAddressCredentials, SorobanAuthorizationEntry, SorobanAuthorizedInvocation,
+        SorobanResources, SorobanTransactionData, SorobanTransactionDataExt, StringM, TimeBounds,
+        TimePoint, VecM, WriteXdr,
+    };
+
+    /// The asset SAC hash the fixtures move (hex of the 32-byte contract id).
+    const ASSET_HEX: &str =
+        "0909090909090909090909090909090909090909090909090909090909090909";
 
     /// Fixtures generated with `@stellar/stellar-sdk` 17.1.0 by a Node one-off
     /// (see `backlog/w11a-executor-rust.md`): `new Account(source, seq)` with
@@ -659,7 +830,7 @@ mod tests {
             .unwrap();
         {
             let mut inner = wallet.lock();
-            inner.meta.active = Some(OWNER.to_string());
+            install_account(&mut inner.meta, OWNER, StoreKind::Keychain);
             inner
                 .meta
                 .executors
@@ -668,18 +839,189 @@ mod tests {
         wallet
     }
 
+    /// Adds the active account row the executor lookups key on.
+    fn install_account(meta: &mut crate::wallet::Metadata, address: &str, store: StoreKind) {
+        meta.accounts.push(AccountMeta {
+            label: "Owner".to_string(),
+            address: address.to_string(),
+            created: 0,
+            store,
+        });
+        meta.active = Some(address.to_string());
+    }
+
+    /// The configured asset-decimal allow-list for the fixture asset.
+    fn assets() -> BTreeMap<String, u32> {
+        let mut map = BTreeMap::new();
+        map.insert(ASSET_HEX.to_string(), 7);
+        map
+    }
+
+    /// A time window the signer accepts (min in the past, max a minute out).
+    fn valid_cond() -> Preconditions {
+        Preconditions::Time(TimeBounds {
+            min_time: TimePoint(0),
+            max_time: TimePoint(now_secs() + 60),
+        })
+    }
+
+    /// Decodes a fixture with unbounded limits (test-only), mutates it, and
+    /// re-encodes it. Static fixtures carry a fixed `max_time`, so every test
+    /// that reaches the precondition check rewrites the window to "now".
+    fn rewrite(base: &str, mutate: impl FnOnce(&mut stellar_xdr::Transaction)) -> String {
+        let mut envelope = TransactionEnvelope::from_xdr_base64(base, Limits::none()).unwrap();
+        let TransactionEnvelope::Tx(v1) = &mut envelope else {
+            panic!("the fixture is a v1 envelope");
+        };
+        mutate(&mut v1.tx);
+        envelope.to_xdr_base64(Limits::none()).unwrap()
+    }
+
+    fn fresh_pay() -> String {
+        rewrite(PAY, |tx| tx.cond = valid_cond())
+    }
+
+    /// A `SorobanTransactionData` extension carrying `resource_fee`.
+    fn soroban_ext(resource_fee: i64) -> TransactionExt {
+        TransactionExt::V1(SorobanTransactionData {
+            ext: SorobanTransactionDataExt::V0,
+            resources: SorobanResources {
+                footprint: LedgerFootprint {
+                    read_only: VecM::default(),
+                    read_write: VecM::default(),
+                },
+                instructions: 0,
+                disk_read_bytes: 0,
+                write_bytes: 0,
+            },
+            resource_fee,
+        })
+    }
+
+    /// Overwrites one `pay_executor` argument.
+    fn set_arg(tx: &mut stellar_xdr::Transaction, index: usize, value: ScVal) {
+        let operation = tx.operations.iter_mut().next().expect("one operation");
+        let OperationBody::InvokeHostFunction(invoke) = &mut operation.body else {
+            panic!("the operation invokes a contract");
+        };
+        let HostFunction::InvokeContract(args) = &mut invoke.host_function else {
+            panic!("the host function invokes a contract");
+        };
+        let mut values: Vec<ScVal> = args.args.as_slice().to_vec();
+        values[index] = value;
+        args.args = VecM::try_from(values).unwrap();
+    }
+
+    fn nest_vec(depth: usize) -> ScVal {
+        let mut value = ScVal::U32(0);
+        for _ in 0..depth {
+            value = ScVal::Vec(Some(ScVec(VecM::try_from(vec![value]).unwrap())));
+        }
+        value
+    }
+
+    fn nest_map(depth: usize) -> ScVal {
+        let mut value = ScVal::U32(0);
+        for _ in 0..depth {
+            value = ScVal::Map(Some(ScMap(
+                VecM::try_from(vec![ScMapEntry {
+                    key: ScVal::U32(0),
+                    val: value,
+                }])
+                .unwrap(),
+            )));
+        }
+        value
+    }
+
+    /// The `pay_executor` invocation args from the happy fixture.
+    fn pay_invoke_args() -> InvokeContractArgs {
+        let envelope = TransactionEnvelope::from_xdr_base64(PAY, Limits::none()).unwrap();
+        let TransactionEnvelope::Tx(v1) = envelope else {
+            panic!("the fixture is a v1 envelope");
+        };
+        let OperationBody::InvokeHostFunction(invoke) = &v1.tx.operations.first().unwrap().body
+        else {
+            panic!("the fixture invokes a contract");
+        };
+        let HostFunction::InvokeContract(args) = &invoke.host_function else {
+            panic!("the fixture invokes a contract");
+        };
+        args.clone()
+    }
+
+    fn matching_root() -> SorobanAuthorizedInvocation {
+        SorobanAuthorizedInvocation {
+            function: SorobanAuthorizedFunction::ContractFn(pay_invoke_args()),
+            sub_invocations: VecM::default(),
+        }
+    }
+
+    /// Re-encodes the happy fixture with one contract-auth entry.
+    fn fixture_with_auth(
+        credentials: SorobanCredentials,
+        root_invocation: SorobanAuthorizedInvocation,
+    ) -> String {
+        rewrite(PAY, |tx| {
+            let operation = tx.operations.iter_mut().next().expect("one operation");
+            let OperationBody::InvokeHostFunction(invoke) = &mut operation.body else {
+                panic!("the fixture invokes a contract");
+            };
+            invoke.auth = VecM::try_from(vec![SorobanAuthorizationEntry {
+                credentials,
+                root_invocation,
+            }])
+            .unwrap();
+        })
+    }
+
+    /// The signer's strict check against the fixture parameters.
+    fn check(xdr: &str) -> Result<(), ExecutorError> {
+        let assets = assets();
+        validate_pay(
+            xdr,
+            &executor_public(),
+            &owner_public(),
+            GUARD,
+            PayCaps {
+                hard_cap_whole: hard_cap_whole(None),
+                assets: &assets,
+                max_fee_stroops: max_fee_stroops(None),
+            },
+        )
+    }
+
+    /// `check` over a fixture whose time window is rewritten to "now". A blob
+    /// that is not an envelope at all is passed through unchanged.
     fn validate(xdr: &str) -> Result<(), ExecutorError> {
-        validate_pay(xdr, &executor_public(), &owner_public(), GUARD, CAP)
+        match TransactionEnvelope::from_xdr_base64(xdr, Limits::none()) {
+            Ok(_) => check(&rewrite(xdr, |tx| tx.cond = valid_cond())),
+            Err(_) => check(xdr),
+        }
     }
 
     #[test]
-    fn hard_cap_scales_whole_units_and_falls_back_closed() {
-        assert_eq!(hard_cap_raw(None), CAP);
-        assert_eq!(hard_cap_raw(Some("100")), CAP);
-        assert_eq!(hard_cap_raw(Some(" 1 ")), 10_000_000);
-        assert_eq!(hard_cap_raw(Some("0")), 0);
-        assert_eq!(hard_cap_raw(Some("-5")), CAP);
-        assert_eq!(hard_cap_raw(Some("nonsense")), CAP);
+    fn caps_fall_back_closed_and_the_fee_env_only_lowers() {
+        assert_eq!(hard_cap_whole(None), 100);
+        assert_eq!(hard_cap_whole(Some("100")), 100);
+        assert_eq!(hard_cap_whole(Some(" 1 ")), 1);
+        assert_eq!(hard_cap_whole(Some("0")), 0);
+        assert_eq!(hard_cap_whole(Some("-5")), 100);
+        assert_eq!(hard_cap_whole(Some("nonsense")), 100);
+
+        assert_eq!(max_fee_stroops(None), DEFAULT_MAX_FEE_STROOPS);
+        assert_eq!(max_fee_stroops(Some("1000")), 1000);
+        // Equal to or above the default is not "downward": the default stands.
+        assert_eq!(
+            max_fee_stroops(Some(&DEFAULT_MAX_FEE_STROOPS.to_string())),
+            DEFAULT_MAX_FEE_STROOPS
+        );
+        assert_eq!(
+            max_fee_stroops(Some("999999999")),
+            DEFAULT_MAX_FEE_STROOPS
+        );
+        assert_eq!(max_fee_stroops(Some("-1")), DEFAULT_MAX_FEE_STROOPS);
+        assert_eq!(max_fee_stroops(Some("nonsense")), DEFAULT_MAX_FEE_STROOPS);
     }
 
     #[test]
@@ -701,7 +1043,13 @@ mod tests {
 
     #[test]
     fn refuses_every_other_transaction_shape() {
-        assert_eq!(validate(OVER_CAP), Err(ExecutorError::OverHardCap(CAP)));
+        assert_eq!(
+            validate(OVER_CAP),
+            Err(ExecutorError::OverHardCap {
+                cap_raw: CAP,
+                decimals: 7
+            })
+        );
         assert!(matches!(validate(OWNER_MISMATCH), Err(ExecutorError::Invalid(_))));
         assert_eq!(validate(WRONG_CONTRACT), Err(ExecutorError::WrongContract));
         assert_eq!(validate(FN_SET_RULE), Err(ExecutorError::NotPayExecutor));
@@ -720,12 +1068,25 @@ mod tests {
         let wallet = installed();
         let session = SessionStore::new(0);
         session.connect();
-        let signed = sign_pay(&wallet, &session, PAY, GUARD, CAP, "Test SDF Network ; September 2015")
-            .unwrap();
+        let fresh = fresh_pay();
+        let assets = assets();
+        let signed = sign_pay(
+            &wallet,
+            &session,
+            &fresh,
+            GUARD,
+            PayCaps {
+                hard_cap_whole: hard_cap_whole(None),
+                assets: &assets,
+                max_fee_stroops: max_fee_stroops(None),
+            },
+            "Test SDF Network ; September 2015",
+        )
+        .unwrap();
         assert_eq!(signed.signer_address, EXECUTOR_ADDRESS);
         // The same independent verifier the wallet uses accepts the signature.
         let verified = crate::bridge::verify::verify_signed(
-            PAY,
+            &fresh,
             &signed.signed_xdr,
             &executor_public(),
             "Test SDF Network ; September 2015",
@@ -738,8 +1099,21 @@ mod tests {
     fn a_locked_session_signs_nothing() {
         let wallet = installed();
         let session = SessionStore::new(0);
+        let assets = assets();
         assert_eq!(
-            sign_pay(&wallet, &session, PAY, GUARD, CAP, "p").unwrap_err(),
+            sign_pay(
+                &wallet,
+                &session,
+                &fresh_pay(),
+                GUARD,
+                PayCaps {
+                    hard_cap_whole: hard_cap_whole(None),
+                    assets: &assets,
+                    max_fee_stroops: max_fee_stroops(None),
+                },
+                "p",
+            )
+            .unwrap_err(),
             ExecutorError::Locked
         );
     }
@@ -749,7 +1123,7 @@ mod tests {
         let wallet = wallet();
         {
             let mut inner = wallet.lock();
-            inner.meta.active = Some(OWNER.to_string());
+            install_account(&mut inner.meta, OWNER, StoreKind::Keychain);
         }
         let session = SessionStore::new(0);
         // Locked: refused before any prompt.
@@ -787,41 +1161,6 @@ mod tests {
 
     #[test]
     fn refuses_a_transaction_that_asks_the_owner_to_authorise() {
-        use stellar_xdr::{
-            SorobanAddressCredentials, SorobanAuthorizationEntry, SorobanAuthorizedFunction,
-            SorobanAuthorizedInvocation, VecM, WriteXdr,
-        };
-
-        // Re-encode the happy fixture with one added contract-auth entry, whose
-        // credentials ask the owner (not the executor) to authorise.
-        fn with_auth(credentials: SorobanCredentials) -> String {
-            let mut envelope = TransactionEnvelope::from_xdr_base64(PAY, Limits::none()).unwrap();
-            let TransactionEnvelope::Tx(v1) = &mut envelope else {
-                panic!("the fixture is a v1 envelope");
-            };
-            let operation = v1
-                .tx
-                .operations
-                .iter_mut()
-                .next()
-                .expect("the fixture has one operation");
-            let OperationBody::InvokeHostFunction(invoke) = &mut operation.body else {
-                panic!("the fixture invokes a contract");
-            };
-            let HostFunction::InvokeContract(args) = &invoke.host_function else {
-                panic!("the fixture invokes a contract");
-            };
-            invoke.auth = VecM::try_from(vec![SorobanAuthorizationEntry {
-                credentials,
-                root_invocation: SorobanAuthorizedInvocation {
-                    function: SorobanAuthorizedFunction::ContractFn(args.clone()),
-                    sub_invocations: VecM::default(),
-                },
-            }])
-            .unwrap();
-            envelope.to_xdr_base64(Limits::none()).unwrap()
-        }
-
         let owner_entry = SorobanCredentials::Address(SorobanAddressCredentials {
             address: ScAddress::Account(AccountId(PublicKey::PublicKeyTypeEd25519(Uint256(
                 owner_public(),
@@ -831,16 +1170,50 @@ mod tests {
             signature: ScVal::Void,
         });
         assert!(matches!(
-            validate(&with_auth(owner_entry)),
+            validate(&fixture_with_auth(owner_entry, matching_root())),
             Err(ExecutorError::Invalid(_))
         ));
 
         // The executor's own auth (the tx source) is the expected entry.
-        validate(&with_auth(SorobanCredentials::SourceAccount)).unwrap();
+        validate(&fixture_with_auth(
+            SorobanCredentials::SourceAccount,
+            matching_root(),
+        ))
+        .unwrap();
     }
 
     #[test]
-    fn validate_never_panics_on_mutations() {
+    fn refuses_an_auth_tree_that_is_not_exactly_the_operation() {
+        // A root invocation with a sub-invocation is not this one call.
+        let mut with_sub = matching_root();
+        with_sub.sub_invocations = VecM::try_from(vec![matching_root()]).unwrap();
+        assert!(matches!(
+            validate(&fixture_with_auth(
+                SorobanCredentials::SourceAccount,
+                with_sub
+            )),
+            Err(ExecutorError::Invalid(_))
+        ));
+
+        // A root invocation with the same contract/function but different args
+        // is not this operation.
+        let mut wrong_args = pay_invoke_args();
+        wrong_args.args = VecM::try_from(vec![ScVal::U32(7)]).unwrap();
+        let wrong_root = SorobanAuthorizedInvocation {
+            function: SorobanAuthorizedFunction::ContractFn(wrong_args),
+            sub_invocations: VecM::default(),
+        };
+        assert!(matches!(
+            validate(&fixture_with_auth(
+                SorobanCredentials::SourceAccount,
+                wrong_root
+            )),
+            Err(ExecutorError::Invalid(_))
+        ));
+    }
+
+    #[test]
+    fn validate_never_panics_on_mutations_and_hostile_shapes() {
         use base64::Engine as _;
         let engine = base64::engine::general_purpose::STANDARD;
         let base = crate::bridge::verify::decode_envelope(PAY).unwrap();
@@ -852,18 +1225,240 @@ mod tests {
             state
         };
         for cut in 0..=base.len().min(128) {
-            let _ = validate_pay(
-                &engine.encode(&base[..cut]),
-                &executor_public(),
-                &owner_public(),
-                GUARD,
-                CAP,
-            );
+            let _ = check(&engine.encode(&base[..cut]));
         }
         for _ in 0..1500 {
             let len = (rng() % 400) as usize;
             let garbage: Vec<u8> = (0..len).map(|_| rng() as u8).collect();
-            let _ = validate_pay(&engine.encode(&garbage), &executor_public(), &owner_public(), GUARD, CAP);
+            let _ = check(&engine.encode(&garbage));
         }
+        // Structured hostile shapes: deep nesting and a huge string, each within
+        // and beyond the input cap, must be typed refusals (no panic/overflow).
+        for deep in [64usize, 256] {
+            for value in [nest_vec(deep), nest_map(deep)] {
+                let xdr = rewrite(PAY, |tx| {
+                    tx.cond = valid_cond();
+                    set_arg(tx, 2, value.clone());
+                });
+                assert!(matches!(check(&xdr), Err(ExecutorError::Invalid(_))));
+            }
+        }
+        let huge = ScVal::String(ScString(
+            StringM::try_from("A".repeat(100_000)).unwrap(),
+        ));
+        let xdr = rewrite(PAY, |tx| {
+            tx.cond = valid_cond();
+            set_arg(tx, 2, huge.clone());
+        });
+        assert!(matches!(check(&xdr), Err(ExecutorError::Invalid(_))));
+    }
+
+    #[test]
+    fn caps_the_fee_resource_fee_preconditions_and_memo() {
+        // Fee: the exact cap is accepted, one stroop over and the maximal u32
+        // are refused.
+        let at_fee = rewrite(PAY, |tx| {
+            tx.cond = valid_cond();
+            tx.fee = DEFAULT_MAX_FEE_STROOPS as u32;
+        });
+        assert!(check(&at_fee).is_ok());
+        for fee in [DEFAULT_MAX_FEE_STROOPS as u32 + 1, u32::MAX] {
+            let over = rewrite(PAY, |tx| {
+                tx.cond = valid_cond();
+                tx.fee = fee;
+            });
+            assert!(matches!(check(&over), Err(ExecutorError::Invalid(_))));
+        }
+
+        // Soroban resource fee: exact cap accepted, over refused.
+        let at_resource = rewrite(PAY, |tx| {
+            tx.cond = valid_cond();
+            tx.ext = soroban_ext(MAX_RESOURCE_FEE_STROOPS);
+        });
+        assert!(check(&at_resource).is_ok());
+        for resource_fee in [MAX_RESOURCE_FEE_STROOPS + 1, i64::from(u32::MAX) * 1000] {
+            let over = rewrite(PAY, |tx| {
+                tx.cond = valid_cond();
+                tx.ext = soroban_ext(resource_fee);
+            });
+            assert!(matches!(check(&over), Err(ExecutorError::Invalid(_))));
+        }
+
+        // Preconditions: missing, never-expiring, far-future and future-min are
+        // refused; the exact window boundary is accepted.
+        let missing = rewrite(PAY, |tx| tx.cond = Preconditions::None);
+        assert!(matches!(check(&missing), Err(ExecutorError::Invalid(_))));
+        let never = rewrite(PAY, |tx| {
+            tx.cond = Preconditions::Time(TimeBounds {
+                min_time: TimePoint(0),
+                max_time: TimePoint(0),
+            });
+        });
+        assert!(matches!(check(&never), Err(ExecutorError::Invalid(_))));
+        let far = rewrite(PAY, |tx| {
+            tx.cond = Preconditions::Time(TimeBounds {
+                min_time: TimePoint(0),
+                max_time: TimePoint(now_secs() + 3600),
+            });
+        });
+        assert!(matches!(check(&far), Err(ExecutorError::Invalid(_))));
+        let future_min = rewrite(PAY, |tx| {
+            tx.cond = Preconditions::Time(TimeBounds {
+                min_time: TimePoint(now_secs() + 1000),
+                max_time: TimePoint(now_secs() + 1100),
+            });
+        });
+        assert!(matches!(check(&future_min), Err(ExecutorError::Invalid(_))));
+        // V2 preconditions (ledger bounds/extra signers) are never accepted.
+        let v2 = rewrite(PAY, |tx| tx.cond = Preconditions::V2(PreconditionsV2::default()));
+        assert!(matches!(check(&v2), Err(ExecutorError::Invalid(_))));
+        let at_window = rewrite(PAY, |tx| {
+            tx.cond = Preconditions::Time(TimeBounds {
+                min_time: TimePoint(0),
+                max_time: TimePoint(now_secs() + TIME_BOUND_WINDOW_SECS),
+            });
+        });
+        assert!(check(&at_window).is_ok());
+
+        // A memo (any kind) is refused.
+        for memo in [Memo::Id(1), Memo::Text(StringM::try_from("hi").unwrap())] {
+            let with_memo = rewrite(PAY, |tx| {
+                tx.cond = valid_cond();
+                tx.memo = memo.clone();
+            });
+            assert!(matches!(check(&with_memo), Err(ExecutorError::Invalid(_))));
+        }
+    }
+
+    #[test]
+    fn refuses_an_asset_that_is_not_in_the_decimals_allow_list() {
+        // An empty allow-list refuses the payment rather than assuming decimals.
+        let xdr = fresh_pay();
+        let empty = BTreeMap::new();
+        assert!(matches!(
+            validate_pay(
+                &xdr,
+                &executor_public(),
+                &owner_public(),
+                GUARD,
+                PayCaps {
+                    hard_cap_whole: hard_cap_whole(None),
+                    assets: &empty,
+                    max_fee_stroops: max_fee_stroops(None),
+                },
+            ),
+            Err(ExecutorError::Invalid(_))
+        ));
+        // A zero-decimal cap is tighter: the same amount is over it.
+        let mut small = BTreeMap::new();
+        small.insert(ASSET_HEX.to_string(), 0);
+        assert!(matches!(
+            validate_pay(
+                &xdr,
+                &executor_public(),
+                &owner_public(),
+                GUARD,
+                PayCaps {
+                    hard_cap_whole: hard_cap_whole(None),
+                    assets: &small,
+                    max_fee_stroops: max_fee_stroops(None),
+                },
+            ),
+            Err(ExecutorError::OverHardCap { decimals: 0, .. })
+        ));
+    }
+
+    #[test]
+    fn decode_bounds_never_overflow_a_small_stack() {
+        // Building/encoding thousands of levels is itself recursive, so it runs
+        // on a large stack; the **validation** then runs on a small one.
+        let (within_cap, deep, huge) = std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(|| {
+                (
+                    // Fits the input cap but nests far past the depth limit.
+                    rewrite(PAY, |tx| {
+                        tx.cond = valid_cond();
+                        set_arg(tx, 2, nest_vec(100));
+                    }),
+                    rewrite(PAY, |tx| {
+                        tx.cond = valid_cond();
+                        set_arg(tx, 2, nest_vec(3000));
+                    }),
+                    rewrite(PAY, |tx| {
+                        tx.cond = valid_cond();
+                        set_arg(
+                            tx,
+                            2,
+                            ScVal::String(ScString(
+                                StringM::try_from("A".repeat(200_000)).unwrap(),
+                            )),
+                        );
+                    }),
+                )
+            })
+            .expect("the builder thread starts")
+            .join()
+            .expect("the payloads are built without overflowing");
+
+        let handle = std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(move || {
+                for xdr in [within_cap, deep, huge] {
+                    assert!(matches!(check(&xdr), Err(ExecutorError::Invalid(_))));
+                }
+            })
+            .expect("the bounded decode must not overflow the thread");
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn concurrent_creates_leave_one_consistent_executor() {
+        let wallet = Arc::new(wallet());
+        {
+            let mut inner = wallet.lock();
+            install_account(&mut inner.meta, OWNER, StoreKind::Keychain);
+        }
+        let session = Arc::new(SessionStore::new(0));
+        session.connect();
+        let auth = Arc::new(allow());
+        let mut handles = Vec::new();
+        for _ in 0..8 {
+            let wallet = Arc::clone(&wallet);
+            let session = Arc::clone(&session);
+            let auth = Arc::clone(&auth);
+            handles.push(std::thread::spawn(move || {
+                create(&wallet, &session, auth.as_ref()).unwrap().address
+            }));
+        }
+        let addresses: Vec<String> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+        assert!(addresses.iter().all(|address| *address == addresses[0]));
+
+        let stored = wallet.stores.keychain.get(&item_id(OWNER)).unwrap();
+        assert_eq!(keys::address_of(&stored), addresses[0]);
+        let meta = wallet.lock().meta.clone();
+        assert_eq!(meta.executors.len(), 1);
+        assert_eq!(meta.executors.get(OWNER), Some(&addresses[0]));
+    }
+
+    #[test]
+    fn read_seed_follows_the_recorded_store_kind() {
+        let root = crate::env::temp_dir("executor-store");
+        let keychain = Arc::new(memory::MemoryStore::new());
+        let file = Arc::new(memory::MemoryStore::new());
+        let wallet = WalletService::new(
+            Stores::new(keychain.clone(), file.clone(), true, true),
+            root,
+        );
+        {
+            let mut inner = wallet.lock();
+            install_account(&mut inner.meta, OWNER, StoreKind::File);
+        }
+        // The seed is in the file store the account records.
+        file.set(&item_id(OWNER), &[0x44u8; 32]).unwrap();
+        assert_eq!(*read_seed(&wallet, OWNER).unwrap(), [0x44u8; 32]);
+        // A Keychain seed is never a silent fallback for a file-stored account.
+        keychain.set(&item_id(OWNER), &[0x55u8; 32]).unwrap();
+        assert_eq!(*read_seed(&wallet, OWNER).unwrap(), [0x44u8; 32]);
     }
 }

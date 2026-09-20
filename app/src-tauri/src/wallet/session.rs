@@ -378,7 +378,7 @@ pub fn wallet_lock(
     approvals: State<'_, ApprovalStore>,
 ) -> WalletSession {
     session.disconnect();
-    if let Some(payload_hash) = approvals.invalidate_for_lock() {
+    for payload_hash in approvals.invalidate_for_lock() {
         events::emit(
             &app,
             PolarisEvent::ApprovalResult {
@@ -423,7 +423,7 @@ pub fn spawn_auto_lock(
     std::thread::spawn(move || loop {
         std::thread::sleep(Duration::from_secs(1));
         if session.refresh_auto_lock() {
-            if let Some(payload_hash) = approvals.invalidate_for_lock() {
+            for payload_hash in approvals.invalidate_for_lock() {
                 events::emit(
                     &app,
                     PolarisEvent::ApprovalResult {
@@ -682,7 +682,7 @@ mod tests {
         session.connect();
         session.disconnect();
         let rejected = approvals.invalidate_for_lock();
-        assert!(rejected.is_some());
+        assert_eq!(rejected.len(), 1);
         assert!(approvals.take_authorized(&id).is_err());
     }
 
