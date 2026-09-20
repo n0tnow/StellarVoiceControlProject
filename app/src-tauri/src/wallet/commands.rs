@@ -13,6 +13,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 use zeroize::Zeroize;
 
+use super::session::SessionStore;
 use super::{AddressOutcome, CreateOutcome, WalletError, WalletService, WalletStatus};
 use crate::approval::ApprovalStore;
 use crate::biometric::Authenticator;
@@ -47,6 +48,14 @@ fn emit_changed(app: &AppHandle, wallet: &WalletService) {
     let _ = app.emit(super::CHANGED_EVENT, wallet.status());
 }
 
+/// Broadcasts the fresh session (W13a) after a login-relevant change.
+fn emit_session_changed(app: &AppHandle, session: &SessionStore, wallet: &WalletService) {
+    crate::events::emit(
+        app,
+        crate::events::PolarisEvent::WalletSessionChanged(session.snapshot(wallet)),
+    );
+}
+
 /// `wallet_status`: is a wallet configured, where is the seed stored, which
 /// signer is active. Never prompts.
 #[tauri::command]
@@ -66,19 +75,23 @@ pub fn wallet_health(wallet: State<'_, Arc<WalletService>>) -> FeatureHealth {
 pub async fn wallet_create(
     app: AppHandle,
     wallet: State<'_, Arc<WalletService>>,
+    session: State<'_, Arc<SessionStore>>,
     authenticator: State<'_, Arc<dyn Authenticator>>,
     label: Option<String>,
 ) -> Result<CreateOutcome, WalletCommandError> {
     let wallet = Arc::clone(wallet.inner());
     let emit_handle = Arc::clone(&wallet);
+    let session = Arc::clone(session.inner());
+    let task_session = Arc::clone(&session);
     let authenticator = Arc::clone(authenticator.inner());
     let outcome = tauri::async_runtime::spawn_blocking(move || {
-        wallet.create(authenticator.as_ref(), label.as_deref())
+        task_session.create(wallet.as_ref(), authenticator.as_ref(), label.as_deref())
     })
     .await
     .map_err(join_error)?
     .map_err(WalletCommandError::from)?;
     emit_changed(&app, &emit_handle);
+    emit_session_changed(&app, session.as_ref(), &emit_handle);
     Ok(outcome)
 }
 
@@ -102,6 +115,7 @@ pub fn wallet_import_preview(
 pub async fn wallet_import(
     app: AppHandle,
     wallet: State<'_, Arc<WalletService>>,
+    session: State<'_, Arc<SessionStore>>,
     authenticator: State<'_, Arc<dyn Authenticator>>,
     secret_or_phrase: String,
     index: Option<u32>,
@@ -109,10 +123,18 @@ pub async fn wallet_import(
 ) -> Result<AddressOutcome, WalletCommandError> {
     let wallet = Arc::clone(wallet.inner());
     let emit_handle = Arc::clone(&wallet);
+    let session = Arc::clone(session.inner());
+    let task_session = Arc::clone(&session);
     let authenticator = Arc::clone(authenticator.inner());
     let outcome = tauri::async_runtime::spawn_blocking(move || {
         let mut secret = secret_or_phrase;
-        let result = wallet.import(authenticator.as_ref(), &secret, index, label.as_deref());
+        let result = task_session.import(
+            wallet.as_ref(),
+            authenticator.as_ref(),
+            &secret,
+            index,
+            label.as_deref(),
+        );
         secret.zeroize();
         result
     })
@@ -120,6 +142,7 @@ pub async fn wallet_import(
     .map_err(join_error)?
     .map_err(WalletCommandError::from)?;
     emit_changed(&app, &emit_handle);
+    emit_session_changed(&app, session.as_ref(), &emit_handle);
     Ok(outcome)
 }
 
@@ -134,10 +157,16 @@ pub fn wallet_list(wallet: State<'_, Arc<WalletService>>) -> Vec<super::AccountV
 pub fn wallet_select(
     app: AppHandle,
     wallet: State<'_, Arc<WalletService>>,
+    session: State<'_, Arc<SessionStore>>,
     address: String,
 ) -> Result<AddressOutcome, WalletCommandError> {
-    let outcome = wallet.select(&address).map_err(WalletCommandError::from)?;
-    emit_changed(&app, &wallet);
+    let session = session.inner().as_ref();
+    let wallet = wallet.inner().as_ref();
+    let outcome = session
+        .select(wallet, &address)
+        .map_err(WalletCommandError::from)?;
+    emit_changed(&app, wallet);
+    emit_session_changed(&app, session, wallet);
     Ok(outcome)
 }
 
@@ -146,13 +175,17 @@ pub fn wallet_select(
 pub fn wallet_rename(
     app: AppHandle,
     wallet: State<'_, Arc<WalletService>>,
+    session: State<'_, Arc<SessionStore>>,
     address: String,
     label: String,
 ) -> Result<AddressOutcome, WalletCommandError> {
-    let outcome = wallet
-        .rename(&address, &label)
+    let session = session.inner().as_ref();
+    let wallet = wallet.inner().as_ref();
+    let outcome = session
+        .rename(wallet, &address, &label)
         .map_err(WalletCommandError::from)?;
-    emit_changed(&app, &wallet);
+    emit_changed(&app, wallet);
+    emit_session_changed(&app, session, wallet);
     Ok(outcome)
 }
 
@@ -161,19 +194,23 @@ pub fn wallet_rename(
 pub async fn wallet_remove(
     app: AppHandle,
     wallet: State<'_, Arc<WalletService>>,
+    session: State<'_, Arc<SessionStore>>,
     authenticator: State<'_, Arc<dyn Authenticator>>,
     address: String,
 ) -> Result<AddressOutcome, WalletCommandError> {
     let wallet = Arc::clone(wallet.inner());
     let emit_handle = Arc::clone(&wallet);
+    let session = Arc::clone(session.inner());
+    let task_session = Arc::clone(&session);
     let authenticator = Arc::clone(authenticator.inner());
     let outcome = tauri::async_runtime::spawn_blocking(move || {
-        wallet.remove(&address, authenticator.as_ref())
+        task_session.remove(wallet.as_ref(), &address, authenticator.as_ref())
     })
     .await
     .map_err(join_error)?
     .map_err(WalletCommandError::from)?;
     emit_changed(&app, &emit_handle);
+    emit_session_changed(&app, session.as_ref(), &emit_handle);
     Ok(outcome)
 }
 
@@ -182,36 +219,46 @@ pub async fn wallet_remove(
 #[tauri::command]
 pub fn wallet_sign(
     wallet: State<'_, Arc<WalletService>>,
+    session: State<'_, Arc<SessionStore>>,
     approvals: State<'_, ApprovalStore>,
     id: String,
 ) -> BridgeOutcome {
+    // Fail closed before the gate is touched: a locked wallet consumes nothing.
+    if let Err(error) = session.ensure_unlocked() {
+        return outcome_fail(error.bridge_code(), error.detail());
+    }
     let released = match approvals.take_authorized(&id) {
         Ok(payload) => payload,
         Err(error) => return outcome_fail("not_authorized", error.detail()),
     };
     let passphrase = stellar_config::read().network_passphrase;
-    match wallet.sign(&released.unsigned_xdr, &passphrase) {
+    match session.sign(wallet.inner().as_ref(), &released.unsigned_xdr, &passphrase) {
         Ok(signed) => outcome_ok(signed.signed_xdr, signed.signer_address, signed.tx_hash),
         Err(error) => outcome_fail(error.bridge_code(), error.detail()),
     }
 }
 
 /// `wallet_sign_challenge`: signs a SEP-10 challenge (sequence 0, no Touch ID).
-/// Refuses any non-zero-sequence or owner-sourced envelope.
+/// Refuses any non-zero-sequence or owner-sourced envelope, and any locked
+/// session.
 #[tauri::command]
 pub fn wallet_sign_challenge(
     wallet: State<'_, Arc<WalletService>>,
+    session: State<'_, Arc<SessionStore>>,
     xdr: String,
 ) -> BridgeOutcome {
+    if let Err(error) = session.ensure_unlocked() {
+        return outcome_fail(error.bridge_code(), error.detail());
+    }
     let passphrase = stellar_config::read().network_passphrase;
-    match wallet.sign_challenge(&xdr, &passphrase) {
+    match session.sign_challenge(wallet.inner().as_ref(), &xdr, &passphrase) {
         Ok(signed) => outcome_ok(signed.signed_xdr, signed.signer_address, signed.tx_hash),
         Err(error) => outcome_fail(error.bridge_code(), error.detail()),
     }
 }
 
 /// Maps a blocking-task join failure to the command error shape.
-fn join_error(error: impl std::fmt::Display) -> WalletCommandError {
+pub(crate) fn join_error(error: impl std::fmt::Display) -> WalletCommandError {
     WalletCommandError {
         kind: "keychain".to_string(),
         message: format!("the wallet task did not finish: {error}"),

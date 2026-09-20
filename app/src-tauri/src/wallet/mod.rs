@@ -39,7 +39,10 @@ pub mod keychain;
 pub mod keys;
 #[cfg(test)]
 pub mod memory;
+pub mod session;
 pub mod signing;
+
+pub use session::WalletSession;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -72,6 +75,8 @@ pub const IMPORT_REASON: &str = "Import a wallet into Polaris";
 pub const REMOVE_REASON: &str = "Remove a Polaris wallet account";
 /// The Tauri event emitted whenever the active wallet changes.
 pub const CHANGED_EVENT: &str = "wallet_changed";
+/// Default idle auto-lock timeout (W13a). `0` means "never".
+pub const DEFAULT_AUTO_LOCK_MINUTES: u64 = 30;
 
 /// Every way a wallet operation can fail. Mapped to a stable `kind` for the
 /// webview and a one-sentence `message` for a non-developer.
@@ -107,6 +112,8 @@ pub enum WalletError {
     Cancelled,
     /// Touch ID was refused or unavailable (not a cancellation).
     Unauthorized(String),
+    /// The wallet session is locked; a secret-touching action was refused.
+    Locked,
     /// The returned envelope failed the independent verification.
     Integrity(String),
 }
@@ -125,6 +132,7 @@ impl WalletError {
             Self::SignerChanged => "unauthorized",
             Self::Cancelled => "cancelled",
             Self::Unauthorized(_) => "unauthorized",
+            Self::Locked => "locked",
             Self::Integrity(_) => "invalid",
         }
     }
@@ -156,6 +164,7 @@ impl WalletError {
                 .to_string(),
             Self::Cancelled => "Touch ID was cancelled".to_string(),
             Self::Unauthorized(detail) => format!("Touch ID was not completed: {detail}"),
+            Self::Locked => "the wallet is locked; log in to sign or manage it".to_string(),
             Self::Integrity(detail) => {
                 format!("the signed transaction failed verification: {detail}")
             }
@@ -171,6 +180,9 @@ impl WalletError {
             Self::Cancelled => "rejected",
             Self::Unauthorized(_) => "not_authorized",
             Self::SignerChanged => "address_mismatch",
+            // A locked wallet is fail-closed "not approved": no signed envelope
+            // leaves unless the user has logged in.
+            Self::Locked => "not_authorized",
             _ => "error",
         }
     }
@@ -316,6 +328,10 @@ pub struct Metadata {
     pub active: Option<String>,
     #[serde(default)]
     pub accounts: Vec<AccountMeta>,
+    /// Idle auto-lock timeout in minutes (W13a); `None` means the default. `0`
+    /// means "never lock". Non-secret, so it is safe in this file.
+    #[serde(default)]
+    pub auto_lock_minutes: Option<u64>,
 }
 
 struct Inner {
@@ -330,7 +346,7 @@ pub struct WalletService {
 }
 
 /// The active account's non-secret identity, as `wallet_status` reports it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ActiveWallet {
     pub address: String,
@@ -460,6 +476,23 @@ impl WalletService {
             count: inner.meta.accounts.len(),
             store: self.stores.label().to_string(),
         }
+    }
+
+    /// The persisted idle auto-lock timeout in minutes (W13a); the default when
+    /// unset. `0` means "never".
+    pub fn auto_lock_minutes(&self) -> u64 {
+        self.lock()
+            .meta
+            .auto_lock_minutes
+            .unwrap_or(DEFAULT_AUTO_LOCK_MINUTES)
+    }
+
+    /// Persists the idle auto-lock timeout in minutes (W13a). Non-secret, so no
+    /// Touch ID is required; `0` means "never".
+    pub fn set_auto_lock_minutes(&self, minutes: u64) -> Result<(), WalletError> {
+        let mut inner = self.lock();
+        inner.meta.auto_lock_minutes = Some(minutes);
+        file::save_metadata(&self.root, &inner.meta)
     }
 
     /// Generates a new 24-word wallet, stores it, and returns the address plus the

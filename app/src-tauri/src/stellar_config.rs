@@ -222,6 +222,17 @@ pub fn read_with_wallet(active: Option<String>) -> StellarConfig {
     from_lookup(crate::env::var, active)
 }
 
+/// Applies the W13a session rule: while the wallet session is locked, the owner
+/// address is withheld even when `POLARIS_OWNER_ADDRESS` is set, so every chain
+/// tool refuses to build a transaction until the user logs in. Non-secret, but
+/// the address is the sending identity and is only meaningful once unlocked.
+pub fn with_locked_owner(mut config: StellarConfig, unlocked: bool) -> StellarConfig {
+    if !unlocked {
+        config.owner_address = None;
+    }
+    config
+}
+
 /// Overlays the saved contacts under the env aliases (W10b). Precedence is
 /// **committed `aliases.json` < contacts < `POLARIS_ALIASES`**: the committed
 /// book is merged on the TypeScript side, contacts fill it here, and an env pair
@@ -248,8 +259,12 @@ pub fn aliases_with_contacts(
 pub fn stellar_config(
     app: tauri::AppHandle,
     wallet: tauri::State<'_, std::sync::Arc<crate::wallet::WalletService>>,
+    session: tauri::State<'_, std::sync::Arc<crate::wallet::session::SessionStore>>,
 ) -> StellarConfig {
-    let mut config = read_with_wallet(wallet.active_address());
+    let mut config = with_locked_owner(
+        read_with_wallet(wallet.active_address()),
+        session.is_unlocked(),
+    );
     let contacts = crate::contacts::load_for_app(&app);
     config.aliases = aliases_with_contacts(std::mem::take(&mut config.aliases), &contacts);
     config
@@ -451,6 +466,25 @@ mod tests {
         assert!(json.contains(r#""aliases":{"acc2":"GB25"#));
         assert!(json.contains(r#""guardContractId":null"#));
         assert!(json.contains(r#""p2pContractId":null"#));
+    }
+
+    #[test]
+    fn a_locked_session_withholds_the_owner_address() {
+        let with_env = from_pairs_with_wallet(&[("POLARIS_OWNER_ADDRESS", OWNER)], None);
+        assert_eq!(with_env.owner_address.as_deref(), Some(OWNER));
+        // Locked: even an env-provided owner is withheld (fail-closed).
+        assert_eq!(with_locked_owner(with_env.clone(), false).owner_address, None);
+        // Unlocked: unchanged.
+        assert_eq!(
+            with_locked_owner(with_env, true).owner_address.as_deref(),
+            Some(OWNER)
+        );
+        // A locked session with a wallet-derived owner is withheld too.
+        let with_wallet = from_pairs_with_wallet(&[], Some(OWNER));
+        assert_eq!(
+            with_locked_owner(with_wallet, false).owner_address,
+            None
+        );
     }
 
     #[test]

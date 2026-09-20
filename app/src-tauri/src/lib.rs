@@ -101,6 +101,11 @@ pub fn run() {
             wallet::commands::wallet_remove,
             wallet::commands::wallet_sign,
             wallet::commands::wallet_sign_challenge,
+            // Step W13a: the wallet session — login, logout and idle auto-lock.
+            wallet::session::wallet_session,
+            wallet::session::wallet_unlock,
+            wallet::session::wallet_lock,
+            wallet::session::wallet_set_auto_lock,
         ])
         // Step W0: a panel's close button hides it instead of quitting the app
         // (the overlay's `main` window is never closed, so the close handler is
@@ -165,7 +170,8 @@ pub fn run() {
             // pending approval that may be released to the Freighter bridge;
             // the authenticator is the real LocalAuthentication prompt (a fake
             // is used only in tests).
-            app.manage(approval::ApprovalStore::new());
+            let approvals = approval::ApprovalStore::new();
+            app.manage(approvals.clone());
             app.manage(biometric::system());
 
             // Step W4b: the browser launcher for the Freighter signing bridge.
@@ -178,7 +184,20 @@ pub fn run() {
             // saying so) and loads the non-secret `wallets.json` metadata. An
             // `Arc` so the async, Touch-ID-gated commands can move it to a
             // blocking thread.
-            app.manage(std::sync::Arc::new(wallet::WalletService::build()));
+            let wallet = std::sync::Arc::new(wallet::WalletService::build());
+            // Step W13a: the wallet session. Always starts locked when wallets
+            // exist; the timer logs out after the persisted idle timeout.
+            let session = std::sync::Arc::new(wallet::session::SessionStore::new(
+                wallet.auto_lock_minutes(),
+            ));
+            wallet::session::spawn_auto_lock(
+                app.handle().clone(),
+                std::sync::Arc::clone(&wallet),
+                std::sync::Arc::clone(&session),
+                approvals,
+            );
+            app.manage(wallet);
+            app.manage(session);
 
             // Registers the Control+Option monitor and the Control+Option+Space
             // fallback; both feed the same capture latch.

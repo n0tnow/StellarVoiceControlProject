@@ -71,6 +71,8 @@ function summarizeEvent(event: PolarisEvent): string {
       return `${event.approved ? "approved" : "denied"} ${event.payloadHash}`;
     case "tx_submitted":
       return event.hash;
+    case "wallet_session_changed":
+      return `${event.state}${event.active ? ` · ${event.active.address}` : ""}`;
     case "error":
       return event.message;
   }
