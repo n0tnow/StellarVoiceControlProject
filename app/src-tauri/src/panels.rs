@@ -39,7 +39,7 @@ const LABEL_PREFIX: &str = "panel-";
 /// hash. Keep `route` in step with `parsePanelRoute` in the frontend.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PanelSpec {
-    /// Name callers use (`open_panel` payload, tray menu).
+    /// Name callers use (`open_panel` payload).
     pub name: &'static str,
     /// Tauri window label. One window per label, reused across opens.
     pub label: &'static str,
@@ -211,8 +211,8 @@ pub fn open(app: &AppHandle, name: &str) -> Result<(), PanelError> {
     open_spec(app, resolve(name)?)
 }
 
-/// Opens a spec directly — the shared helper the command, the tray and any
-/// future Rust caller go through.
+/// Opens a spec directly — the shared helper the command and any future Rust
+/// caller go through.
 ///
 /// One instance per label: the first call builds the window; later calls only
 /// show and focus it, so panel state survives a close. Close does not destroy
@@ -239,8 +239,9 @@ pub fn open_spec(app: &AppHandle, spec: &PanelSpec) -> Result<(), PanelError> {
             window.set_focus().map_err(window_error)?;
             Ok(())
         }
-        // Lost a create race (a tray click and `open_panel` at once): the winner
-        // built exactly this window, so focus it instead of reporting a failure.
+        // Lost a create race (two opens at once, e.g. the notch menu and
+        // `open_panel`): the winner built exactly this window, so focus it
+        // instead of reporting a failure.
         Err(error) if is_label_collision(&error) => show_and_focus(app, spec),
         Err(error) => Err(window_error(error)),
     }
@@ -303,8 +304,8 @@ pub fn open_panel(app: AppHandle, name: String) -> Result<(), PanelError> {
 mod tests {
     use super::*;
 
-    /// The frontend `parsePanelRoute` and the tray both rely on exactly these
-    /// names; a rename here is a breaking change to both.
+    /// The frontend `parsePanelRoute` and the notch menu both rely on exactly
+    /// these names; a rename here is a breaking change to both.
     #[test]
     fn the_allow_list_is_exactly_the_known_panels() {
         let names: Vec<&str> = PANELS.iter().map(|panel| panel.name).collect();
@@ -424,8 +425,8 @@ mod tests {
         assert!(!resolve(DEBUG).unwrap().always_on_top);
     }
 
-    /// A create race (tray vs. `open_panel`) must be invisible: the loser focuses
-    /// the winner's window instead of surfacing a spurious window error.
+    /// A create race (two opens) must be invisible: the loser focuses the
+    /// winner's window instead of surfacing a spurious window error.
     #[test]
     fn a_label_collision_is_recognised_but_other_errors_are_not() {
         assert!(is_label_collision(&tauri::Error::WebviewLabelAlreadyExists(

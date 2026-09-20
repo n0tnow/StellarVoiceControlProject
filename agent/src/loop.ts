@@ -1,4 +1,4 @@
-import type { Intent } from "@polaris/interfaces";
+import type { Intent, NavigationRequest } from "@polaris/interfaces";
 import { AgentError, isAgentError } from "./errors.ts";
 import type { PolarisEventBus } from "./events.ts";
 import { resolveTurnLanguage } from "./language.ts";
@@ -68,6 +68,11 @@ export interface AgentTurnResult {
   intent?: Intent;
   /** Registry name of the tool that produced `intent`. */
   intentTool?: string;
+  /**
+   * A read-only navigation request (`navigate`), when the model opened a screen
+   * by voice. Never set together with `intent`: a value-moving command wins.
+   */
+  navigation?: NavigationRequest;
   /** The reconciled turn language, forwarded to speech (steps A11/A12). */
   language?: string;
   /** Which side decided `language`: the model or the audio detector. */
@@ -143,6 +148,9 @@ export async function runTurn(options: AgentTurnOptions): Promise<AgentTurnResul
     // supplies one so the turn can answer aloud without a second model call.
     const spokenResults: string[] = [];
     const intents: Array<{ tool: string; intent: Intent }> = [];
+    // Read-only navigation requests (NAV). Like spoken results they are produced
+    // during the turn; unlike intents they never reach the approval gate.
+    const navigations: NavigationRequest[] = [];
     let clarification: string | undefined;
 
     for (const call of first.toolCalls) {
@@ -179,6 +187,8 @@ export async function runTurn(options: AgentTurnOptions): Promise<AgentTurnResul
       toolResults.push(`${tool.name} -> ${JSON.stringify(output)}`);
       const spoken = tool.toSpeech?.(output);
       if (spoken) spokenResults.push(spoken);
+      const navigation = tool.toNavigation?.(output);
+      if (navigation) navigations.push(navigation);
     }
 
     let answer: string;
@@ -203,6 +213,10 @@ export async function runTurn(options: AgentTurnOptions): Promise<AgentTurnResul
       answer = first.text ?? "(no answer)";
     }
 
+    // A value-moving intent outranks navigation: if the model produced both, the
+    // payment is what matters and the screen request is dropped.
+    const navigation = intents.length === 0 ? navigations[0] : undefined;
+
     if (toolResults.length > 0) {
       bus.emit({
         type: "transcript",
@@ -215,6 +229,7 @@ export async function runTurn(options: AgentTurnOptions): Promise<AgentTurnResul
       answer,
       executedTools,
       ...(resolved ? { intent: resolved.intent, intentTool: resolved.tool } : {}),
+      ...(navigation ? { navigation } : {}),
       // The reconciled language is handed to the shell so the voice matches the
       // words (steps A11/A12). Absent means "unknown" — never guessed here.
       ...(language.language && language.source !== "none"

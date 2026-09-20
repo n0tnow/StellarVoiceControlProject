@@ -24,7 +24,7 @@ import {
   type AssetBalance,
   type BalanceReader,
 } from "@polaris/agent";
-import type { AgentStage, Intent } from "@polaris/interfaces";
+import type { AgentStage, Intent, NavigationRequest } from "@polaris/interfaces";
 import { markTurnPhase } from "@/lib/polaris";
 import { getStellarConfig } from "@/lib/stellarConfig";
 import committedAliases from "../../../stellar/config/aliases.json";
@@ -89,6 +89,8 @@ export interface AgentOutcome {
   transcript: string;
   answer: string;
   intent?: Intent;
+  /** A read-only screen request (`navigate`), when the model opened a screen. */
+  navigation?: NavigationRequest;
   executedTools: string[];
   /** Reconciled BCP-47 language of the turn (steps A11/A12); drives the voice. */
   language?: string;
@@ -299,6 +301,7 @@ export async function runAgentTurn(
         transcript,
         answer: result.answer,
         ...(result.intent ? { intent: result.intent } : {}),
+        ...(result.navigation ? { navigation: result.navigation } : {}),
         ...(result.language ? { language: result.language } : {}),
         ...(result.languageSource ? { languageSource: result.languageSource } : {}),
         executedTools: result.executedTools,

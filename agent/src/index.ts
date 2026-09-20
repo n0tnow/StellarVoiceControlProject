@@ -138,6 +138,14 @@ export {
   type GetBalanceInput,
 } from "./tools/balance.ts";
 export {
+  navigationSentence,
+  foldNavigationWord,
+  navigateTool,
+  normalizeNavTarget,
+  type NavigateInput,
+  type NavigationResult,
+} from "./tools/navigate.ts";
+export {
   depositTool,
   FIAT_CODE,
   normalizeFiat,

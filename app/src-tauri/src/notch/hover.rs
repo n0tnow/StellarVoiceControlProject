@@ -58,11 +58,51 @@ const HOVER_EVENT_MASK: objc2_app_kit::NSEventMask = objc2_app_kit::NSEventMask:
     .union(objc2_app_kit::NSEventMask::RightMouseDragged)
     .union(objc2_app_kit::NSEventMask::OtherMouseDragged);
 
-/// App-lifetime hover state: the monitor tokens and the watchdog's run flag.
+/// App-lifetime hover state: the monitor tokens, the watchdog's run flag, and
+/// the last-sample facts the Debug panel's health check reads.
 pub struct HoverRuntime {
     /// Dropping the monitor unregisters it — it must live as long as the app.
     monitor: Mutex<Option<platform::HoverMonitor>>,
     running: Arc<AtomicBool>,
+    /// Whether both platform monitors were installed at startup. `false` means
+    /// hover is silently unavailable, which the health check surfaces.
+    installed: bool,
+    /// Timestamp of the last cursor sample the monitor delivered (edge or not).
+    /// `None` means the monitor has never fired — the silent-failure signal.
+    last_sample: Mutex<Option<Instant>>,
+    /// The last inside/outside edge value the monitor observed.
+    last_inside: Mutex<Option<bool>>,
+}
+
+impl HoverRuntime {
+    fn note_sample(&self, now: Instant) {
+        match self.last_sample.lock() {
+            Ok(mut slot) => *slot = Some(now),
+            Err(poisoned) => *poisoned.into_inner() = Some(now),
+        }
+    }
+
+    fn note_inside(&self, inside: bool) {
+        match self.last_inside.lock() {
+            Ok(mut slot) => *slot = Some(inside),
+            Err(poisoned) => *poisoned.into_inner() = Some(inside),
+        }
+    }
+
+    /// Whether the native monitors were registered.
+    pub fn installed(&self) -> bool {
+        self.installed
+    }
+
+    /// Timestamp of the last delivered cursor sample.
+    pub fn last_sample(&self) -> Option<Instant> {
+        self.last_sample.lock().ok().and_then(|slot| *slot)
+    }
+
+    /// Last inside/outside edge observed by the monitor.
+    pub fn last_inside(&self) -> Option<bool> {
+        self.last_inside.lock().ok().and_then(|slot| *slot)
+    }
 }
 
 /// Installs the monitors and starts the watchdog. Called from `notch::setup`,
@@ -78,8 +118,11 @@ pub fn install(app: &AppHandle) -> HoverRuntime {
     }
     spawn_watchdog(app.clone(), Arc::clone(&running));
     HoverRuntime {
+        installed: monitor.is_some(),
         monitor: Mutex::new(monitor),
         running,
+        last_sample: Mutex::new(None),
+        last_inside: Mutex::new(None),
     }
 }
 
@@ -102,13 +145,29 @@ pub fn teardown(app: &AppHandle) {
 }
 
 /// One cursor sample from the monitor callback. Cheap by design: a hit-test plus
-/// (only on a change) one Tauri emit.
+/// (only on a change) one Tauri emit and one terminal line.
 fn observe(app: &AppHandle) {
+    let now = Instant::now();
+    // Stamp every callback, edge or not: this is what proves the monitor is
+    // delivering, and the Debug panel's health check reads it.
+    if let Some(hover) = app.try_state::<HoverRuntime>() {
+        hover.note_sample(now);
+    }
     let Some(runtime) = app.try_state::<ShellRuntime>() else {
         return;
     };
     let (x, y) = platform::cursor_location();
-    if let Some(inside) = runtime.observe_cursor(x, y, Instant::now()) {
+    if let Some(inside) = runtime.observe_cursor(x, y, now) {
+        if let Some(hover) = app.try_state::<HoverRuntime>() {
+            hover.note_inside(inside);
+        }
+        // One line per inside/outside change (so it is naturally rate-limited):
+        // the first line proves the native half of the chain works at all, and
+        // the state tells which shell rect was hit-tested.
+        println!(
+            "polaris: notch hover inside={inside} state={}",
+            runtime.active_state_name()
+        );
         crate::events::emit_notch_hover(app, inside);
     }
 }

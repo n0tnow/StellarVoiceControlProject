@@ -50,6 +50,7 @@ pub fn run() {
     let mut app = tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             commands::app_info,
+            commands::quit_app,
             commands::capture_start,
             commands::capture_stop,
             commands::capture_status,
@@ -60,6 +61,8 @@ pub fn run() {
             notch::shell_request_state,
             notch::shell_commit_state,
             notch::shell_resize_content,
+            notch::notch_hover_health,
+            notch::notch_simulate_hover,
             hotkey::hotkey_permission,
             panels::open_panel,
             stellar_config::stellar_config,
@@ -88,7 +91,33 @@ pub fn run() {
         // Step W0: a panel's close button hides it instead of quitting the app
         // (the overlay's `main` window is never closed, so the close handler is
         // only ever about panels).
-        .on_window_event(panels::handle_window_event)
+        //
+        // Hover fix: opening a panel calls `set_focus`, which activates this
+        // accessory app, and macOS pauses the global `mouseMoved` monitor while
+        // we are active — so hover expansion went dead after any panel/approval
+        // interaction. Once the last panel is hidden, resign active to hand
+        // focus back and resume the monitor.
+        .on_window_event(|window, event| {
+            panels::handle_window_event(window, event);
+            if matches!(event, tauri::WindowEvent::CloseRequested { .. })
+                && panels::is_panel_label(window.label())
+            {
+                let app = window.app_handle();
+                let closing = window.label();
+                let another_visible = panels::PANELS.iter().any(|spec| {
+                    spec.label != closing
+                        && app
+                            .get_webview_window(spec.label)
+                            .and_then(|panel| panel.is_visible().ok())
+                            .unwrap_or(false)
+                });
+                if !another_visible {
+                    if let Err(error) = notch::resign_active(app) {
+                        eprintln!("polaris: could not resign active after a panel closed: {error}");
+                    }
+                }
+            }
+        })
         .setup(|app| {
             // Captures live under the app data dir so they never land in the repo.
             let recordings_dir = app.path().app_data_dir()?.join("recordings");
@@ -138,10 +167,6 @@ pub fn run() {
             // and registers the double-Control detector that proposes the folded
             // `prompt` shell state.
             notch::setup(app)?;
-
-            // Step W0: the menu-bar entry point for the panel windows. Polaris is
-            // an accessory app (no Dock icon), so this is the user's only chrome.
-            setup_tray(app)?;
 
             println!(
                 "polaris: notch overlay ready — hold Control+Option (or Control+Option+Space) \
@@ -209,74 +234,3 @@ fn apply_activation_policy(app: &mut tauri::App) {
 /// on every platform.
 #[cfg(not(target_os = "macos"))]
 fn apply_activation_policy(_app: &mut tauri::App) {}
-
-/// Tray menu item ids that open a panel, in menu order. Each id is exactly the
-/// panel's registry name, so the tray and the `open_panel` command cannot drift.
-const TRAY_MENU_PANELS: &[&str] = &[
-    panels::WALLET,
-    panels::SECURITY,
-    panels::SCHEDULES,
-    panels::SUGGESTIONS,
-    panels::ANCHOR,
-    panels::P2P,
-    panels::PRIVACY,
-    panels::SETTINGS,
-    panels::DEBUG,
-];
-
-/// Tray menu item id for quitting. `MenuEvent::id()` comes back as exact strings.
-const TRAY_MENU_QUIT: &str = "quit";
-
-/// Step W0: builds the menu-bar status item.
-///
-/// One item per panel opens its window through the same registry the
-/// `open_panel` command uses; "Quit Polaris" exits. The approval panel is
-/// deliberately absent: it is opened by the approval flow, never by hand.
-///
-/// The icon is the bundled app icon (`tauri-build` embeds it), so the tray needs
-/// no second asset. It is not marked as a template image because the app icon is
-/// a coloured glyph, not a monochrome template.
-fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
-    use tauri::menu::MenuBuilder;
-    use tauri::tray::TrayIconBuilder;
-
-    let menu = MenuBuilder::new(app)
-        .text(panels::WALLET, "Wallet…")
-        .text(panels::SECURITY, "Security & rules…")
-        .text(panels::SCHEDULES, "Schedules…")
-        .text(panels::SUGGESTIONS, "Suggestions…")
-        .text(panels::ANCHOR, "Anchor…")
-        .text(panels::P2P, "P2P…")
-        .text(panels::PRIVACY, "Privacy…")
-        .text(panels::SETTINGS, "Settings…")
-        .text(panels::DEBUG, "Debug…")
-        .separator()
-        .text(TRAY_MENU_QUIT, "Quit Polaris")
-        .build()?;
-
-    let mut builder = TrayIconBuilder::new()
-        .menu(&menu)
-        .tooltip("Polaris")
-        .on_menu_event(handle_tray_menu);
-    if let Some(icon) = app.default_window_icon().cloned() {
-        builder = builder.icon(icon);
-    }
-    builder.build(app)?;
-    Ok(())
-}
-
-/// Routes a tray menu selection. Panel ids are the registry names themselves, so
-/// a click is just `panels::open`; anything else is ignored.
-fn handle_tray_menu(app: &tauri::AppHandle, event: tauri::menu::MenuEvent) {
-    let id = event.id().as_ref();
-    if id == TRAY_MENU_QUIT {
-        app.exit(0);
-        return;
-    }
-    if !TRAY_MENU_PANELS.contains(&id) {
-        return;
-    }
-    if let Err(error) = panels::open(app, id) {
-        eprintln!("polaris: {error}");
-    }
-}

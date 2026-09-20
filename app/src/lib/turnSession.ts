@@ -253,6 +253,50 @@ export function isTurnExpanded(session: TurnSession | null): boolean {
   return session !== null;
 }
 
+/** The voice source's inputs to the shell reducer, derived from the session. */
+export interface ShellVoiceInputs {
+  /** The state the voice source proposes to the shell. */
+  state: "compact" | "collapsed";
+  /** Does voice outrank hover right now (an attention stage)? */
+  attention: boolean;
+}
+
+/** Non-turn flags that also expand/attention the shell. */
+export interface ShellVoiceFlags {
+  /** A connection error is showing ("Reconnecting"). */
+  connectionError?: boolean;
+  /** The Rust core has not connected yet. */
+  connected?: boolean;
+  /** The one-time Accessibility hint is showing. */
+  permissionHint?: boolean;
+}
+
+/**
+ * Maps the turn session (plus the connect/permission flags) onto the shell's
+ * `voiceState`/`voiceAttention` inputs. Pure, so the precedence that decides
+ * whether hover may open the panel is unit-testable.
+ *
+ * Only an **active** stage outranks hover. A terminal stage (`done`/`error`)
+ * keeps the label up during its dwell but must not lock hover out, and no
+ * session (`null`) never does — that is the "a failed payment still lets hover
+ * open the panel" guarantee the merge regression was about.
+ */
+export function shellVoiceInputs(
+  session: TurnSession | null,
+  flags: ShellVoiceFlags = {},
+): ShellVoiceInputs {
+  const connectionError = flags.connectionError ?? false;
+  const disconnected = flags.connected === false;
+  const permissionHint = flags.permissionHint ?? false;
+  const attention =
+    connectionError ||
+    disconnected ||
+    permissionHint ||
+    (session !== null && isActiveStage(session.stage));
+  const expanded = session !== null || connectionError || disconnected || permissionHint;
+  return { state: expanded ? "compact" : "collapsed", attention };
+}
+
 /* ------------------------------------------------------------------ *
  * Stage labels (F1)
  * ------------------------------------------------------------------ */

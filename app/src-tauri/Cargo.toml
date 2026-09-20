@@ -18,10 +18,7 @@ tauri-build = { version = "2.6.3", features = [] }
 # `macos-private-api` is required for the transparent notch overlay
 # (`app.macOSPrivateApi` in tauri.conf.json is only a declaration; the runtime
 # transparency call is compiled out without this cargo feature).
-#
-# Step W0: `tray-icon` enables the menu-bar status item that opens the panel
-# windows (accessory apps have no Dock icon, so the tray is their only chrome).
-tauri = { version = "2.11.5", features = ["macos-private-api", "tray-icon"] }
+tauri = { version = "2.11.5", features = ["macos-private-api"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
@@ -70,7 +67,7 @@ objc2 = "0.6"
 # diagnostics (step A15); `NSWorkspace`/`NSRunningApplication` are also how the
 # folded prompt hands keyboard focus back to the app the user came from when it
 # closes.
-objc2-app-kit = { version = "0.3", features = ["NSScreen", "NSWindow", "NSWorkspace", "NSRunningApplication"] }
+objc2-app-kit = { version = "0.3", features = ["NSScreen", "NSWindow", "NSWorkspace", "NSRunningApplication", "NSApplication"] }
 # `NSGeometry` carries NSPoint/NSRect/NSSize/NSEdgeInsets; `NSEnumerator`
 # unlocks NSArray::iter, used to scan screens for the notched display.
 # Step W3 adds `NSString`/`NSError` for the LocalAuthentication prompt and its

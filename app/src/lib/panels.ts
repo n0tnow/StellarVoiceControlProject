@@ -25,3 +25,32 @@ export type { PanelName };
 export async function openPanel(name: PanelName): Promise<void> {
   await invoke("open_panel", { name });
 }
+
+/**
+ * Quits Polaris (`quit_app`). With the menu-bar tray removed this is the only
+ * user-facing quit path.
+ */
+export async function quitPolaris(): Promise<void> {
+  await invoke("quit_app");
+}
+
+/** One row of the notch "⋯" menu: open a panel, or quit. */
+export type MoreMenuEntry =
+  | { label: string; panel: PanelName }
+  | { label: string; quit: true };
+
+/**
+ * The notch "⋯" menu, in presentation order: it mirrors the removed tray's list
+ * of panels plus Quit. Wallet is already a notch page, so it is not repeated.
+ */
+export const MORE_MENU: readonly MoreMenuEntry[] = [
+  { label: "Security & rules", panel: "security" },
+  { label: "Schedules", panel: "schedules" },
+  { label: "Suggestions", panel: "suggestions" },
+  { label: "Anchor", panel: "anchor" },
+  { label: "P2P", panel: "p2p" },
+  { label: "Privacy", panel: "privacy" },
+  { label: "Settings", panel: "settings" },
+  { label: "Debug", panel: "debug" },
+  { label: "Quit Polaris", quit: true },
+];

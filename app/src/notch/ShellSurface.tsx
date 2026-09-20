@@ -16,10 +16,12 @@
  */
 import { useCallback, useEffect, useState, type CSSProperties } from "react";
 
-import type { ShellGeometry } from "@polaris/interfaces";
+import type { NavigationRequest, ShellGeometry } from "@polaris/interfaces";
 
 import { StageLabel } from "@/components/StageLabel";
 import { onWalletPageRequest } from "@/lib/walletGate";
+import { notchPageFor } from "@/lib/navigation";
+import { MoreMenu } from "./MoreMenu";
 import { NotchPanel } from "./NotchPanel";
 import { PromptPanel } from "./PromptPanel";
 import { inlineVoiceStage } from "./shellState";
@@ -39,6 +41,12 @@ export interface ShellSurfaceProps {
   voiceAttention: boolean;
   label: string;
   detail: string;
+  /**
+   * A read-only voice navigation request (NAV): `ShellSurface` selects the notch
+   * page and pins the panel for the targets that live in the notch. A new object
+   * identity is what re-triggers an identical request.
+   */
+  navigation?: NavigationRequest | null;
 }
 
 export function ShellSurface({
@@ -48,21 +56,52 @@ export function ShellSurface({
   voiceAttention,
   label,
   detail,
+  navigation = null,
 }: ShellSurfaceProps) {
+  // A voice-opened panel is pinned until an explicit dismissal, independent of
+  // the turn session, so the screen survives the turn settling. It rides the
+  // existing `voice` proposal as `panel` with attention forced on.
+  const [panelRequest, setPanelRequest] = useState(false);
   const {
     applied,
     onTransitionEnd,
     contentHeight,
     applyContentHeight,
     dismiss,
-  } = useShellState(voiceState, { voiceAttention });
+  } = useShellState(panelRequest ? "panel" : voiceState, {
+    voiceAttention: panelRequest || voiceAttention,
+  });
 
   // Page routing for the `panel` state. Owned here (not in the panel) so the
   // controller survives the panel body's mount/unmount cycles and the voice
   // seam can later be wired one level up without touching the pages. Closing
-  // the panel is the shell's `dismiss`, so nav-close, Escape and hover-leave
-  // all end in the same collapse path.
-  const pageController = useNotchPage(dismiss);
+  // the panel is the shell's `dismiss`, wrapped so it also clears a voice-opened
+  // panel (otherwise the pinned request would immediately reopen it). Nav-close,
+  // Escape and hover-leave all end in the same collapse path.
+  const closePanel = useCallback((): void => {
+    setPanelRequest(false);
+    dismiss();
+  }, [dismiss]);
+  const pageController = useNotchPage(closePanel);
+  const { setNotchPage } = pageController;
+
+  // Apply a voice navigation request. Notch targets select their page and pin
+  // the panel; panel-window targets are opened by App's `applyNavigation`, so
+  // the notch simply gives way; `close` dismisses.
+  useEffect(() => {
+    if (!navigation) return;
+    if (navigation.target === "close") {
+      closePanel();
+      return;
+    }
+    const page = notchPageFor(navigation.target);
+    if (page) {
+      setNotchPage(page);
+      setPanelRequest(true);
+    } else {
+      setPanelRequest(false);
+    }
+  }, [navigation, closePanel, setNotchPage]);
 
   // W10b: the onboarding gate asks the shell to show the Wallet page when a
   // value-moving intent arrives with no wallet connected. The shell owns the
@@ -199,6 +238,10 @@ export function ShellSurface({
           class, so page state survives a close/reopen within the session. */}
       <div className="notch-panel" aria-hidden={applied !== "panel"}>
         <NotchPanel controller={pageController} />
+        {/* RMTRAY: the "⋯" menu replaces the removed menu-bar tray (panels +
+            Quit). Mounted only while the panel is applied so no focusable
+            control hides inside the collapsed, click-through shell. */}
+        {applied === "panel" ? <MoreMenu /> : null}
       </div>
     </section>
   );

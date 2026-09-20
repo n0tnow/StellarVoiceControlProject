@@ -44,6 +44,8 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
     "",
     ...assetRules(),
     "",
+    ...navigation(),
+    "",
     ...examples(),
   ].join("\n");
 }
@@ -144,6 +146,37 @@ function assetRules(): string[] {
   ];
 }
 
+function navigation(): string[] {
+  return [
+    "Opening screens (navigation):",
+    '- "open/show/go to/take me to <page>" -> call navigate with that target.',
+    "  Navigation only opens a screen: it moves no value, needs no approval, and",
+    "  never claim a screen opened before the shell opens it. The shell says the",
+    "  confirmation; navigate does not send, pay or schedule anything.",
+    "- Target words (Turkish and English):",
+    '  - wallet: "wallet", "cüzdan", "hesap", "bakiye"',
+    '  - rules: "rules", "kurallar", "limitler", "auto-pay" (limits and policies)',
+    '  - tasks: "tasks", "görevler", "zamanlanmış ödemeler", "scheduled payments"',
+    '  - history: "history", "geçmiş", "işlemler"',
+    '  - security: "security", "güvenlik"',
+    '  - schedules: "schedules", "zamanlamalar"',
+    '  - suggestions: "suggestions", "öneriler"',
+    '  - anchor: "anchor", "banka", "on/off ramp"',
+    '  - p2p: "p2p", "ilan" (escrow offers)',
+    '  - privacy: "privacy", "gizli ödemeler", "private payments"',
+    '  - settings: "settings", "ayarlar"',
+    '  - debug: "debug", "hata ayıkla"',
+    '  - close: "close", "kapat", "close this"',
+    "- Do NOT navigate when the user wants a fact or an action:",
+    '  "bakiyem ne kadar" / "what is my balance" -> get_balance and answer aloud;',
+    '  "gönder"/"send"/"pay" -> send_payment; "her hafta"/"every week" -> schedule.',
+    "- To VIEW or CHANGE rules/limits, navigate to rules (or security); changing a",
+    "  rule needs the screen plus approval — say so.",
+    '- STT garbles resolve to targets: "cüzdan"->wallet, "kuralar"->rules,',
+    '  "geçmiş"->history, "görevler"->tasks, "ayarlar"->settings.',
+  ];
+}
+
 function examples(): string[] {
   return [
     "Examples (utterance -> correct behaviour):",
@@ -168,8 +201,16 @@ function examples(): string[] {
     '  wallet can send ("[tr] Sadece bağlı cüzdandan gönderebilirim.").',
     '- "send 10 xlm to charlie" (not in the account list) -> no tool, ask who charlie',
     '  is ("[en] I don\'t know charlie — which account?").',
-    '- "bakiyem ne kadar" -> get_balance, language "tr".',
-    '- "what\'s my balance" -> get_balance, language "en".',
+    '- "bakiyem ne kadar" -> get_balance, language "tr" (no navigation).',
+    '- "what\'s my balance" -> get_balance, language "en" (no navigation).',
+    '- "open my wallet" -> navigate target "wallet", language "en".',
+    '- "cüzdanı aç" -> navigate target "wallet", language "tr".',
+    '- "show my rules" -> navigate target "rules", language "en".',
+    '- "kuralları göster" -> navigate target "rules", language "tr".',
+    '- "show my scheduled payments" -> navigate target "tasks", language "en".',
+    '- "geçmişi aç" -> navigate target "history", language "tr".',
+    '- "kapat" -> navigate target "close", language "tr".',
+    '- "send 10 xlm to acc2" -> send_payment, NOT navigate.',
     '- "bugün hava nasıl?" / "what is Stellar?" -> no tool, one short sentence in',
     "  the user's language.",
     '- "Recipients, cüzdan, hizmet, bakiye." (unintelligible) -> no tool call, reply',

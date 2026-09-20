@@ -36,6 +36,13 @@ pub fn app_info(app: AppHandle) -> AppInfo {
     }
 }
 
+/// Quits Polaris. The notch "⋯" menu calls this; with the menu-bar tray gone it
+/// is the only user-facing quit path.
+#[tauri::command]
+pub fn quit_app(app: AppHandle) {
+    app.exit(0);
+}
+
 /// Starts a capture on demand (step A0). The global hotkey uses the same engine;
 /// this command is the programmatic entry point for the UI and for tests.
 #[tauri::command]

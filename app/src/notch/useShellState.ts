@@ -26,6 +26,7 @@
 import { useCallback, useEffect, useRef, useState, type TransitionEvent } from "react";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 
+import { webLog } from "@/lib/weblog";
 import {
   commitShellState,
   listenNotchHover,
@@ -241,6 +242,17 @@ export function useShellState(
     { voiceAttention },
   );
   const [applied, setApplied] = useState<ShellStateName>(target);
+  // Which source resolved the current state — the `source=` half of the hover
+  // diagnostics (Rust logs the hover edge half).
+  const source = hotkeyState !== "collapsed" ? "hotkey" : hoverActive ? "hover" : "voice";
+  // One terminal line per applied-state transition, so "where does the hover
+  // chain get to" is answerable from the launch terminal alone.
+  const loggedState = useRef<ShellStateName | null>(null);
+  useEffect(() => {
+    if (loggedState.current === applied) return;
+    loggedState.current = applied;
+    webLog("info", `notch state applied=${applied} target=${target} source=${source}`);
+  }, [applied, target, source]);
   // Measured, Rust-clamped shell height for the active content-driven state.
   const [contentHeight, setContentHeight] = useState<number | null>(null);
   // Bumped after every completed request so the commit guarantee runs even when

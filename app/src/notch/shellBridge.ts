@@ -87,3 +87,42 @@ export async function listenNotchHotkey(
     }
   });
 }
+
+/** A rectangle in AppKit screen coordinates, as Rust serializes it. */
+export interface ShellRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** Read-only diagnostics for the whole hover chain (`notch_hover_health`). */
+export interface NotchHoverHealth {
+  monitorsInstalled: boolean;
+  lastSampleAgeMs: number | null;
+  lastInside: boolean | null;
+  state: string;
+  shellRect: ShellRect | null;
+  clickThrough: boolean;
+  interactive: boolean;
+  focusable: boolean;
+  /** `NSApplication.isActive` — macOS pauses the global monitor while active. */
+  active: boolean;
+  activationPolicy: string;
+  trusted: boolean;
+  detail: string;
+}
+
+/** Reads the hover-chain health snapshot (never destructive). */
+export async function getNotchHoverHealth(): Promise<NotchHoverHealth> {
+  return invoke<NotchHoverHealth>("notch_hover_health");
+}
+
+/**
+ * Self-test only (Debug panel button): emits the same `notch_hover` edge the
+ * native monitor emits, so the webview/reducer half can be exercised even while
+ * the native monitor is paused. Watch the notch expand.
+ */
+export async function simulateNotchHover(): Promise<void> {
+  await invoke("notch_simulate_hover");
+}

@@ -62,3 +62,16 @@ is refreshed on open and via a Refresh action; "Clear local history" empties the
 turn log. The mock timeline is used **only** when not running in Tauri or when
 `stellar_config` has no owner address; a failed real read shows its error with a
 Retry. The turn log stores no XDR and no secret material.
+
+## W10b — Wallet login + recipients (notch)
+
+`WalletPage.tsx` now drives the Rust wallet engine (feature-detected; "not in this build" falls back
+to the read-only env-owner view). No wallet → Create / Import: create shows the 24-word phrase once
+behind an "I saved it" gate; import previews the derived address before storing and clears the field
+on submit/cancel. A wallet is active → `AccountList` (select/rename/remove, copy/explorer) over the
+NW1 `WalletReadView` (balances, Friendbot when unfunded, alias book). Recipients ("rumuz") live in
+the same column: nickname + `G...` address, nickname `[a-z][a-z0-9_-]{0,31}` (reserved words
+rejected), address checked by StrKey checksum. Rust `contacts.rs` persists `contacts.json` (atomic,
+max 200) and `stellar_config` merges contacts under env aliases, so the agent refreshes its alias
+table each turn and "send 5 XLM to ali" resolves. A value-moving intent with no active wallet is
+refused with one sentence and the Wallet page, with no chain call. New Debug check: `contacts`.

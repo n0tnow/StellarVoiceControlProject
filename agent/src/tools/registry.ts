@@ -1,4 +1,4 @@
-import type { Intent } from "@polaris/interfaces";
+import type { Intent, NavigationRequest } from "@polaris/interfaces";
 import type { BalanceReader } from "./balance.ts";
 
 /**
@@ -66,6 +66,13 @@ export interface AgentTool<Input = unknown, Output = unknown> {
    * and must never contain a secret.
    */
   toSpeech?(output: Output): string;
+  /**
+   * Optional structured navigation request produced by a read-only tool
+   * (`navigate`). Like `toSpeech`, the loop extracts it from the tool's output
+   * during the turn; unlike `toIntent` it never reaches the approval gate or the
+   * chain.
+   */
+  toNavigation?(output: Output): NavigationRequest | undefined;
 }
 
 /** Chain tools take an `Intent` (see docs/interfaces.md §2). */

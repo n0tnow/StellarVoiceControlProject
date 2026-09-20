@@ -3,11 +3,13 @@ import type { UnlistenFn } from "@tauri-apps/api/event";
 import {
   FALLBACK_SHELL_GEOMETRY,
   type CaptureStatus,
+  type NavigationRequest,
   type ShellGeometry,
 } from "@polaris/interfaces";
 
 import { runAgentTurn, type AgentOutcome } from "@/lib/agent";
 import { executeApprovedIntent } from "@/lib/chain";
+import { applyNavigation } from "@/lib/navigation";
 import { speakSentence, speakTurnResult } from "@/lib/speech";
 import { failureSentence, submittedSentence } from "@polaris/agent";
 import { TurnFlow } from "@/lib/turnFlow";
@@ -23,6 +25,7 @@ import {
   isPaymentStage,
   noticeLabel,
   reduceTurnSession,
+  shellVoiceInputs,
   shouldSurfaceOutcome,
   stageLabel,
   stageWatchdog,
@@ -93,6 +96,10 @@ export default function App() {
   const [hotkeyTrusted, setHotkeyTrusted] = useState<boolean | null>(null);
   const [permissionHint, setPermissionHint] = useState(false);
   const [session, dispatchTurn] = useReducer(reduceTurnSession, null);
+  // NAV: the latest voice navigation request, handed to the shell so it can
+  // select a notch page or open a panel window. A fresh object per command is
+  // what re-triggers an identical request.
+  const [navigation, setNavigation] = useState<NavigationRequest | null>(null);
   // Admission/freshness policy for spoken turns: it dedupes a re-emitted
   // transcript and, the M2 fix, lets a genuine second utterance supersede an
   // in-flight turn instead of being dropped. Stable across renders.
@@ -216,6 +223,13 @@ export default function App() {
           // reply/voice (A14), so it also drives the notch labels from here on.
           dispatchTurn({ type: "language", language: run.outcome.language ?? null });
           recordTurnAnswer(logId, run.outcome.answer);
+          // NAV: a voice navigation request opens a screen. ShellSurface applies
+          // the notch page; panel windows open here. The spoken confirmation is
+          // the outcome's answer, spoken below like any conversational turn.
+          if (run.outcome.navigation) {
+            setNavigation(run.outcome.navigation);
+            void applyNavigation(run.outcome.navigation);
+          }
           if (!run.outcome.intent) {
             // A conversational turn has nothing to execute: speak the answer and
             // let the real `speech_status` stream end the turn.
@@ -418,20 +432,18 @@ export default function App() {
 
   // The shell is expanded for the whole of a live turn — including its terminal
   // stage, until the dwell collapses it — plus a connection in progress or the
-  // one-time permission hint. Deriving this from `session !== null` (not from
-  // the visual) is what keeps `done`/`error` from collapsing a frame early.
-  const expanded = session !== null || connectionError !== null || !connected || showPermissionHint;
-
-  // The voice source only outranks hover while it is an attention state the user
-  // must see (listening/thinking/speaking, a pending payment, a permission hint,
-  // a connection error). During a terminal dwell it only keeps the label up, so
-  // hover can still open the panel instead of being locked out for the whole
-  // dwell (MINOR-1). `isActiveStage` is exactly that attention set.
-  const voiceAttention =
-    connectionError !== null ||
-    !connected ||
-    showPermissionHint ||
-    (session !== null && isActiveStage(session.stage));
+  // one-time permission hint. The voice source only outranks hover while it is
+  // an attention state the user must see (listening/thinking/speaking, a pending
+  // payment, a permission hint, a connection error). During a terminal dwell it
+  // only keeps the label up, so hover can still open the panel instead of being
+  // locked out for the whole dwell (MINOR-1). Both inputs come from the pure
+  // `shellVoiceInputs` so the precedence is unit-tested (`turnSession.test.ts`).
+  const { state: voiceState, attention: voiceAttention } = shellVoiceInputs(session, {
+    connectionError: connectionError !== null,
+    connected,
+    permissionHint: showPermissionHint,
+  });
+  const expanded = voiceState === "compact";
 
   // The label is the ONLY thing drawn in the left ear, so it has to stay short:
   // the ear is deliberately narrow and anything longer would be clipped (it can
@@ -471,10 +483,11 @@ export default function App() {
       <ShellSurface
         geometry={geometry}
         visual={visual}
-        voiceState={expanded ? "compact" : "collapsed"}
+        voiceState={voiceState}
         voiceAttention={voiceAttention}
         label={label}
         detail={detail}
+        navigation={navigation}
       />
       <span
         className="sr-only"

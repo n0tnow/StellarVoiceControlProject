@@ -72,3 +72,13 @@ test("the exact owner utterance appears as a few-shot example", () => {
   assert.ok(prompt.includes("wallet 1'den wallet 2'ye 10 XLM gönder"));
   assert.ok(prompt.includes("send 10 xlm from wallet 1 to wallet 2"));
 });
+
+test("the prompt teaches navigation and when not to navigate", () => {
+  const prompt = buildSystemPrompt({
+    tools: [sendPayment, { name: "navigate", description: "Open a screen." }],
+  });
+  assert.match(prompt, /Opening screens \(navigation\)/);
+  assert.match(prompt, /navigate with that target/);
+  assert.match(prompt, /Do NOT navigate/);
+  assert.match(prompt, /no navigation/);
+});

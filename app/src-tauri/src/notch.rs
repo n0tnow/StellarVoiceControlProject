@@ -480,7 +480,8 @@ pub(crate) fn activation_policy_of(
 }
 
 /// A rectangle in AppKit screen coordinates (origin bottom-left, `y` up).
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Rect {
     pub x: f64,
     pub y: f64,
@@ -703,6 +704,41 @@ pub struct DisplayUpdate {
     pub display_changed: bool,
 }
 
+/// Diagnostics for the whole hover chain, so a broken link is observable
+/// instead of silent (the merge bug was "hover does nothing and there is no log
+/// line anywhere"). Everything here is non-destructive and read-only.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HoverHealth {
+    /// Were the native mouse monitors registered at startup?
+    pub monitors_installed: bool,
+    /// Age of the last cursor sample the monitor delivered, or `None` if it has
+    /// never fired.
+    pub last_sample_age_ms: Option<u64>,
+    /// Last inside/outside value the monitor observed, or `None` before the
+    /// first edge.
+    pub last_inside: Option<bool>,
+    /// The active shell state's name (`collapsed`/`compact`/`prompt`/`panel`).
+    pub state: String,
+    /// The screen-coordinate rect the cursor is hit-tested against.
+    pub shell_rect: Option<Rect>,
+    /// `NSWindow.ignoresMouseEvents` (true while the overlay is click-through).
+    pub click_through: bool,
+    /// Whether the native window accepts mouse clicks in the active state.
+    pub interactive: bool,
+    /// Whether the native window accepts keyboard input (the prompt state).
+    pub focusable: bool,
+    /// `NSApplication.isActive`. macOS pauses the global mouse monitor while
+    /// Polaris is the active app, so this is the key signal for the hover bug.
+    pub active: bool,
+    pub activation_policy: NotchActivationPolicy,
+    /// Accessibility trust; only global *key* monitors require it, but it is
+    /// included because a revoked grant is a plausible cause of a dead monitor.
+    pub trusted: bool,
+    /// One actionable sentence for a non-developer.
+    pub detail: String,
+}
+
 impl ShellRuntime {
     pub fn new(geometry: ShellGeometry, origin_x: f64, origin_y: f64) -> Self {
         Self {
@@ -829,6 +865,29 @@ impl ShellRuntime {
             .states
             .get(rt.active_index)
             .is_some_and(|state| state.name == name)
+    }
+
+    /// Name of the active shell state, for diagnostics. `"none"` before the
+    /// geometry resolves.
+    pub fn active_state_name(&self) -> &'static str {
+        let rt = self.lock();
+        rt.geometry
+            .states
+            .get(rt.active_index)
+            .map_or("none", |state| state.name)
+    }
+
+    /// Screen-coordinate rect of the active state's visible shell body — what
+    /// the native hover hit-test compares the cursor against.
+    pub fn active_shell_rect(&self) -> Option<Rect> {
+        let rt = self.lock();
+        let state = rt.geometry.states.get(rt.active_index).copied()?;
+        Some(shell_rect(
+            &state,
+            &rt.geometry.notch,
+            rt.origin_x,
+            rt.origin_y,
+        ))
     }
 
     /// Target frame of the currently active state (exact, for commit).
@@ -1166,6 +1225,98 @@ fn sync_native_focusability(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Resigns Polaris from the **active** app state. Main thread only on macOS.
+///
+/// This is the hover fix's core: the overlay is click-through, so it relies on
+/// the global `mouseMoved` monitor, and macOS does not deliver global monitors
+/// while the app is active. Opening a panel (`panels::open_spec` →
+/// `set_focus`) activates this accessory app; hiding the panel does not
+/// deactivate it, so before this the global monitor stayed paused and hover was
+/// dead after any panel or approval interaction. Resigning active hands focus
+/// back to the app the user came from and resumes the monitor.
+#[cfg(target_os = "macos")]
+pub fn resign_active(_app: &AppHandle) -> Result<(), String> {
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::NSApplication;
+    let marker = MainThreadMarker::new().ok_or("resigning active requires the main thread")?;
+    NSApplication::sharedApplication(marker).deactivate();
+    Ok(())
+}
+
+/// Non-macOS: there is no AppKit activation to resign.
+#[cfg(not(target_os = "macos"))]
+pub fn resign_active(_app: &AppHandle) -> Result<(), String> {
+    Ok(())
+}
+
+/// Whether Polaris is the frontmost/active app. Main thread only on macOS (the
+/// caller's contract); false where AppKit does not exist.
+#[cfg(target_os = "macos")]
+fn app_is_active() -> bool {
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::NSApplication;
+    match MainThreadMarker::new() {
+        Some(marker) => NSApplication::sharedApplication(marker).isActive(),
+        None => false,
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn app_is_active() -> bool {
+    false
+}
+
+/// Snapshots the hover diagnostics. Must run on the AppKit main thread because
+/// it reads `NSApplication.isActive`.
+pub fn hover_health(app: &AppHandle) -> HoverHealth {
+    let hover = app.try_state::<hover::HoverRuntime>();
+    let monitors_installed = hover.as_ref().is_some_and(|state| state.installed());
+    let last_sample = hover.as_ref().and_then(|state| state.last_sample());
+    let last_sample_age_ms = last_sample.map(|at| at.elapsed().as_millis() as u64);
+    let last_inside = hover.as_ref().and_then(|state| state.last_inside());
+    let (state, shell_rect, interactive, focusable) = match app.try_state::<ShellRuntime>() {
+        Some(runtime) => (
+            runtime.active_state_name().to_string(),
+            runtime.active_shell_rect(),
+            runtime.is_interactive(),
+            runtime.is_focusable(),
+        ),
+        None => ("none".to_string(), None, false, false),
+    };
+    let active = app_is_active();
+    let trusted = crate::hotkey_flags::is_trusted();
+    let detail = if !monitors_installed {
+        "the mouse monitor could not be installed; hover expansion is disabled".to_string()
+    } else if active {
+        "Polaris is the active app, so macOS pauses the global mouse monitor; close the open panel to restore hover".to_string()
+    } else if !trusted {
+        "monitor installed; if hover still does nothing, grant Accessibility to Polaris in \
+         System Settings → Privacy & Security → Accessibility"
+            .to_string()
+    } else if last_sample_age_ms.is_none() {
+        "monitor installed but no cursor sample yet; move the mouse over the notch".to_string()
+    } else {
+        format!(
+            "monitor delivering (last sample {} ms ago)",
+            last_sample_age_ms.unwrap_or(0)
+        )
+    };
+    HoverHealth {
+        monitors_installed,
+        last_sample_age_ms,
+        last_inside,
+        state,
+        shell_rect,
+        click_through: !interactive,
+        interactive,
+        focusable,
+        active,
+        activation_policy: window::activation_policy(),
+        trusted,
+        detail,
+    }
+}
+
 /* ------------------------------------------------------------------ *
  * Commands
  * ------------------------------------------------------------------ */
@@ -1216,6 +1367,13 @@ pub async fn shell_request_state(
         let (_, target) = runtime.set_active(index)?;
         let current = window::frame(&handle)?;
         window::set_frame(&handle, grow_union(current, target))?;
+        // One terminal line per shell-state transition, so where the hover
+        // chain gets to is visible without a debugger (the webview adds the
+        // `source=` half — it is the side that resolves the proposal).
+        println!(
+            "polaris: notch shell state -> {request} (interactive={}, focusable={})",
+            state.interactive, state.focusable
+        );
         // Interactivity and focusability are applied in the same serialized
         // main-thread section as the state change. A late-arriving request
         // therefore cannot toggle either OS flag on its own (the old code did
@@ -1270,6 +1428,32 @@ pub async fn shell_resize_content(app: AppHandle, height: f64) -> Result<f64, St
         Ok(clamped)
     })
     .await
+}
+
+/// Read-only diagnostics for the hover chain (Debug panel check). Returns
+/// whether the monitors are installed, how recently the monitor delivered a
+/// sample, what the active shell state/rect and flags are, and whether Polaris
+/// is active (the state in which macOS pauses the global monitor).
+#[tauri::command]
+pub async fn notch_hover_health(app: AppHandle) -> Result<HoverHealth, String> {
+    let handle = app.clone();
+    on_main(&app, move || Ok(hover_health(&handle))).await
+}
+
+/// Debug panel self-test: emits the **same** `notch_hover` edge the native
+/// monitor emits, so the webview/reducer half of the chain can be exercised
+/// even while the native monitor is paused (Polaris active). The notch opens
+/// (inside=true) and then closes (inside=false) about a second later. It only
+/// sends an event — it never moves funds and never touches the runtime flags.
+#[tauri::command]
+pub fn notch_simulate_hover(app: AppHandle) -> Result<(), String> {
+    crate::events::emit_notch_hover(&app, true);
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(900));
+        crate::events::emit_notch_hover(&handle, false);
+    });
+    Ok(())
 }
 
 /* ------------------------------------------------------------------ *
@@ -1883,5 +2067,48 @@ mod tests {
             serde_json::to_string(&NotchActivationPolicy::Regular).unwrap(),
             "\"regular\""
         );
+    }
+
+    /// The hover diagnostics are the TS seam: a camelCase field here is what the
+    /// Debug check reads, so a rename must fail this test first.
+    #[test]
+    fn hover_health_serializes_with_camel_case_fields() {
+        let health = HoverHealth {
+            monitors_installed: true,
+            last_sample_age_ms: Some(42),
+            last_inside: Some(true),
+            state: COLLAPSED_STATE.to_string(),
+            shell_rect: Some(Rect {
+                x: 1.0,
+                y: 2.0,
+                width: 3.0,
+                height: 4.0,
+            }),
+            click_through: true,
+            interactive: false,
+            focusable: false,
+            active: false,
+            activation_policy: NotchActivationPolicy::Accessory,
+            trusted: true,
+            detail: "ok".into(),
+        };
+        let json = serde_json::to_value(&health).unwrap();
+        assert_eq!(json["monitorsInstalled"], true);
+        assert_eq!(json["lastSampleAgeMs"], 42);
+        assert_eq!(json["lastInside"], true);
+        assert_eq!(json["shellRect"]["width"], 3.0);
+        assert_eq!(json["clickThrough"], true);
+        assert_eq!(json["activationPolicy"], "accessory");
+    }
+
+    /// The health check reports what the hit-test uses, so both must agree with
+    /// the pure geometry.
+    #[test]
+    fn the_runtime_reports_the_active_state_and_hit_test_rect() {
+        let geometry = fallback_geometry(1512.0, 982.0);
+        let expected = shell_rect(&state(&geometry, COLLAPSED_STATE), &geometry.notch, 0.0, 0.0);
+        let runtime = ShellRuntime::new(geometry, 0.0, 0.0);
+        assert_eq!(runtime.active_state_name(), COLLAPSED_STATE);
+        assert_eq!(runtime.active_shell_rect(), Some(expected));
     }
 }

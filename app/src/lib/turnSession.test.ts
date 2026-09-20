@@ -12,6 +12,7 @@ import {
   isTurnExpanded,
   noticeLabel,
   reduceTurnSession,
+  shellVoiceInputs,
   shouldSurfaceOutcome,
   SIGNING_WATCHDOG_MS,
   SPEAKING_WATCHDOG_MS,
@@ -24,6 +25,7 @@ import {
   type TurnSignal,
   type TurnStage,
 } from "./turnSession.ts";
+import { resolveShellState } from "../notch/shellState.ts";
 
 /** A capture transition, with the optional short failure label the wire carries. */
 function capture(state: CaptureState, label: string | null = null): TurnSignal {
@@ -499,4 +501,42 @@ test("a 90 s approval wait uses the approval ceiling, not the thinking one", () 
   assert.equal(approval?.timeoutMs, APPROVAL_WATCHDOG_MS);
   assert.ok(approval !== null && approval.timeoutMs > 90_000);
   assert.notEqual(approval.timeoutMs, THINKING_WATCHDOG_MS);
+});
+
+/** Resolves the shell target for a session with the cursor hovering the notch. */
+function hoverTarget(session: TurnSession | null): string {
+  const voice = shellVoiceInputs(session, { connected: true });
+  return resolveShellState(
+    { voice: voice.state, hover: "panel", hotkey: "collapsed" },
+    { voiceAttention: voice.attention },
+  );
+}
+
+test("a failed payment still lets hover open the panel (and never locks it out)", () => {
+  // Hotkey → thinking → approval card → the gate denies (fail-closed).
+  let session = reduceTurnSession(null, capture("recording"));
+  session = reduceTurnSession(session, capture("ready"));
+  session = reduceTurnSession(session, { type: "stage", stage: "awaiting_approval" });
+  session = reduceTurnSession(session, { type: "failed", label: "Wallet didn't sign" });
+  assert.equal(session?.stage, "error");
+
+  // During the error dwell the label stays up but hover already wins.
+  assert.equal(hoverTarget(session), "panel");
+
+  // After the dwell the session is gone and hover is still honoured.
+  session = reduceTurnSession(session, { type: "settled" });
+  assert.equal(session, null);
+  assert.equal(hoverTarget(session), "panel");
+});
+
+test("a pending payment keeps hover out until it settles (F1 guarantee)", () => {
+  let session = reduceTurnSession(null, capture("recording"));
+  session = reduceTurnSession(session, capture("ready"));
+  session = reduceTurnSession(session, { type: "stage", stage: "awaiting_approval" });
+
+  // An attention stage must win the surface: the panel cannot replace the
+  // approval card while value is about to move.
+  const voice = shellVoiceInputs(session, { connected: true });
+  assert.equal(voice.attention, true);
+  assert.equal(hoverTarget(session), "compact");
 });

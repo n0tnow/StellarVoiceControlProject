@@ -45,36 +45,29 @@ width, height, always-on-top, resizable). Everything else derives from it:
 - `open_panel(name)` — the Tauri command the webview calls. Unknown names come
   back as `PanelError::UnknownPanel { name }` (`{"kind":"unknownPanel",…}`);
   window failures as `PanelError::Window { message }`. It never panics.
-- `panels::open(app, name)` — the Rust helper other modules use (the tray menu
-  calls it for every panel it lists).
+- `panels::open(app, name)` — the Rust helper the `open_panel` command calls.
 - `is_panel_label(label)` — recognises the `panel-*` namespace, which is also
   what the capability file targets and what the close handler checks.
 
 Adding a panel on the Rust side is a new `PanelSpec` entry — nothing else. The
 frontend must add the matching name to `panelRoutes.ts` in the same PR.
 
-## 3. Tray menu
+## 3. Opening panels and quitting
 
-Polaris is an **accessory** app (no Dock icon, no app menu bar), so the menu-bar
-status item is the only chrome. It is built in `lib.rs::setup_tray`:
+Polaris is an **accessory** app (no Dock icon, no app menu bar) and has **no
+menu-bar tray**. The notch is the only surface: the expanded panel's **"⋯" menu**
+(`app/src/notch/MoreMenu.tsx`, entries in `lib/panels.ts::MORE_MENU`) opens every
+ordinary panel and quits.
 
-- **Wallet…** → `panels::open(app, panels::WALLET)`
-- **Security & rules…** → `panels::SECURITY`
-- **Schedules…** → `panels::SCHEDULES`
-- **Suggestions…** → `panels::SUGGESTIONS`
-- **Anchor…** → `panels::ANCHOR`
-- **P2P…** → `panels::P2P`
-- **Settings…** → `panels::SETTINGS`
-- **Debug…** → `panels::DEBUG` (the check registry and event tail; see
-  `docs/debug-panel.md`)
-- **Quit Polaris** → `app.exit(0)`
+- **Security & rules / Schedules / Suggestions / Anchor / P2P / Privacy /
+  Settings / Debug** → `openPanel(name)` (`open_panel`)
+- **Quit Polaris** → `quitPolaris()` → the `quit_app` command (`app.exit(0)`)
 
-Each menu id is exactly its panel's registry name, so the tray and `open_panel`
-share one allow-list (`TRAY_MENU_PANELS` in `lib.rs`).
-
-The approval panel is intentionally **not** in the tray: it is opened by the
-approval flow, never by hand. The tray icon is the bundled app icon
-(`tauri-build` embeds it), so there is no second asset to maintain.
+The trigger is a small button in the panel footer; Escape and a click outside
+close the menu, and both the trigger and its items are real buttons (keyboard
+reachable). The approval panel is intentionally **not** in the menu: it is opened
+by the approval flow, never by hand. Wallet is a notch page, so it is not
+repeated in the menu.
 
 ## 4. Adding a panel
 
@@ -142,8 +135,7 @@ Two wrappers, both in `app/src/lib/`:
 ## 7. Running and verifying
 
 ```bash
-make dev            # Tauri dev (Vite HMR); app/src-tauri/Cargo.toml already
-                    # enables the `tray-icon` feature
+make dev            # Tauri dev (Vite HMR)
 npm run check -w @polaris/app
 npm test -w @polaris/app
 cargo test --manifest-path app/src-tauri/Cargo.toml
@@ -164,12 +156,13 @@ cargo clippy --manifest-path app/src-tauri/Cargo.toml -- -D warnings
 
 **Human on a real Mac (not verified by CI)**
 
-- The menu-bar tray icon appears while the app runs and the app keeps **no** Dock
-  icon (accessory policy unchanged).
-- **Wallet…** in the tray opens a focusable window showing the Wallet panel; it
-  can be typed in and clicked.
+- There is **no** menu-bar tray icon and the app keeps **no** Dock icon
+  (accessory policy unchanged).
+- The panel's **"⋯" menu** opens a focusable window for each entry; it can be
+  typed in and clicked.
+- **Quit Polaris** in the menu exits the app.
 - Pressing **Close** hides the panel and the app stays alive; opening the panel
-  again from the tray brings the **same** instance back.
+  again from the menu brings the **same** instance back.
 - **Settings…** opens the Settings panel and the metadata it reads
   (`app_info`) is correct.
 - The unknown-name path: calling `open_panel` with a bad name returns the

@@ -443,3 +443,55 @@ export interface FeatureHealth {
   /** Milliseconds since the Unix epoch. */
   checkedAt: number;
 }
+
+/* ------------------------------------------------------------------ *
+ * 10. Navigation — read-only, moves no value (NAV)
+ *
+ * The `navigate` agent tool produces one of these instead of an `Intent`, so
+ * the shell can open a notch page or a panel window by voice. It never reaches
+ * the approval gate or the chain; `IntentKind` is deliberately unchanged.
+ * Unlike `Intent`, this type never crosses the Rust seam, so no Rust mirror is
+ * needed.
+ * ------------------------------------------------------------------ */
+
+/** Every screen a voice command may open, plus `close`. */
+export type NavigationTarget =
+  | "wallet"
+  | "rules"
+  | "tasks"
+  | "history"
+  | "security"
+  | "schedules"
+  | "suggestions"
+  | "anchor"
+  | "p2p"
+  | "privacy"
+  | "settings"
+  | "debug"
+  | "close";
+
+/** The accepted `target` values, in the order the tool advertises them. */
+export const NAVIGATION_TARGETS: readonly NavigationTarget[] = [
+  "wallet",
+  "rules",
+  "tasks",
+  "history",
+  "security",
+  "schedules",
+  "suggestions",
+  "anchor",
+  "p2p",
+  "privacy",
+  "settings",
+  "debug",
+  "close",
+];
+
+/** A read-only request from the agent that the shell performs. */
+export interface NavigationRequest {
+  target: NavigationTarget;
+  /** Ready-to-speak confirmation in the user's language; the shell may say it. */
+  spoken: string;
+  /** BCP-47 base of `spoken` ("tr" | "en"), when the model reported one. */
+  language?: string;
+}
