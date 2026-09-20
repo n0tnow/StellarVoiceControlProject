@@ -60,6 +60,14 @@ base64 = "0.23"
 getrandom = "0.3"
 subtle = "2.6"
 
+# Step W10: the wallet inside the app. `bip39` generates and parses the 24-word
+# recovery phrase; `hmac`/`sha2` implement SLIP-0010 ed25519 derivation for the
+# SEP-5 path `m/44'/148'/index'` (no separate derivation crate needed).
+# `zeroize` wipes the seed and phrase buffers after use.
+bip39 = "2.1"
+hmac = "0.12"
+zeroize = "1.8"
+
 # The overlay's window level / collection behaviour come from AppKit directly,
 # because Tauri's window API does not expose them. Versions are pinned to the
 # objc2 generation tauri 2.11 already links (see `cargo tree -i objc2`); a
@@ -95,3 +103,11 @@ objc2-local-authentication = { version = "0.3", default-features = false, featur
 # Accessibility consent prompt.
 block2 = "0.6"
 core-foundation = "0.10"
+
+# Step W10: the embedded wallet's seed storage. `security-framework`'s
+# generic-password API stores each seed as a login-Keychain item (service
+# `dev.polaris.wallet`, account `signer-<address>`). Data-protection /
+# biometric ACLs need entitlements an ad-hoc dev build lacks, so the item is a
+# plain generic password; macOS may show a one-time "Always Allow" prompt when
+# the app's ad-hoc signature changes between builds.
+security-framework = "3"

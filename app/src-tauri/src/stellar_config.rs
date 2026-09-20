@@ -29,6 +29,20 @@ pub const DEFAULT_RPC_URL: &str = "https://soroban-testnet.stellar.org";
 pub const DEFAULT_HORIZON_URL: &str = "https://horizon-testnet.stellar.org";
 pub const DEFAULT_NETWORK_PASSPHRASE: &str = "Test SDF Network ; September 2015";
 
+/// The embedded in-app wallet is the default signer (step W10).
+pub const SIGNER_EMBEDDED: &str = "embedded";
+/// The optional Freighter browser bridge, kept as an advanced mode.
+pub const SIGNER_FREIGHTER: &str = "freighter";
+
+/// Resolves `POLARIS_SIGNER`: an explicit `freighter` opts back into the browser
+/// bridge (advanced); everything else defaults to the in-app `embedded` wallet.
+pub fn resolve_signer(explicit: Option<&str>) -> String {
+    match explicit.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(value) if value.eq_ignore_ascii_case(SIGNER_FREIGHTER) => SIGNER_FREIGHTER.to_string(),
+        _ => SIGNER_EMBEDDED.to_string(),
+    }
+}
+
 /// The non-secret chain configuration the webview is allowed to see.
 /// Mirrors `StellarConfig` in `@polaris/interfaces` (field names byte-identical).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -38,8 +52,12 @@ pub struct StellarConfig {
     pub rpc_url: String,
     pub horizon_url: String,
     pub network_passphrase: String,
-    /// The sender (owner) wallet, or `None` when unset/invalid.
+    /// The sender (owner) wallet, or `None` when unset/invalid. When an embedded
+    /// wallet is active this is that wallet's address, overriding
+    /// `POLARIS_OWNER_ADDRESS`.
     pub owner_address: Option<String>,
+    /// Which signer the shell should use: `embedded` or `freighter`.
+    pub signer: String,
     /// Alias -> `G...` address, from `POLARIS_ALIASES` only (the committed
     /// `aliases.json` is merged on the TypeScript side, where it already lives).
     pub aliases: BTreeMap<String, String>,
@@ -156,8 +174,16 @@ pub fn parse_aliases(raw: &str) -> BTreeMap<String, String> {
 
 /// Builds the config from an injected environment lookup, so the allow-list and
 /// validation are testable without touching the real process environment.
-fn from_lookup(lookup: impl Fn(&str) -> Option<String>) -> StellarConfig {
-    let owner = lookup("POLARIS_OWNER_ADDRESS").filter(|value| is_public_key(value));
+///
+/// `wallet_address` is the active embedded-wallet address, if any. When present
+/// it becomes `ownerAddress` (overriding `POLARIS_OWNER_ADDRESS`) and makes
+/// `embedded` the default signer.
+fn from_lookup(
+    lookup: impl Fn(&str) -> Option<String>,
+    wallet_address: Option<String>,
+) -> StellarConfig {
+    let env_owner = lookup("POLARIS_OWNER_ADDRESS").filter(|value| is_public_key(value));
+    let owner = wallet_address.filter(|value| is_public_key(value)).or(env_owner);
     StellarConfig {
         network: lookup("STELLAR_NETWORK").unwrap_or_else(|| DEFAULT_NETWORK.to_string()),
         rpc_url: lookup("STELLAR_RPC_URL").unwrap_or_else(|| DEFAULT_RPC_URL.to_string()),
@@ -166,6 +192,7 @@ fn from_lookup(lookup: impl Fn(&str) -> Option<String>) -> StellarConfig {
         network_passphrase: lookup("STELLAR_NETWORK_PASSPHRASE")
             .unwrap_or_else(|| DEFAULT_NETWORK_PASSPHRASE.to_string()),
         owner_address: owner,
+        signer: resolve_signer(lookup("POLARIS_SIGNER").as_deref()),
         aliases: lookup("POLARIS_ALIASES")
             .map(|raw| parse_aliases(&raw))
             .unwrap_or_default(),
@@ -177,13 +204,21 @@ fn from_lookup(lookup: impl Fn(&str) -> Option<String>) -> StellarConfig {
 /// Reads the configuration from the process environment (`.env` already loaded
 /// by `env.rs`). Only the allow-listed variables above are consulted.
 pub fn read() -> StellarConfig {
-    from_lookup(crate::env::var)
+    from_lookup(crate::env::var, None)
 }
 
-/// The webview's entry point: non-secret chain configuration for the shell.
+/// Like [`read`], but the active embedded-wallet address overrides the env owner.
+pub fn read_with_wallet(active: Option<String>) -> StellarConfig {
+    from_lookup(crate::env::var, active)
+}
+
+/// The webview's entry point: non-secret chain configuration for the shell. The
+/// embedded wallet's active address (when one exists) is the owner.
 #[tauri::command]
-pub fn stellar_config() -> StellarConfig {
-    read()
+pub fn stellar_config(
+    wallet: tauri::State<'_, std::sync::Arc<crate::wallet::WalletService>>,
+) -> StellarConfig {
+    read_with_wallet(wallet.active_address())
 }
 
 #[cfg(test)]
@@ -199,7 +234,15 @@ mod tests {
             .iter()
             .map(|(key, value)| (key.to_string(), value.to_string()))
             .collect();
-        from_lookup(|name| map.get(name).cloned())
+        from_lookup(|name| map.get(name).cloned(), None)
+    }
+
+    fn from_pairs_with_wallet(pairs: &[(&str, &str)], wallet: Option<&str>) -> StellarConfig {
+        let map: HashMap<String, String> = pairs
+            .iter()
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect();
+        from_lookup(|name| map.get(name).cloned(), wallet.map(str::to_string))
     }
 
     #[test]
@@ -210,6 +253,7 @@ mod tests {
         assert_eq!(config.horizon_url, "https://horizon-testnet.stellar.org");
         assert_eq!(config.network_passphrase, "Test SDF Network ; September 2015");
         assert_eq!(config.owner_address, None);
+        assert_eq!(config.signer, "embedded");
         assert!(config.aliases.is_empty());
         assert_eq!(config.guard_contract_id, None);
         assert_eq!(config.p2p_contract_id, None);
@@ -260,7 +304,7 @@ mod tests {
             .map(String::as_str)
             .collect();
         keys.sort_unstable();
-        // The exact wire key set: eight allow-listed fields, nothing else.
+        // The exact wire key set: nine allow-listed fields, nothing else.
         assert_eq!(
             keys,
             [
@@ -272,11 +316,28 @@ mod tests {
                 "ownerAddress",
                 "p2pContractId",
                 "rpcUrl",
+                "signer",
             ]
         );
         let json = serde_json::to_string(&config).unwrap();
         assert!(!json.contains("secret"));
         assert!(json.contains(OWNER));
+    }
+
+    #[test]
+    fn an_embedded_wallet_address_overrides_the_env_owner_and_defaults_to_embedded() {
+        let config = from_pairs_with_wallet(
+            &[("POLARIS_OWNER_ADDRESS", ACC2), ("POLARIS_SIGNER", "")],
+            Some(OWNER),
+        );
+        assert_eq!(config.owner_address.as_deref(), Some(OWNER));
+        assert_eq!(config.signer, "embedded");
+        // An explicit freighter setting still wins over the wallet default.
+        let explicit = from_pairs_with_wallet(&[("POLARIS_SIGNER", "freighter")], Some(OWNER));
+        assert_eq!(explicit.signer, "freighter");
+        assert_eq!(explicit.owner_address.as_deref(), Some(OWNER));
+        // No wallet still defaults to the embedded signer.
+        assert_eq!(from_pairs_with_wallet(&[], None).signer, "embedded");
     }
 
     #[test]

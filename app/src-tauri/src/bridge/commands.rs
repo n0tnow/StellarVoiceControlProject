@@ -656,6 +656,7 @@ mod tests {
             horizon_url: "https://horizon".to_string(),
             network_passphrase: PASSPHRASE.to_string(),
             owner_address: Some(OWNER.to_string()),
+            signer: "freighter".to_string(),
             aliases: Default::default(),
             guard_contract_id: None,
             p2p_contract_id: None,

@@ -15,3 +15,13 @@ import type { StellarConfig } from "@polaris/interfaces";
 export async function getStellarConfig(): Promise<StellarConfig> {
   return invoke<StellarConfig>("stellar_config");
 }
+
+/**
+ * The configured signer (step W10): `embedded` (the in-app wallet, the default)
+ * or `freighter` (the optional browser bridge). A malformed value defaults to
+ * `embedded`, matching the Rust default.
+ */
+export async function getSigner(): Promise<"embedded" | "freighter"> {
+  const config = await getStellarConfig();
+  return config.signer === "freighter" ? "freighter" : "embedded";
+}

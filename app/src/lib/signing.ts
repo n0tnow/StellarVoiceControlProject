@@ -4,11 +4,15 @@
  * The chain tool has already built the unsigned XDR and the Rust Touch ID gate
  * has released it; this module is the last leg of the value-moving path:
  *
- *   `bridge_sign(id)`  →  the user's Freighter signs in their browser
+ *   `wallet_sign(id)` (embedded, W10) or `bridge_sign(id)` (Freighter)
+ *                      →  the signer returns a signed envelope
  *                      →  the signed envelope comes back to Rust, which verifies
  *                         it independently
  *                      →  this module submits it via `submitSignedTx`
  *                      →  `tx_submitted { hash, explorerUrl }` is emitted.
+ *
+ * The embedded wallet signs inside the app (no browser); the Freighter bridge
+ * opens a page. `resolveSigner` picks the path from `stellar_config`.
  *
  * ## Fail-closed and never throws
  *
@@ -125,6 +129,28 @@ export interface SigningDeps {
    * that do not care about UI stages are unaffected.
    */
   onStage?: (stage: PaymentStage) => void;
+  /**
+   * Additive (W10): which signer to use. The default reads `stellar_config` and
+   * routes to `wallet_sign` (embedded) or `bridge_sign` (freighter).
+   */
+  signer?: () => Promise<SignerKind>;
+}
+
+/** Which signing path the shell uses (step W10). */
+export type SignerKind = "embedded" | "freighter";
+
+/**
+ * Resolves the configured signer from `stellar_config`. A missing command or a
+ * failed read falls back to `freighter` (the historical path), so an older build
+ * keeps working; the embedded wallet is the default when the config says so.
+ */
+export async function resolveSigner(invokeImpl: InvokeFn): Promise<SignerKind> {
+  try {
+    const config = await invokeImpl<{ signer?: string }>("stellar_config");
+    return config?.signer === "embedded" ? "embedded" : "freighter";
+  } catch {
+    return "freighter";
+  }
 }
 
 /**
@@ -170,11 +196,14 @@ export async function signAndSubmit(
   }
 
   // F1: the approved blob is handed to the wallet; the shell shows the Freighter
-  // wait from here until the signed envelope comes back.
+  // wait from here until the signed envelope comes back. W10: the embedded wallet
+  // signs in-process (`wallet_sign`), so no browser opens in that mode.
   deps.onStage?.("signing");
   let bridge: BridgeOutcome;
   try {
-    bridge = await deps.invoke<BridgeOutcome>("bridge_sign", { id: approvalId });
+    const signer = deps.signer ? await deps.signer() : await resolveSigner(deps.invoke);
+    const command = signer === "embedded" ? "wallet_sign" : "bridge_sign";
+    bridge = await deps.invoke<BridgeOutcome>(command, { id: approvalId });
   } catch (error) {
     // A rejected command (transport, a typed gate error) is a labelled failure;
     // no signed envelope was produced, so nothing can be submitted.

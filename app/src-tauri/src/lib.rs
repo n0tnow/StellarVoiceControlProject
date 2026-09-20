@@ -28,6 +28,7 @@ mod tts;
 mod tx_events;
 mod types;
 mod voice_health;
+mod wallet;
 mod weblog;
 
 use tauri::Manager;
@@ -79,6 +80,19 @@ pub fn run() {
             bridge::commands::bridge_health,
             bridge::commands::bridge_sign_challenge,
             bridge::commands::anchor_signing_health,
+            // Step W10: the embedded wallet inside the app. Create/import, local
+            // signing and the Debug health check.
+            wallet::commands::wallet_status,
+            wallet::commands::wallet_health,
+            wallet::commands::wallet_create,
+            wallet::commands::wallet_import,
+            wallet::commands::wallet_import_preview,
+            wallet::commands::wallet_list,
+            wallet::commands::wallet_select,
+            wallet::commands::wallet_rename,
+            wallet::commands::wallet_remove,
+            wallet::commands::wallet_sign,
+            wallet::commands::wallet_sign_challenge,
         ])
         // Step W0: a panel's close button hides it instead of quitting the app
         // (the overlay's `main` window is never closed, so the close handler is
@@ -124,6 +138,13 @@ pub fn run() {
             // Managed as a trait object so tests can install a fake and never
             // open a real browser.
             app.manage(bridge::commands::system_launcher());
+
+            // Step W10: the embedded wallet. Built before the window opens: it
+            // probes the Keychain once (falling back to a 0600 file store and
+            // saying so) and loads the non-secret `wallets.json` metadata. An
+            // `Arc` so the async, Touch-ID-gated commands can move it to a
+            // blocking thread.
+            app.manage(std::sync::Arc::new(wallet::WalletService::build()));
 
             // Registers the Control+Option monitor and the Control+Option+Space
             // fallback; both feed the same capture latch.
