@@ -5,10 +5,10 @@ import {
   createWalletSessionEngine,
   createWalletSessionStore,
   DEFAULT_AUTO_LOCK_MINUTES,
+  didSessionLock,
   normalizeWalletSession,
   shouldAutoOpenWallet,
   shouldGateForSession,
-  shouldPinWallet,
   walletScreenFor,
   WalletSessionError,
   type WalletSession,
@@ -58,8 +58,14 @@ test("only an unlocked session clears the gate and the startup trigger", () => {
   assert.equal(shouldAutoOpenWallet(session({ state: "none" })), true);
   assert.equal(shouldAutoOpenWallet(session({ state: "locked" })), true);
   assert.equal(shouldAutoOpenWallet(session({ state: "unlocked" })), false);
-  assert.equal(shouldPinWallet(session({ state: "locked" })), true);
-  assert.equal(shouldPinWallet(null), false);
+});
+
+test("only the unlocked→locked edge is a logout / auto-lock", () => {
+  assert.equal(didSessionLock(session({ state: "unlocked" }), session({ state: "locked" })), true);
+  assert.equal(didSessionLock(session({ state: "locked" }), session({ state: "unlocked" })), false);
+  assert.equal(didSessionLock(null, session({ state: "locked" })), false, "launch is not a logout");
+  assert.equal(didSessionLock(session({ state: "unlocked" }), session({ state: "unlocked" })), false);
+  assert.equal(didSessionLock(session({ state: "unlocked" }), null), false);
 });
 
 test("the engine feature-detects a missing wallet_session command", async () => {

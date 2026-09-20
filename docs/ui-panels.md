@@ -55,19 +55,16 @@ frontend must add the matching name to `panelRoutes.ts` in the same PR.
 ## 3. Opening panels and quitting
 
 Polaris is an **accessory** app (no Dock icon, no app menu bar) and has **no
-menu-bar tray**. The notch is the only surface: the expanded panel's **"⋯" menu**
-(`app/src/notch/MoreMenu.tsx`, entries in `lib/panels.ts::MORE_MENU`) opens every
-ordinary panel and quits.
+menu-bar tray**. The notch is the only surface: the former **"⋯" menu is gone**,
+so no panel window is reachable from the notch. The pages that replaced its
+entries are notch pages (Security → Rules, Schedules/Suggestions → Tasks,
+Anchor/P2P → Trade, Privacy/Debug → Settings).
 
-- **Security & rules / Schedules / Suggestions / Anchor / P2P / Privacy /
-  Settings / Debug** → `openPanel(name)` (`open_panel`)
-- **Quit Polaris** → `quitPolaris()` → the `quit_app` command (`app.exit(0)`)
-
-The trigger is a small button in the panel footer; Escape and a click outside
-close the menu, and both the trigger and its items are real buttons (keyboard
-reachable). The approval panel is intentionally **not** in the menu: it is opened
-by the approval flow, never by hand. Wallet is a notch page, so it is not
-repeated in the menu.
+- **Quit Polaris** → `quitPolaris()` → the `quit_app` command (`app.exit(0)`),
+  called from the notch Settings page.
+- Other panels (approval, and the surfaces their notch pages open) still use
+  `openPanel(name)` (`open_panel`), but only from the flow that needs them — the
+  approval panel is opened by the approval flow, never by hand.
 
 ## 4. Adding a panel
 

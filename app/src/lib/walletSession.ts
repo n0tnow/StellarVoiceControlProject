@@ -73,14 +73,26 @@ export function shouldGateForSession(session: WalletSession | null): boolean {
   return session !== null && session.state !== "unlocked";
 }
 
-/** The panel opens itself on the Wallet screen while nobody is logged in. */
+/**
+ * The launch trigger: the first time the webview reads a session that is not
+ * unlocked, the panel opens itself on the Wallet screen. The caller fires this
+ * once (a ref guard), so closing the panel, or a later logout/auto-lock, never
+ * re-forces it. The panel itself is always closable.
+ */
 export function shouldAutoOpenWallet(session: WalletSession | null): boolean {
   return session !== null && session.state !== "unlocked";
 }
 
-/** Pins the panel open (no hover-away, no Escape) until the session unlocks. */
-export function shouldPinWallet(session: WalletSession | null): boolean {
-  return session !== null && session.state !== "unlocked";
+/**
+ * Whether a session change is the logout/auto-lock edge (`unlocked` →
+ * `locked`), which collapses the panel. Unlocking is not this edge, and neither
+ * is the launch read (`null` → `locked`), which the auto-open handles instead.
+ */
+export function didSessionLock(
+  previous: WalletSession | null,
+  next: WalletSession | null,
+): boolean {
+  return previous?.state === "unlocked" && next?.state === "locked";
 }
 
 /** Maps a session (or its absence) to the Wallet page's one visible screen. */

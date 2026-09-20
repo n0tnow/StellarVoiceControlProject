@@ -293,6 +293,7 @@
 - [x] (2026-09-20, branch `feat/w15c-trade`) **W15c.** Trade page (Deposit·Withdraw·P2P) in the notch: anchor deposit/withdraw via BANK-SIM with a 3-row step list + bank/wallet balance line, P2P offers list + Accept and a Sell form; locked → LoginGate; check clean, app 444/0 (10 new), build green — `backlog/w15c-trade.md`
 - [ ] **Open / honest:** SPP **value-moving** integration (needs wallet `signAuthEntry`); CT (confidential tokens) spike/integration; protocol integration (Soroswap swap **or** DeFindex, not both); **A4 screen reading**; developer mode; MPP; passkey wallet.
 - [x] **W15d** Settings page — session/status/privacy/diagnostics/quit in the notch (`feat/w15d-settings`, `backlog/w15d-settings.md`).
+- [x] **W15a** shell cleanup: panel always closable (Wallet auto-opens once at launch, logout/auto-lock collapses it), "⋯" `MoreMenu` deleted, every voice `NavigationTarget` folded into a notch page, compacted nav (`feat/w15a-shell`).
 - [ ] **Open / honest:** SPP **value-moving** integration (needs wallet `signAuthEntry`); **Trade page**; CT (confidential tokens) spike/integration; protocol integration (Soroswap swap **or** DeFindex, not both); **A4 screen reading**; developer mode; MPP; passkey wallet.
 - **Human-verification list (unverified by automation):** real mic + STT, real Touch ID (create/sign/unlock/batch), real Keychain first-access, live anchor payout leg, live `pay_executor`, real notch windows/hover/pin, Friendbot.
 
