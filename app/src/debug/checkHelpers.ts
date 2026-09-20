@@ -47,7 +47,8 @@ const ADDRESS = /^G[A-Z2-7]{55}$/;
 /**
  * Maps gathered network facts to one Debug result. Severity is the worst
  * finding: a missing command or owner is a `warn`; a wrong network, a malformed
- * owner, an unresolvable alias or a missing/unfunded account is a `fail`; a
+ * owner or a missing/unfunded account is a `fail`; saved contacts are optional
+ * (a typed address is payable), so an empty alias book is not a failure; a
  * funded owner on testnet is an `ok` that shows the balance.
  */
 export function summarizeNetwork(facts: NetworkFacts): CheckResult {
@@ -65,15 +66,6 @@ export function summarizeNetwork(facts: NetworkFacts): CheckResult {
   if (!ADDRESS.test(owner)) {
     return makeResult("fail", `owner address is not a valid G… key: ${owner}`);
   }
-  if (!facts.aliasBookResolved) {
-    return makeResult("fail", "the alias book is not configured");
-  }
-  if (!facts.recipientResolved) {
-    return makeResult(
-      "fail",
-      `alias "${facts.recipientAlias}" does not resolve; add it to POLARIS_ALIASES`,
-    );
-  }
   if (facts.horizon === null) {
     return makeResult("fail", `Horizon is unreachable at ${config.horizonUrl ?? "the default URL"}`);
   }
@@ -89,7 +81,7 @@ export function summarizeNetwork(facts: NetworkFacts): CheckResult {
   }
   return makeResult(
     "ok",
-    `testnet · owner ${owner} · alias ${facts.recipientAlias} · ${balance} XLM`,
+    `testnet · owner ${owner} · ${balance} XLM`,
   );
 }
 

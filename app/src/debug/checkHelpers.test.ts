@@ -67,10 +67,11 @@ test("network fail: a malformed owner address is caught", () => {
   assert.match(result.detail, /valid G/);
 });
 
-test("network fail: an unresolvable recipient alias names the alias", () => {
-  const result = summarizeNetwork(facts({ recipientResolved: false }));
-  assert.equal(result.status, "fail");
-  assert.match(result.detail, /acc2/);
+test("network ok: an empty alias book is not a failure (typed addresses are payable)", () => {
+  const result = summarizeNetwork(
+    facts({ aliasBookResolved: false, recipientResolved: false }),
+  );
+  assert.equal(result.status, "ok");
 });
 
 test("network fail: Horizon unreachable and account missing are distinct messages", () => {
