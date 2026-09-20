@@ -1,10 +1,5 @@
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;
-450;
-500;
-550;
-600;
-650;
-700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;450;500;550;600;650;700&display=swap');
+
 :root {
   color-scheme:dark;
   --background:#080a09;
