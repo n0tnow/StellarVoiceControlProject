@@ -41,7 +41,7 @@ use crate::events::{self, PolarisEvent};
 use crate::health::now_ms;
 
 /// The Touch ID reason shown when logging in.
-pub const UNLOCK_REASON: &str = "Unlock the Polaris wallet";
+pub const UNLOCK_REASON: &str = "Unlock the Autonomy wallet";
 
 /// The three session states, mirrored in `@polaris/interfaces`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

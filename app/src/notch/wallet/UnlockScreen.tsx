@@ -31,7 +31,7 @@ export function UnlockScreen({ entries, activeAddress, busy, error, onUnlock }: 
     <section className={CARD}>
       <h2 className="flex items-center gap-2 text-sm font-semibold">
         <Wallet aria-hidden="true" className="h-4 w-4 text-[var(--color-notch-accent)]" />
-        Log in to Polaris
+        Log in to Autonomy
       </h2>
       <p className={HINT}>
         Your wallet is locked. Unlock it with Touch ID to see balances and to sign.

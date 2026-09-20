@@ -1,4 +1,4 @@
-# Polaris
+# Autonomy
 
 > **Under construction.** Working product name: **Polaris** — a push-to-talk voice
 > assistant for Stellar (hackathon track: Genesis, 19–20 Sep 2026).

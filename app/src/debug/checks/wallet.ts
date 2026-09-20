@@ -13,7 +13,7 @@ import { walletStatus } from "@/lib/wallet.ts";
 
 export default {
   id: "wallet",
-  title: "Polaris wallet",
+  title: "Autonomy wallet",
   milestone: "W10",
   async run() {
     try {

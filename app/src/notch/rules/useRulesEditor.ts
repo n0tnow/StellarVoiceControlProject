@@ -80,7 +80,7 @@ export function useRulesEditor(): RulesEditorData {
           if (!cancelled) {
             setSecurity(null);
             setState("unconfigured");
-            setDetail("Open Polaris to read the real rules.");
+            setDetail("Open Autonomy to read the real rules.");
           }
           return;
         }

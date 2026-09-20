@@ -25,7 +25,7 @@ export const CONNECT_COPY = {
   screenTitle: "Connect your wallet",
   screenBody:
     "Already use Freighter, Lobstr or xBull? Paste that account's secret key once. " +
-    "Polaris keeps it in the macOS Keychain, asks for Touch ID, and signs every " +
+    "Autonomy keeps it in the macOS Keychain, asks for Touch ID, and signs every " +
     "payment here — you never go back to the other wallet app.",
   connectExisting: "Connect existing wallet",
   createNew: "Create new wallet",

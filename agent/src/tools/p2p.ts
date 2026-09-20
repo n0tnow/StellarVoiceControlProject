@@ -108,7 +108,7 @@ const LANGUAGE_PROPERTY = {
 export const p2pOfferTool: AgentTool<P2pOfferInput, Intent> = {
   name: "p2p_offer",
   description:
-    "Sell tokens peer-to-peer for TRY. The seller locks the tokens on-chain and asks for TRY paid off-chain; Polaris never moves the TRY.",
+    "Sell tokens peer-to-peer for TRY. The seller locks the tokens on-chain and asks for TRY paid off-chain; Autonomy never moves the TRY.",
   inputSchema: {
     type: "object",
     properties: {

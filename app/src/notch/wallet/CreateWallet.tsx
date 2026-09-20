@@ -25,7 +25,7 @@ export interface CreateWalletProps {
 /** One plain line for a rejected creation; an existing wallet is not an error. */
 function createError(failure: unknown): string {
   if (failure instanceof WalletEngineError && failure.kind === "exists") {
-    return "Polaris already holds a wallet. Connect another by pasting its secret key.";
+    return "Autonomy already holds a wallet. Connect another by pasting its secret key.";
   }
   return failure instanceof Error ? failure.message : String(failure);
 }
@@ -100,7 +100,7 @@ export function CreateWallet({ onDone, onCancel, label }: CreateWalletProps) {
 
   return (
     <section className={CARD}>
-      <p className={HINT}>Polaris will generate a key in the macOS Keychain.</p>
+      <p className={HINT}>Autonomy will generate a key in the macOS Keychain.</p>
       {state.error !== null ? <p className={ERROR}>{state.error}</p> : null}
       <div className={ACTIONS}>
         <Button size="sm" disabled={state.step === "working"} onClick={() => void create()}>

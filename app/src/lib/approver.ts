@@ -89,7 +89,7 @@ export interface ApproverDeps {
   clearTimer: (handle: ReturnType<typeof setTimeout>) => void;
   /**
    * Additive (F1): reports the approval-request boundary so the notch can show
-   * "Approve in Polaris" for the whole gate wait. Optional, so existing callers
+   * "Approve in Autonomy" for the whole gate wait. Optional, so existing callers
    * and tests are unaffected.
    */
   onStage?: (stage: PaymentStage) => void;
@@ -234,7 +234,7 @@ export function createTouchIdApprover(deps: ApproverDeps): IntentApprover {
   return {
     async approve(request: ApprovalRequest): Promise<ApproverOutcome> {
       // F1: the approval gate owns the notch from here until a decision lands;
-      // the shell shows "Approve in Polaris" for the whole wait.
+      // the shell shows "Approve in Autonomy" for the whole wait.
       deps.onStage?.("awaiting_approval");
       // Register the exact blob with the gate. The gate re-hashes it and rejects
       // a mismatch, so the digest the card showed binds what will be released.

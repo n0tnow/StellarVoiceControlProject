@@ -133,7 +133,7 @@ pub fn build_stores(root: &Path) -> Stores {
                     } else {
                         eprintln!(
                             "polaris: the macOS Keychain is unavailable ({error}); \
-                             allow Polaris in Keychain Access or unlock the login keychain. \
+                             allow Autonomy in Keychain Access or unlock the login keychain. \
                              The wallet stays locked until it is available."
                         );
                     }

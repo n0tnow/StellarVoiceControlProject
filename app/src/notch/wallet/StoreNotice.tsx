@@ -16,7 +16,7 @@ export function StoreNotice({ store }: StoreNoticeProps) {
   if (!store || store === "keychain") return null;
   const unavailable = store === "keychain unavailable";
   const message = unavailable
-    ? "Keychain unavailable — allow Polaris in Keychain Access, or unlock the login keychain. Creating, importing and signing stay locked until then."
+    ? "Keychain unavailable — allow Autonomy in Keychain Access, or unlock the login keychain. Creating, importing and signing stay locked until then."
     : `Seeds are stored in the ${store} store; this is testnet only.`;
   return (
     <p className={unavailable ? ERROR : HINT} role="status">

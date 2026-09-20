@@ -189,18 +189,18 @@ export function PromptPanel({ onContentHeight, onDismiss, voiceStage }: PromptPa
   const hasText = text.trim().length > 0;
 
   return (
-    <main className="notch-prompt" onKeyDown={onRootKeyDown} aria-label="Ask Polaris">
+    <main className="notch-prompt" onKeyDown={onRootKeyDown} aria-label="Ask Autonomy">
       <div className="notch-prompt-body" ref={bodyRef}>
         <div className="prompt-row">
           <textarea
             ref={textareaRef}
             className="prompt-field selectable"
             rows={1}
-            placeholder="Ask Polaris…"
+            placeholder="Ask Autonomy…"
             value={text}
             onChange={(event) => setText(event.target.value)}
             onKeyDown={onTextareaKeyDown}
-            aria-label="Ask Polaris"
+            aria-label="Ask Autonomy"
           />
           {/* Send affordance: a small, low-contrast glyph that only exists once
               there is text. Enter is the primary path. */}

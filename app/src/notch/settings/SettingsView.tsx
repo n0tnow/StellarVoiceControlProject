@@ -178,7 +178,7 @@ function QuitSection() {
   const [confirming, setConfirming] = useState(false);
 
   return (
-    <Section title="Quit Polaris">
+    <Section title="Quit Autonomy">
       {confirming ? (
         <div className="flex items-center gap-3">
           <Button variant="danger" size="sm" onClick={() => void quitPolaris()}>
@@ -190,7 +190,7 @@ function QuitSection() {
         </div>
       ) : (
         <Button variant="outline" size="sm" onClick={() => setConfirming(true)}>
-          Quit Polaris
+          Quit Autonomy
         </Button>
       )}
     </Section>

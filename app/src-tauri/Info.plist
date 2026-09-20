@@ -6,11 +6,11 @@
 	     microphone usage description, macOS terminates the process the first
 	     time cpal opens the input device. -->
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Polaris records your voice while you hold the push-to-talk shortcut so it can transcribe your request.</string>
+	<string>Autonomy records your voice while you hold the push-to-talk shortcut so it can transcribe your request.</string>
 	<!-- Step A1 (on-device default): without this key macOS terminates the
 	     process the first time `SFSpeechRecognizer.requestAuthorization` is
 	     called. The sentence is shown verbatim in the system prompt. -->
 	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>Polaris transcribes your spoken wallet commands with on-device speech recognition, so your voice stays on this Mac by default.</string>
+	<string>Autonomy transcribes your spoken wallet commands with on-device speech recognition, so your voice stays on this Mac by default.</string>
 </dict>
 </plist>

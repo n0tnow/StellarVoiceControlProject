@@ -103,7 +103,7 @@ struct BankState {
 impl BankState {
     fn fresh() -> Self {
         Self {
-            holder_name: "Polaris Demo Customer".to_string(),
+            holder_name: "Autonomy Demo Customer".to_string(),
             iban: generate_tr_iban(),
             currency: DEFAULT_CURRENCY.to_string(),
             balance_minor: INITIAL_BALANCE_MINOR,

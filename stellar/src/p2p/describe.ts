@@ -62,7 +62,7 @@ export function buildP2pCallSummary(input: BuildP2pSummaryInput): {
       `Args: ${args.map(describeArg).join(", ")}`,
       `Network: ${input.networkPassphrase}`,
       `Fee: ${fee}`,
-      "Note: the TRY payment happens outside Polaris; confirm only after you received it.",
+      "Note: the TRY payment happens outside Autonomy; confirm only after you received it.",
     ],
     explorerUrl: `${input.explorerBase ?? DEFAULT_EXPLORER_BASE}/tx/${payloadHash}`,
     estimatedFee: fee,

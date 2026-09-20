@@ -52,7 +52,7 @@ use crate::stt::{
 /// for short phrases (one or two words) and caps the list at 100 entries, which
 /// the test below pins.
 pub const DOMAIN_VOCABULARY: [&str; 7] = [
-    "USDC", "XLM", "Stellar", "Soroban", "lumen", "testnet", "Polaris",
+    "USDC", "XLM", "Stellar", "Soroban", "lumen", "testnet", "Autonomy",
 ];
 
 /// Locale used when `POLARIS_STT_LOCALE` is not set. See [`resolve_locale`].
@@ -308,7 +308,7 @@ mod tests {
     #[test]
     fn domain_vocabulary_covers_the_wallet_entities() {
         for term in [
-            "USDC", "XLM", "Stellar", "Soroban", "lumen", "testnet", "Polaris",
+            "USDC", "XLM", "Stellar", "Soroban", "lumen", "testnet", "Autonomy",
         ] {
             assert!(DOMAIN_VOCABULARY.contains(&term), "missing {term}");
         }

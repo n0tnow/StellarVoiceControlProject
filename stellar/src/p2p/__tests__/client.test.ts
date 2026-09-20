@@ -69,7 +69,7 @@ describe("p2p client — writes build the exact ABI invocation", () => {
     const res = await makeClient(writeRpc()).createOffer(SELLER, TOKEN_SAC, 100_0000000n, 340_000n, 86_400n);
     expect(res.summary.title).toContain("100");
     expect(res.summary.title).toContain("3400");
-    expect(res.summary.lines.some((l) => l.includes("outside Polaris"))).toBe(true);
+    expect(res.summary.lines.some((l) => l.includes("outside Autonomy"))).toBe(true);
     expect(res.summary.explorerUrl).toMatch(/\/tx\/[0-9a-f]{64}$/);
     expect(res.payloadHash).toMatch(/^[0-9a-f]{64}$/);
     expect(invokedCall(res.unsignedXdr).tx.signatures).toHaveLength(0);
