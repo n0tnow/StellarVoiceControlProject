@@ -9,7 +9,7 @@
 import { useReducer, useState } from "react";
 
 import { Button } from "@/components/ui/button";
-import { walletEngine } from "@/lib/wallet";
+import { walletEngine, WalletEngineError } from "@/lib/wallet";
 import { initialCreateState, reduceCreate, splitPhrase } from "@/lib/walletFlows";
 
 import { PhraseGrid } from "./PhraseGrid";
@@ -18,26 +18,35 @@ import { ACTIONS, CARD, ERROR, HINT } from "./styles";
 export interface CreateWalletProps {
   onDone: (address: string) => void;
   onCancel: () => void;
+  /** Nickname to store with the new account; blank lets Rust default. */
+  label?: string;
 }
 
-export function CreateWallet({ onDone, onCancel }: CreateWalletProps) {
+/** One plain line for a rejected creation; an existing wallet is not an error. */
+function createError(failure: unknown): string {
+  if (failure instanceof WalletEngineError && failure.kind === "exists") {
+    return "Polaris already holds a wallet. Connect another by pasting its secret key.";
+  }
+  return failure instanceof Error ? failure.message : String(failure);
+}
+
+export function CreateWallet({ onDone, onCancel, label }: CreateWalletProps) {
   const [state, dispatch] = useReducer(reduceCreate, initialCreateState);
   const [saved, setSaved] = useState(false);
 
   const create = async (): Promise<void> => {
     dispatch({ type: "start" });
     try {
-      const result = await walletEngine.create();
+      const result = await walletEngine.create(
+        label !== undefined && label.trim().length > 0 ? { label } : undefined,
+      );
       dispatch({
         type: "created",
         address: result.address,
         recoveryPhrase: result.recoveryPhrase,
       });
     } catch (failure) {
-      dispatch({
-        type: "failed",
-        error: failure instanceof Error ? failure.message : String(failure),
-      });
+      dispatch({ type: "failed", error: createError(failure) });
     }
   };
 

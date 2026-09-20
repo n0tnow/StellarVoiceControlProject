@@ -3,11 +3,16 @@ import { test } from "node:test";
 
 import {
   CONNECT_COPY,
+  MAX_ACCOUNT_LABEL,
+  accountSwitcherRows,
+  defaultAccountLabel,
   initialCreateState,
   initialImportState,
+  normalizeAccountLabel,
   parseImportIndex,
   reduceCreate,
   reduceImport,
+  validateAccountLabel,
   validateImportIndex,
   validateImportValue,
 } from "./walletFlows.ts";
@@ -120,4 +125,53 @@ test("connect: user-facing copy says Connect, never Import", () => {
   }
   assert.equal(CONNECT_COPY.connectExisting, "Connect existing wallet");
   assert.equal(CONNECT_COPY.confirm, "Connect and store in Keychain");
+});
+
+test("import: the nickname survives preview and submit, then clears on store", () => {
+  let state = reduceImport(initialImportState, { type: "name", value: "  acc1 " });
+  state = reduceImport(state, { type: "secret", value: "SABCD" });
+  state = reduceImport(state, { type: "preview" });
+  assert.equal(state.name, "  acc1 ", "the name must survive the derive");
+
+  state = reduceImport(state, { type: "previewed", address: "GAAA" });
+  state = reduceImport(state, { type: "store" });
+  assert.equal(state.name, "  acc1 ", "the name is still needed for import");
+  assert.equal(state.secret, "", "the secret is wiped at submit");
+
+  const stored = reduceImport(state, { type: "stored", address: "GAAA" });
+  assert.equal(stored.name, "", "the name clears once stored");
+});
+
+test("account nicknames: default position, blank fallback and length cap", () => {
+  assert.equal(defaultAccountLabel(0), "Account 1");
+  assert.equal(defaultAccountLabel(2), "Account 3");
+  assert.equal(normalizeAccountLabel("  ada ", "Account 1"), "ada");
+  assert.equal(normalizeAccountLabel("   ", "Account 2"), "Account 2");
+  assert.equal(validateAccountLabel("", ["any"]), null, "blank uses the default");
+  assert.equal(validateAccountLabel("a".repeat(MAX_ACCOUNT_LABEL), []), null);
+  assert.match(validateAccountLabel("a".repeat(MAX_ACCOUNT_LABEL + 1), []) ?? "", /fewer/);
+});
+
+test("account nicknames: uniqueness is case-insensitive and trimmed", () => {
+  const taken = ["Ada", "acc1"];
+  assert.equal(validateAccountLabel("ada", taken), "That name is already used.");
+  assert.equal(validateAccountLabel(" ACC1 ", taken), "That name is already used.");
+  assert.equal(validateAccountLabel("Bob", taken), null);
+});
+
+test("account switcher model marks the active row and fills blank names", () => {
+  const rows = accountSwitcherRows(
+    [
+      { address: "GA", label: "ada" },
+      { address: "GB", label: "   " },
+      { address: "GC", label: "acc1" },
+    ],
+    "GB",
+  );
+  assert.deepEqual(rows, [
+    { address: "GA", label: "ada", active: false },
+    { address: "GB", label: "Account 2", active: true },
+    { address: "GC", label: "acc1", active: false },
+  ]);
+  assert.deepEqual(accountSwitcherRows([], null), []);
 });

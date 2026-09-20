@@ -1,25 +1,27 @@
 /**
  * The unlocked Wallet dashboard (task W15b — "everything inside the notch").
  *
- * A deliberately small surface: account header with a lock button, one balance
- * hero (with an in-app "Fund account" action when unfunded), the address with
- * copy and an inline QR, the two-input Send card, contacts, and a compact
- * accounts section. All reads are read-only; the only value-moving path is
- * `SendForm`, which runs the same `executeApprovedIntent` pipeline a spoken send
- * uses. Balances are formatted from strings (no float) by `walletAssets.ts`.
+ * A deliberately small surface: an account switcher in the header (tap the
+ * title to switch, rename, remove or add), one balance hero (with an in-app
+ * "Fund account" action when unfunded), the address with copy and an inline QR,
+ * the two-input Send card and contacts. All reads are read-only; the only
+ * value-moving path is `SendForm`, which runs the same `executeApprovedIntent`
+ * pipeline a spoken send uses. Balances are formatted from strings (no float) by
+ * `walletAssets.ts`.
  */
 import { useState } from "react";
-import { Check, Copy, LogOut, QrCode as QrIcon, RefreshCw } from "lucide-react";
+import { Check, ChevronDown, Copy, LogOut, QrCode as QrIcon, RefreshCw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import type { WalletEntry } from "@/lib/wallet";
 import { deriveAssetRows, requestFriendbotFund } from "@/lib/walletAssets";
+import { defaultAccountLabel } from "@/lib/walletFlows";
 import { useWalletData } from "@/notch/data/useWalletData";
 import { ExplorerLink } from "@/notch/ExplorerLink";
 import { shortAddress } from "@/lib/address";
 import committedAliases from "../../../../stellar/config/aliases.json";
 
-import { AccountsSection, type AddAccountMode } from "./AccountsSection";
+import { AccountSwitcher } from "./AccountSwitcher";
 import { AddAsset } from "./AddAsset";
 import { CreateWallet } from "./CreateWallet";
 import { ImportWallet } from "./ImportWallet";
@@ -56,9 +58,11 @@ export function WalletDashboard({
 }: WalletDashboardProps) {
   const wallet = useWalletData(committedAliases, activeAddress);
   const [mode, setMode] = useState<AddMode>("none");
+  const [switcherOpen, setSwitcherOpen] = useState(false);
   const [showQr, setShowQr] = useState(false);
   const [copied, setCopied] = useState(false);
   const [fund, setFund] = useState<FundState>({ kind: "idle" });
+  const defaultLabel = defaultAccountLabel(entries.length);
 
   const active = entries.find((entry) => entry.address === activeAddress) ?? null;
   const owner = wallet.ownerAddress;
@@ -95,24 +99,39 @@ export function WalletDashboard({
   };
 
   if (mode === "create" || mode === "import") {
-    const Flow = mode === "create" ? CreateWallet : ImportWallet;
-    return (
-      <Flow
-        onDone={() => {
-          setMode("none");
-          onReloadAccounts();
-        }}
+    const done = (): void => {
+      setMode("none");
+      onReloadAccounts();
+    };
+    return mode === "create" ? (
+      <CreateWallet label={defaultLabel} onDone={done} onCancel={() => setMode("none")} />
+    ) : (
+      <ImportWallet
+        heading="Add account"
+        defaultLabel={defaultLabel}
+        existingLabels={entries.map((entry) => entry.label)}
+        onDone={done}
         onCancel={() => setMode("none")}
+        onCreate={() => setMode("create")}
       />
     );
   }
 
-  const openAdd = (next: AddAccountMode): void => setMode(next);
+  const openAdd = (next: Exclude<AddMode, "none">): void => setMode(next);
 
   return (
     <>
       <div className="flex items-center gap-2">
-        <span className="text-sm font-semibold">{active?.label || "Account"}</span>
+        <button
+          type="button"
+          className="flex items-center gap-1 text-sm font-semibold"
+          aria-expanded={switcherOpen}
+          aria-label="Switch account"
+          onClick={() => setSwitcherOpen((value) => !value)}
+        >
+          {active?.label || defaultAccountLabel(0)}
+          <ChevronDown aria-hidden="true" className="h-3.5 w-3.5 text-[var(--color-notch-muted)]" />
+        </button>
         <span className="rounded-full bg-white/10 px-2 py-0.5 text-[11px] text-[var(--color-notch-muted)]">
           {wallet.network}
         </span>
@@ -126,6 +145,24 @@ export function WalletDashboard({
           <LogOut aria-hidden="true" />
         </button>
       </div>
+
+      {switcherOpen ? (
+        <AccountSwitcher
+          entries={entries}
+          activeAddress={activeAddress}
+          store={store}
+          onSelect={(address) => {
+            onSelectAccount(address);
+            setSwitcherOpen(false);
+          }}
+          onRename={onRenameAccount}
+          onRemove={onRemoveAccount}
+          onAdd={(next) => {
+            setSwitcherOpen(false);
+            openAdd(next);
+          }}
+        />
+      ) : null}
 
       <section className={CARD}>
         {wallet.status === "loading" ? <p className={HINT}>Reading balances…</p> : null}
@@ -215,16 +252,6 @@ export function WalletDashboard({
       {funded ? <SendForm assets={assetRows.map((row) => row.code)} onSent={wallet.refresh} /> : null}
 
       <RecipientsSection />
-
-      <AccountsSection
-        entries={entries}
-        activeAddress={activeAddress}
-        store={store}
-        onSelect={onSelectAccount}
-        onRename={onRenameAccount}
-        onRemove={onRemoveAccount}
-        onAdd={openAdd}
-      />
     </>
   );
 }
