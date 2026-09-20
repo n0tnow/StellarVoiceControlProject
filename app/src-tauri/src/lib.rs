@@ -17,6 +17,7 @@ mod contacts;
 mod ctrl_tap;
 mod env;
 mod events;
+mod external;
 mod gesture;
 mod health;
 mod hotkey;
@@ -51,6 +52,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::app_info,
             commands::quit_app,
+            external::open_external,
             commands::capture_start,
             commands::capture_stop,
             commands::capture_status,

@@ -10,3 +10,11 @@ import { invoke } from "@tauri-apps/api/core";
 export async function quitPolaris(): Promise<void> {
   await invoke("quit_app");
 }
+
+/**
+ * Opens a block-explorer link in the default browser (`open_external`). Rust
+ * only accepts testnet explorer URLs, so this cannot be pointed anywhere else.
+ */
+export async function openExternal(url: string): Promise<void> {
+  await invoke("open_external", { url });
+}
