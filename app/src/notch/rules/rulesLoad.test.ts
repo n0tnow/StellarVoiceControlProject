@@ -81,7 +81,7 @@ test("outside Tauri the editor is unconfigured with the preview hint", () => {
     load: null,
   });
   assert.equal(snap.state, "unconfigured");
-  assert.match(snap.detail, /Open Polaris/);
+  assert.match(snap.detail, /Open Autonomy/);
   assert.equal(snap.security, null);
   assert.deepEqual(snap.form, EMPTY_FORM);
 });

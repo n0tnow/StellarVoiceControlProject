@@ -112,7 +112,7 @@ export function editorSnapshotFrom(input: EditorLoadInput): EditorSnapshot {
     autoPaySupported: input.executor.supported,
     form: EMPTY_FORM,
   };
-  if (input.offTauri) return unconfigured(base, "Open Polaris to read the real rules.");
+  if (input.offTauri) return unconfigured(base, "Open Autonomy to read the real rules.");
   if (!input.ownerAddress) {
     return unconfigured(base, "Set POLARIS_OWNER_ADDRESS to manage rules.");
   }
