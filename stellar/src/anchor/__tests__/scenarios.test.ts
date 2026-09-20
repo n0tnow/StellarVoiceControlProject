@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import { UnsafeAnchorError } from "../net.ts";
 import {
   assertPlainAnchorDomain,
+  demoCustomerFields,
   describeAnchorScenario,
+  SDF_DEMO_CUSTOMER,
   SDF_TEST_ANCHOR_HOME_DOMAIN,
   TR_MOCK_HOME_DOMAIN,
 } from "../scenarios.ts";
@@ -17,16 +19,24 @@ describe("anchor scenario registry", () => {
     expect(s.notes).toMatch(/MASAK/);
   });
 
-  it("labels the SDF test anchor as the labelled NON-TR fallback (discovery + login + info only)", () => {
+  it("labels the SDF test anchor as the labelled NON-TR fallback with demo SEP-12 KYC", () => {
     const s = describeAnchorScenario(SDF_TEST_ANCHOR_HOME_DOMAIN);
     expect(s.id).toBe("sdf-test");
-    expect(s.label).toBe(
-      "NON-TR test scenario (SDF test anchor) — discovery + SEP-10 login + SEP-6 info only; deposit stops at SEP-12 KYC",
-    );
+    expect(s.label).toMatch(/NON-TR test scenario \(Stellar SDF test anchor\)/);
+    expect(s.label).toMatch(/SEP-12 demo KYC/);
     expect(s.sepScope).toBe("SEP-6 only");
-    expect(s.allowed).toEqual(["sep1.discovery", "sep10.login", "sep6.info"]);
-    expect(s.allowed).not.toContain("sep6.deposit");
-    expect(s.notes).toMatch(/NON-TR/);
+    expect(s.allowed).toEqual(["sep1.discovery", "sep10.login", "sep6.info", "sep12.customer", "sep6.deposit", "sep6.withdraw"]);
+    expect(s.notes).toMatch(/KycRequiredError/);
+  });
+
+  it("exposes clearly-fake demo KYC fields only for the SDF test anchor", () => {
+    expect(demoCustomerFields(SDF_TEST_ANCHOR_HOME_DOMAIN)).toEqual({
+      first_name: "Demo",
+      last_name: "User",
+      email_address: "demo@polaris.invalid",
+    });
+    expect(demoCustomerFields(TR_MOCK_HOME_DOMAIN)).toEqual({});
+    expect(JSON.stringify(SDF_DEMO_CUSTOMER)).not.toMatch(/@(gmail|outlook|yahoo|hotmail)\./i);
   });
 
   it("refuses an unknown domain unless it is explicitly passed as custom (with a warning label)", () => {

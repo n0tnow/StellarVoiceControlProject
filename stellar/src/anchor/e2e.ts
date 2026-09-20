@@ -16,6 +16,7 @@ import { Keypair } from "@stellar/stellar-sdk";
 import { DEFAULT_HOME_DOMAIN } from "./config.ts";
 import { narrate } from "./explain.ts";
 import { runDepositFlow, runWithdrawFlow } from "./flows.ts";
+import { demoCustomerFields, SDF_TEST_ANCHOR_HOME_DOMAIN } from "./scenarios.ts";
 import { AnchorSession } from "./session.ts";
 import { EnvSigner } from "./testSigner.ts";
 
@@ -32,14 +33,17 @@ async function main(): Promise<void> {
   const json = flag("json");
 
   const signer = process.env.POLARIS_TEST_SECRET ? EnvSigner.fromEnv() : new EnvSigner(Keypair.random().secret());
-  const session = new AnchorSession({ signer, homeDomain });
+  const session = new AnchorSession({ signer, homeDomain, customerFields: demoCustomerFields(homeDomain) });
+  const isSdf = homeDomain === SDF_TEST_ANCHOR_HOME_DOMAIN;
   if (!json) {
     session.explain.subscribe((r) => console.log(`  [${r.step}] ${narrate(r)}`));
   }
   console.log(`Anchor: ${homeDomain}  Account: ${await signer.publicKey()}`);
 
   console.log(`\n=== DEPOSIT ${amountTry} TRY -> USDC ===`);
-  const dep = await runDepositFlow(session, { amountFiat: amountTry, sandboxBank: !flag("no-sandbox-bank") });
+  // The TR mock's off-chain leg is the sandbox endpoint; the SDF test anchor
+  // simulates the off-chain leg itself, so never call `/sandbox` there.
+  const dep = await runDepositFlow(session, { amountFiat: amountTry, sandboxBank: isSdf ? false : !flag("no-sandbox-bank") });
   const depTx = dep.poll.tx;
   console.log(
     `\nDeposit ${dep.deposit.id}: ${dep.poll.outcome} (${dep.poll.history.join(" -> ")})\n` +

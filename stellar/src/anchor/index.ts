@@ -52,7 +52,9 @@ export { balanceOf, explorerAccountUrl, explorerTxUrl, hasTrustline, loadAccount
 export { simulateBankTransfer } from "./sandbox.ts";
 export {
   assertPlainAnchorDomain,
+  demoCustomerFields,
   describeAnchorScenario,
+  SDF_DEMO_CUSTOMER,
   SDF_TEST_ANCHOR_HOME_DOMAIN,
   TR_MOCK_HOME_DOMAIN,
   type AnchorScenario,

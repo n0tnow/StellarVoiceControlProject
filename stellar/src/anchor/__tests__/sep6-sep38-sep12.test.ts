@@ -95,6 +95,36 @@ describe("SEP-12 customer", () => {
     expect(err).toBeInstanceOf(KycRequiredError);
     expect((err as KycRequiredError).missingFields).toEqual(["id_number"]);
   });
+
+  it("auto-fills ONLY the requested fields it was given (SDF demo KYC)", async () => {
+    let accepted = false;
+    const { fetch, calls } = fakeFetch({
+      [`GET ${HOME}/sep12/customer`]: () =>
+        accepted
+          ? { id: "c", status: "ACCEPTED" }
+          : { status: "NEEDS_INFO", fields: { first_name: { optional: false }, last_name: { optional: false }, email_address: { optional: false }, nickname: { optional: true } } },
+      [`PUT ${HOME}/sep12/customer`]: (_u: URL, init: RequestInit) => {
+        // The optional `nickname` is never sent, and only the demo values are.
+        expect(JSON.parse(String(init.body))).toEqual({ account: TOKEN.account, first_name: "Demo", last_name: "User", email_address: "demo@polaris.invalid" });
+        accepted = true;
+        return new Response(JSON.stringify({ id: "c" }), { status: 202 });
+      },
+    });
+    const info = await ensureCustomer(makeCtx(fetch), TOML, TOKEN, { first_name: "Demo", last_name: "User", email_address: "demo@polaris.invalid" });
+    expect(info.status).toBe("ACCEPTED");
+    expect(calls.map((c) => c.method)).toEqual(["GET", "PUT", "GET"]);
+  });
+
+  it("refuses when a requested field has no supplied value (never invents the rest)", async () => {
+    const { fetch, calls } = fakeFetch({
+      [`GET ${HOME}/sep12/customer`]: { status: "NEEDS_INFO", fields: { first_name: { optional: false }, id_number: { optional: false } } },
+      [`PUT ${HOME}/sep12/customer`]: { id: "x" },
+    });
+    const err = await ensureCustomer(makeCtx(fetch), TOML, TOKEN, { first_name: "Demo" }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(KycRequiredError);
+    expect((err as KycRequiredError).missingFields).toEqual(["id_number"]);
+    expect(calls.some((c) => c.method === "PUT")).toBe(false);
+  });
 });
 
 describe("SEP-6 deposit / withdraw requests", () => {

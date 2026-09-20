@@ -66,6 +66,12 @@ export interface AnchorSessionConfig {
   allowInsecure?: boolean;
   /** Extra hosts (besides the home domain and its subdomains) toml endpoints may use. */
   allowedEndpointHosts?: readonly string[];
+  /**
+   * SEP-12 fields to send when the anchor asks for them (e.g. the clearly-fake
+   * SDF demo customer). Any requested field NOT present here stops the flow with
+   * `KycRequiredError` — the session never invents personal data.
+   */
+  customerFields?: Record<string, string>;
 }
 
 /** Strips the bearer credential: step results may only show who we logged in as. */
@@ -81,6 +87,7 @@ export class AnchorSession {
   readonly homeDomain: string;
   readonly assetCode: string;
   private readonly signer: Signer;
+  private readonly customerFields: Record<string, string>;
   private tomlCache: Promise<AnchorToml> | undefined;
   private tokenCache: AuthToken | undefined;
   private customerOk = false;
@@ -91,6 +98,7 @@ export class AnchorSession {
 
   constructor(config: AnchorSessionConfig) {
     this.signer = config.signer;
+    this.customerFields = config.customerFields ?? {};
     this.homeDomain = parseHomeDomain(config.homeDomain ?? DEFAULT_HOME_DOMAIN, { allowInsecure: config.allowInsecure });
     this.assetCode = config.assetCode ?? DEFAULT_ASSET_CODE;
     this.explain = config.explain ?? new ExplainLog(config.now);
@@ -153,7 +161,7 @@ export class AnchorSession {
 
   private async kyc(): Promise<CustomerInfo | undefined> {
     if (this.customerOk) return undefined;
-    const info = await ensureCustomer(this.ctx, await this.toml(), await this.token());
+    const info = await ensureCustomer(this.ctx, await this.toml(), await this.token(), this.customerFields);
     this.customerOk = true;
     return info;
   }

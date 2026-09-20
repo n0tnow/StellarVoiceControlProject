@@ -64,9 +64,10 @@ export async function getCustomer(
 }
 
 /**
- * Makes sure the anchor considers us a known customer. With the mock this is a
- * single empty PUT. Real anchors that need documents are NOT auto-filled: the
- * missing field names are thrown so the agent can ask the user.
+ * Makes sure the anchor considers us a known customer. When the anchor answers
+ * NEEDS_INFO we send ONLY the fields it explicitly asked for and that the caller
+ * supplied (e.g. the SDF demo customer); any other required field means real
+ * personal data we must not invent, so we stop with `KycRequiredError`.
  */
 export async function ensureCustomer(
   ctx: AnchorContext,
@@ -83,12 +84,26 @@ export async function ensureCustomer(
     return { status: "ACCEPTED", missingFields: [] };
   }
   let info = await getCustomer(ctx, toml, token);
+  let sentDemoFields = false;
   if (info.status !== "ACCEPTED") {
+    // Only the fields the anchor explicitly requires, never broad optional fields.
+    const requested = info.missingFields.length > 0 ? info.missingFields : Object.keys(fields);
+    const unknown = requested.filter((f) => !(f in fields));
+    if (unknown.length > 0) {
+      throw new KycRequiredError(
+        `anchor KYC needs customer fields this project does not supply: ${unknown.join(", ")}`,
+        info.status,
+        unknown,
+      );
+    }
+    const provided: Record<string, string> = {};
+    for (const f of requested) provided[f] = fields[f] as string;
     await requestJson(ctx, `${toml.kycServer}/customer`, {
       method: "PUT",
       bearer: token.jwt,
-      json: { account: token.account, ...fields },
+      json: { account: token.account, ...provided },
     });
+    sentDemoFields = requested.some((f) => f in fields);
     info = await getCustomer(ctx, toml, token);
   }
   if (info.status !== "ACCEPTED") {
@@ -100,7 +115,7 @@ export async function ensureCustomer(
   }
   ctx.explain.record(
     "sep12.customer",
-    "SEP-12: the anchor has us on file as an approved customer (it asked for no personal data).",
+    `SEP-12: the anchor has us on file as an approved customer${sentDemoFields ? " (using clearly-fake demo data)" : " (it asked for no personal data)"}.`,
     "Anchors are regulated, so they must know who they pay out to; SEP-12 is the standard place to send that information.",
   );
   return info;
