@@ -1,4 +1,4 @@
-# Polaris landing page
+# Autonomy landing page
 
 A standalone, responsive product introduction. It uses semantic HTML and CSS, with no JavaScript runtime, build requirement, wallet connection, or desktop API dependency.
 
