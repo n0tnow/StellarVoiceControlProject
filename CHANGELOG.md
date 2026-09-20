@@ -36,6 +36,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
   dedicated writer thread over a bounded channel instead of doing disk I/O under a mutex, and a
   stream failure tears the stream down so the next hold works instead of wedging in `recording`.
 
+## [0.2.2] - 2026-09-20
+
+### Fixed
+- macOS releases are now **Developer ID signed, hardened, notarized and stapled**. The 0.2.1
+  bundle carried only an ad-hoc signature (`codesign -s -`), which is valid solely on the machine
+  that produced it, so every downloaded copy was reported as "damaged" and needed a manual
+  `xattr -dr com.apple.quarantine`. `make release-macos` now runs the full pipeline and verifies
+  the result with `codesign`, `spctl` and `stapler`.
+
+### Added
+- `scripts/release-macos.sh` — the signing/notarization pipeline, and `docs/release-macos.md`
+  covering the one-time credential setup plus the release runbook.
+- `app/src-tauri/Entitlements.plist` — `com.apple.security.device.audio-input`, required because
+  Hardened Runtime otherwise revokes microphone access from push-to-talk capture.
+
+### Changed
+- `tauri.conf.json`: `hardenedRuntime` is on and points at the entitlements file, so local dev
+  bundles match what the release pipeline produces.
+
 ## [0.2.1] - 2026-09-20
 
 ### Changed

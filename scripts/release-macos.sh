@@ -41,7 +41,12 @@ ENTITLEMENTS="app/src-tauri/Entitlements.plist"
 DIST_DIR="dist/release"
 NOTARY_PROFILE="${NOTARY_PROFILE:-autonomy-notary}"
 VERSION="$(tr -d '[:space:]' < VERSION)"
-ARCH="$(uname -m)"
+# Tauri names its bundles `aarch64`, and the published assets follow it — keep
+# the same spelling so the README download badge stays predictable.
+case "$(uname -m)" in
+  arm64|aarch64) ARCH="aarch64" ;;
+  *) ARCH="$(uname -m)" ;;
+esac
 DMG_PATH="$DIST_DIR/${APP_NAME}_${VERSION}_${ARCH}.dmg"
 ZIP_PATH="$DIST_DIR/${APP_NAME}_${VERSION}_${ARCH}.zip"
 

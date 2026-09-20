@@ -57,7 +57,7 @@ make release-macos
 
 # 3. Tag the merged release commit and publish.
 git tag -a v<VERSION> -m "Autonomy v<VERSION>" && git push origin v<VERSION>
-gh release create v<VERSION> dist/release/Autonomy_<VERSION>_arm64.dmg --notes-file <notes>
+gh release create v<VERSION> dist/release/Autonomy_<VERSION>_aarch64.dmg --notes-file <notes>
 ```
 
 Useful flags while iterating:
