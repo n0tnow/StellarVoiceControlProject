@@ -22,7 +22,6 @@ mod health;
 mod hotkey;
 mod hotkey_flags;
 mod notch;
-mod panels;
 mod stellar_config;
 mod stt;
 mod timing;
@@ -38,7 +37,6 @@ use tauri::Manager;
 pub use commands::{AppInfo, NETWORK};
 pub use events::{AgentStage, HotkeyState, PolarisEvent, SpeechState, POLARIS_EVENT_NAME};
 pub use notch::{NotchActivationPolicy, ShellGeometry};
-pub use panels::{PanelError, PanelSpec, PANELS};
 pub use types::CaptureStatus;
 
 /// Starts the desktop shell. Called from `main.rs`.
@@ -67,7 +65,6 @@ pub fn run() {
             notch::notch_hover_health,
             notch::notch_simulate_hover,
             hotkey::hotkey_permission,
-            panels::open_panel,
             stellar_config::stellar_config,
             // Task W10b: the Wallet page's non-secret recipient book.
             contacts::contacts_list,
@@ -126,36 +123,6 @@ pub fn run() {
             wallet::executor::executor_sign_pay,
             wallet::executor::executor_health,
         ])
-        // Step W0: a panel's close button hides it instead of quitting the app
-        // (the overlay's `main` window is never closed, so the close handler is
-        // only ever about panels).
-        //
-        // Hover fix: opening a panel calls `set_focus`, which activates this
-        // accessory app, and macOS pauses the global `mouseMoved` monitor while
-        // we are active — so hover expansion went dead after any panel/approval
-        // interaction. Once the last panel is hidden, resign active to hand
-        // focus back and resume the monitor.
-        .on_window_event(|window, event| {
-            panels::handle_window_event(window, event);
-            if matches!(event, tauri::WindowEvent::CloseRequested { .. })
-                && panels::is_panel_label(window.label())
-            {
-                let app = window.app_handle();
-                let closing = window.label();
-                let another_visible = panels::PANELS.iter().any(|spec| {
-                    spec.label != closing
-                        && app
-                            .get_webview_window(spec.label)
-                            .and_then(|panel| panel.is_visible().ok())
-                            .unwrap_or(false)
-                });
-                if !another_visible {
-                    if let Err(error) = notch::resign_active(app) {
-                        eprintln!("polaris: could not resign active after a panel closed: {error}");
-                    }
-                }
-            }
-        })
         .setup(|app| {
             // Captures live under the app data dir so they never land in the repo.
             let recordings_dir = app.path().app_data_dir()?.join("recordings");

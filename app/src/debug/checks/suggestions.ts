@@ -1,7 +1,7 @@
 /**
  * Suggestions readiness (milestone W6).
  *
- * Answers "is the Suggestions panel able to produce anything?": the owner's
+ * Answers "can the suggestions engine produce anything?": the owner's
  * payment history is fetched, mapped and fed to the offline engine. It reports
  * how many suggestions the engine returned, or why it returned none. Pure and
  * read-only: it never applies a suggestion (D11).
@@ -10,7 +10,7 @@ import { getStellarConfigIfAvailable } from "@/debug/commands.ts";
 import { errorDetail, makeResult } from "@/debug/runner.ts";
 import type { FeatureCheck } from "@/debug/types.ts";
 import { fetchOwnerPayments, mapHistoryRecords } from "@/lib/history.ts";
-import { computeSuggestions, pickDisplayAsset } from "@/panels/suggestions/suggestionsModel.ts";
+import { computeSuggestions, pickDisplayAsset } from "@/lib/suggestionsModel.ts";
 
 export default {
   id: "suggestions",

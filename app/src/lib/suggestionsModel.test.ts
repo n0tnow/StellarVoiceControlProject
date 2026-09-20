@@ -3,14 +3,7 @@ import { test } from "node:test";
 
 import { suggest } from "@polaris/stellar";
 
-import {
-  acceptTarget,
-  computeSuggestions,
-  DEFAULT_DISPLAY_ASSET,
-  describeEvidence,
-  pickDisplayAsset,
-  suggestionDraft,
-} from "./suggestionsModel.ts";
+import { computeSuggestions, DEFAULT_DISPLAY_ASSET, pickDisplayAsset } from "./suggestionsModel.ts";
 
 const DAY = 86_400;
 const NOW = 1_700_000_000;
@@ -81,43 +74,4 @@ test("a dismissed suggestion is filtered out of the next run", () => {
     second.suggestions.some((suggestion) => suggestion.id === id),
     false,
   );
-});
-
-test("describeEvidence is a compact aggregate with no addresses", () => {
-  const line = describeEvidence({
-    windowDays: 30,
-    count: 8,
-    median: "10",
-    p90: "12",
-    max: "15",
-    occurrences: 3,
-    intervalDays: 7,
-  });
-  assert.match(line, /30 days/);
-  assert.match(line, /8 payments/);
-  assert.match(line, /median 10/);
-  assert.match(line, /every ~7\.0 days/);
-  assert.equal(line.includes("G"), false);
-});
-
-test("acceptTarget maps each kind to a panel, or none for an alert", () => {
-  assert.equal(acceptTarget("auto_pay_threshold"), "security");
-  assert.equal(acceptTarget("daily_limit"), "security");
-  assert.equal(acceptTarget("tighten_dormant"), "security");
-  assert.equal(acceptTarget("schedule_from_recurrence"), "schedules");
-  assert.equal(acceptTarget("unusual_payment_alert"), null);
-});
-
-test("suggestionDraft names the change and says it was not applied", () => {
-  const draft = suggestionDraft({
-    id: "x",
-    kind: "schedule_from_recurrence",
-    title: "Create a recurring payment",
-    rationale: "because",
-    evidence: { windowDays: 30, count: 3, median: "10", p90: "10", max: "10" },
-    proposedChange: { recipient: "G", asset: "XLM", amount: "10", firstRunAt: 1, intervalSecs: 7, runs: 3 },
-    confidence: "medium",
-  });
-  assert.match(draft, /not applied/);
-  assert.match(draft, /"runs": 3/);
 });

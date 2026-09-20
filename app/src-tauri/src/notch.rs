@@ -1253,30 +1253,6 @@ fn sync_native_focusability(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// Resigns Polaris from the **active** app state. Main thread only on macOS.
-///
-/// This is the hover fix's core: the overlay is click-through, so it relies on
-/// the global `mouseMoved` monitor, and macOS does not deliver global monitors
-/// while the app is active. Opening a panel (`panels::open_spec` →
-/// `set_focus`) activates this accessory app; hiding the panel does not
-/// deactivate it, so before this the global monitor stayed paused and hover was
-/// dead after any panel or approval interaction. Resigning active hands focus
-/// back to the app the user came from and resumes the monitor.
-#[cfg(target_os = "macos")]
-pub fn resign_active(_app: &AppHandle) -> Result<(), String> {
-    use objc2::MainThreadMarker;
-    use objc2_app_kit::NSApplication;
-    let marker = MainThreadMarker::new().ok_or("resigning active requires the main thread")?;
-    NSApplication::sharedApplication(marker).deactivate();
-    Ok(())
-}
-
-/// Non-macOS: there is no AppKit activation to resign.
-#[cfg(not(target_os = "macos"))]
-pub fn resign_active(_app: &AppHandle) -> Result<(), String> {
-    Ok(())
-}
-
 /// Whether Polaris is the frontmost/active app. Main thread only on macOS (the
 /// caller's contract); false where AppKit does not exist.
 #[cfg(target_os = "macos")]
@@ -1319,7 +1295,7 @@ pub fn hover_health(app: &AppHandle) -> HoverHealth {
     let detail = if !monitors_installed {
         "the mouse monitor could not be installed; hover expansion is disabled".to_string()
     } else if active {
-        "Polaris is the active app, so macOS pauses the global mouse monitor; close the open panel to restore hover".to_string()
+        "Polaris is the active app, so macOS pauses the global mouse monitor".to_string()
     } else if !trusted {
         "monitor installed; if hover still does nothing, grant Accessibility to Polaris in \
          System Settings → Privacy & Security → Accessibility"

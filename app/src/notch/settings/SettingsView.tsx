@@ -13,7 +13,7 @@ import {
   AUTO_LOCK_OPTIONS,
   DEFAULT_AUTO_LOCK_MINUTES,
 } from "@/lib/walletSession";
-import { quitPolaris } from "@/lib/panels";
+import { quitPolaris } from "@/lib/app";
 import {
   loadSppStatus,
   summarizeSppStatus,

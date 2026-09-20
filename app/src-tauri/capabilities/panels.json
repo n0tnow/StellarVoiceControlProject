@@ -1,7 +1,0 @@
-{
-  "$schema": "../gen/schemas/desktop-schema.json",
-  "identifier": "panels",
-  "description": "Interactive panel windows (panel-wallet, panel-approval, panel-settings): core IPC, the polaris-event stream and closing the panel. App-defined commands (open_panel, app_info, …) are not ACL-gated; core:default covers the event listener the panels use. The window labels are namespaced so this single glob covers every panel in the registry.",
-  "windows": ["panel-*"],
-  "permissions": ["core:default", "core:window:allow-close"]
-}
