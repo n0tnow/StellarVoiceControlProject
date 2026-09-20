@@ -11,6 +11,7 @@ import { executeApprovedIntent } from "@/lib/chain";
 import { speakSentence, speakTurnResult } from "@/lib/speech";
 import { failureSentence, submittedSentence } from "@polaris/agent";
 import { TurnFlow } from "@/lib/turnFlow";
+import { decideWalletGateForTurn, requestWalletPage } from "@/lib/walletGate";
 import {
   recordTurnAnswer,
   recordTurnOutcome,
@@ -241,7 +242,8 @@ export default function App() {
             if (disposed || !isCurrentTurn(sessionRef.current, turnId)) return;
             dispatchTurn({ type: "stage", stage });
           };
-          void executeApprovedIntent(intent, { onStage })
+          const runExecution = (): void => {
+            void executeApprovedIntent(intent, { onStage })
             .then((outcome) => {
               if (disposed) return;
               // M1: a non-submitted stale result is still dropped. W4b-2: a tx
@@ -285,6 +287,23 @@ export default function App() {
               recordTurnOutcome(logId, { label: "failed: Chain error" });
               dispatchTurn({ type: "failed", label: "Chain error" });
             });
+          };
+
+          // W10b onboarding gate: a value-moving intent with no active wallet is
+          // refused before any chain call — one short sentence and the Wallet
+          // page. A build without the wallet engine passes through (the chain
+          // tool's own owner check stays the fail-closed gate).
+          void decideWalletGateForTurn(intent).then((gate) => {
+            if (disposed || !isCurrentTurn(sessionRef.current, turnId)) return;
+            if (gate.block) {
+              void speakSentence(gate.sentence, run.outcome.language);
+              requestWalletPage();
+              recordTurnOutcome(logId, { label: "failed: Connect wallet" });
+              dispatchTurn({ type: "failed", label: "Connect wallet" });
+              return;
+            }
+            runExecution();
+          });
         })
         .finally(() => flowRef.current.settle(ticket));
     };

@@ -1,193 +1,84 @@
 /**
- * Wallet page — balances, identity, aliases and recent activity.
+ * Wallet page — wallet login (create/import), accounts, balances and recipients.
  *
- * The notch's Wallet data comes from `useWalletData` (real `stellar_config` +
- * Horizon reads); the markup, classes and layout are unchanged from the mock
- * version. The XLM and asset balances, the truncated owner key with copy and
- * explorer links, the alias book, the last five payments and the account states
- * (loading / unconfigured / offline / not funded) are all rendered from that
- * view model. `@/lib/mockData` is kept only for its two formatting helpers.
+ * Three surfaces in one column, chosen by the wallet engine's state:
+ *
+ * - **no wallet connected** → the Connect screen (Create / Import);
+ * - **a wallet is active** → the account list plus the read-only balances view
+ *   for the selected account;
+ * - **no wallet engine in this build** (feature-detected) → the legacy read-only
+ *   env-owner view, so the panel still works against an older shell.
+ *
+ * The onboarding flows (`CreateWallet` / `ImportWallet`) and the recipient book
+ * (`RecipientsSection`) live under `app/src/notch/wallet/`; the read-only body is
+ * the NW1 `WalletReadView`. The engine emits `wallet_changed` after every
+ * mutation, which `useWalletAccounts` turns into a reload.
  */
 import { useState } from "react";
-import { ArrowDownLeft, ArrowUpRight, Check, Copy, ExternalLink, RefreshCw } from "lucide-react";
 
-import { formatTimestamp, truncateKey } from "@/lib/mockData";
-import { useWalletData } from "@/notch/data/useWalletData";
-import committedAliases from "../../../../stellar/config/aliases.json";
+import { walletEngine } from "@/lib/wallet";
+import { AccountList } from "@/notch/wallet/AccountList";
+import { ConnectScreen } from "@/notch/wallet/ConnectScreen";
+import { CreateWallet } from "@/notch/wallet/CreateWallet";
+import { ImportWallet } from "@/notch/wallet/ImportWallet";
+import { RecipientsSection } from "@/notch/wallet/RecipientsSection";
+import { WalletReadView } from "@/notch/wallet/WalletReadView";
+import { useWalletAccounts } from "@/notch/wallet/useWalletAccounts";
 
-/** How long the copy button shows its confirmation before reverting. */
-const COPIED_MS = 1500;
+type OnboardingMode = "none" | "create" | "import";
 
 export function WalletPage() {
-  const wallet = useWalletData(committedAliases);
-  const [copied, setCopied] = useState(false);
+  const accounts = useWalletAccounts();
+  const [mode, setMode] = useState<OnboardingMode>("none");
+  const active = accounts.status?.active ?? null;
 
-  const copyKey = (text: string): void => {
-    // Clipboard access is best-effort (the overlay window may not be focused);
-    // the visual confirmation still plays so the affordance is honest.
-    void navigator.clipboard?.writeText(text).catch(() => {});
-    setCopied(true);
-    setTimeout(() => setCopied(false), COPIED_MS);
+  // Every mutation already emits `wallet_changed`; this reload just makes the
+  // transition immediate instead of waiting for the event round trip.
+  const afterChange = (): void => {
+    setMode("none");
+    void accounts.reload();
   };
 
-  const ownerAddress = wallet.ownerAddress;
-  const latest = wallet.latestTransaction;
-  const showTransactions = wallet.status === "ready";
+  const run = (action: Promise<unknown>): void => {
+    void action
+      .then(() => accounts.reload())
+      .catch((failure: unknown) => console.warn("wallet page action failed", failure));
+  };
 
   return (
     <div className="page-stack">
-      <div className="wallet-key">
-        <span className="wallet-key-label">Network</span>
-        <span className="wallet-key-value">{wallet.network}</span>
-        <button
-          type="button"
-          className="page-icon-button"
-          onClick={wallet.refresh}
-          disabled={wallet.refreshing}
-          aria-label="Refresh wallet"
-        >
-          <RefreshCw aria-hidden="true" />
-        </button>
-      </div>
-
-      {wallet.status === "loading" || wallet.status === "unconfigured" ? (
-        <p className="wallet-key-label">{wallet.message}</p>
-      ) : null}
-
-      {wallet.status === "offline" ? (
-        <div className="wallet-key">
-          <span className="wallet-key-label">{wallet.message}</span>
-          <button
-            type="button"
-            className="page-icon-button"
-            onClick={wallet.refresh}
-            disabled={wallet.refreshing}
-            aria-label="Retry"
-          >
-            <RefreshCw aria-hidden="true" />
-          </button>
-        </div>
-      ) : null}
-
-      {wallet.status === "unfunded" && wallet.friendbotUrl ? (
-        <a
-          className="wallet-key"
-          href={wallet.friendbotUrl}
-          target="_blank"
-          rel="noreferrer"
-        >
-          <span className="wallet-key-label">
-            Not funded on testnet — fund it with Friendbot
-          </span>
-          <ExternalLink aria-hidden="true" />
-        </a>
-      ) : null}
-
-      {ownerAddress ? (
-        <div className="wallet-key">
-          <span className="wallet-key-label">Public key</span>
-          <code className="wallet-key-value selectable" title={ownerAddress}>
-            {truncateKey(ownerAddress, 8, 8)}
-          </code>
-          <button
-            type="button"
-            className="page-icon-button"
-            onClick={() => copyKey(ownerAddress)}
-            aria-label={copied ? "Copied" : "Copy public key"}
-          >
-            {copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
-          </button>
-          {wallet.explorerUrl ? (
-            <a
-              className="page-icon-button"
-              href={wallet.explorerUrl}
-              target="_blank"
-              rel="noreferrer"
-              aria-label="Open account in explorer"
-            >
-              <ExternalLink aria-hidden="true" />
-            </a>
-          ) : null}
-        </div>
-      ) : null}
-
-      {latest ? (
-        <div className="wallet-key">
-          <span className="wallet-key-label">Latest transaction</span>
-          <code className="wallet-key-value selectable" title={latest.hash}>
-            {truncateKey(latest.hash, 8, 8)}
-          </code>
-          <a
-            className="page-icon-button"
-            href={latest.explorerUrl}
-            target="_blank"
-            rel="noreferrer"
-            aria-label="Open latest transaction in explorer"
-          >
-            <ExternalLink aria-hidden="true" />
-          </a>
-        </div>
-      ) : null}
-
-      {wallet.assets.length > 0 ? (
-        <div className="wallet-balances">
-          {wallet.assets.map((asset) => (
-            <div key={asset.code} className="wallet-asset">
-              <span className="wallet-asset-code">{asset.code}</span>
-              <span className="wallet-asset-balance">{asset.balance}</span>
-              <span className="wallet-asset-usd">{asset.note}</span>
-            </div>
-          ))}
-        </div>
-      ) : null}
-
-      {wallet.aliases.length > 0 ? (
-        <ul className="page-list" aria-label="Alias book">
-          {wallet.aliases.map((alias) => (
-            <li key={alias.name} className="wallet-key">
-              <span className="wallet-key-label">{alias.name}</span>
-              <code className="wallet-key-value selectable" title={alias.address}>
-                {truncateKey(alias.address, 8, 8)}
-              </code>
-            </li>
-          ))}
-        </ul>
-      ) : null}
-
-      {showTransactions ? (
+      {accounts.available === false ? (
         <>
-          {wallet.message ? <p className="wallet-key-label">{wallet.message}</p> : null}
-          <ul className="page-list wallet-tx-list" aria-label="Recent transactions">
-            {wallet.transactions.map((tx) => (
-              <li key={tx.id} className="wallet-tx">
-                <span className={`wallet-tx-direction is-${tx.direction}`}>
-                  {tx.direction === "in" ? (
-                    <ArrowDownLeft aria-hidden="true" />
-                  ) : (
-                    <ArrowUpRight aria-hidden="true" />
-                  )}
-                </span>
-                <span className="wallet-tx-main">
-                  <span className="wallet-tx-summary">{tx.summary}</span>
-                  <span className="wallet-tx-time">{formatTimestamp(tx.timestamp)}</span>
-                </span>
-                {tx.explorerUrl ? (
-                  <a
-                    className="wallet-tx-amount"
-                    href={tx.explorerUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    {tx.amount}
-                  </a>
-                ) : (
-                  <span className={`wallet-tx-amount is-${tx.status}`}>{tx.amount}</span>
-                )}
-              </li>
-            ))}
-          </ul>
+          <p className="wallet-key-label">
+            Wallet engine not in this build — showing the read-only wallet.
+          </p>
+          <WalletReadView />
         </>
-      ) : null}
+      ) : active !== null ? (
+        <>
+          <AccountList
+            entries={accounts.entries}
+            activeAddress={active.address}
+            onSelect={(address) => run(walletEngine.select(address))}
+            onRename={(address, label) => run(walletEngine.rename(address, label))}
+            onRemove={(address) => run(walletEngine.remove(address))}
+          />
+          <WalletReadView ownerAddressOverride={active.address} />
+        </>
+      ) : mode === "create" ? (
+        <CreateWallet onDone={afterChange} onCancel={() => setMode("none")} />
+      ) : mode === "import" ? (
+        <ImportWallet onDone={afterChange} onCancel={() => setMode("none")} />
+      ) : (
+        <ConnectScreen
+          loading={accounts.loading}
+          error={accounts.error}
+          onCreate={() => setMode("create")}
+          onImport={() => setMode("import")}
+        />
+      )}
+
+      {accounts.available !== false ? <RecipientsSection /> : null}
     </div>
   );
 }

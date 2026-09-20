@@ -214,13 +214,21 @@ export interface WalletData extends WalletPageView {
  * `tx_submitted` subscription is independent of Horizon: a submission from this
  * session stays visible even when the next read is still in flight.
  */
-export function useWalletData(committedAliases?: CommittedAliases): WalletData {
+export function useWalletData(
+  committedAliases?: CommittedAliases,
+  ownerAddressOverride?: string | null,
+): WalletData {
   const [config, setConfig] = useState<StellarConfig | null>(null);
   const [configLoaded, setConfigLoaded] = useState(false);
   const [account, setAccount] = useState<AccountFetchResult | null>(null);
   const [payments, setPayments] = useState<PaymentsFetchResult | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [latestTransaction, setLatestTransaction] = useState<WalletPageLatestTx | null>(null);
+
+  // W10b: the active wallet address (from the wallet engine) wins over the env
+  // owner, so the page shows the wallet the user actually selected. When no
+  // override is supplied the NW1 behaviour (env `POLARIS_OWNER_ADDRESS`) is kept.
+  const effectiveOwner = ownerAddressOverride ?? config?.ownerAddress ?? null;
 
   useEffect(() => {
     let cancelled = false;
@@ -237,12 +245,12 @@ export function useWalletData(committedAliases?: CommittedAliases): WalletData {
   }, []);
 
   const refresh = useCallback(async () => {
-    if (!config?.ownerAddress) return;
+    if (!config || !effectiveOwner) return;
     setRefreshing(true);
     try {
       const [nextAccount, nextPayments] = await Promise.all([
-        fetchOwnerAccount(config.horizonUrl, config.ownerAddress),
-        fetchOwnerPayments(config.horizonUrl, config.ownerAddress, {
+        fetchOwnerAccount(config.horizonUrl, effectiveOwner),
+        fetchOwnerPayments(config.horizonUrl, effectiveOwner, {
           limit: WALLET_PAGE_TX_LIMIT,
         }),
       ]);
@@ -251,7 +259,7 @@ export function useWalletData(committedAliases?: CommittedAliases): WalletData {
     } finally {
       setRefreshing(false);
     }
-  }, [config]);
+  }, [config, effectiveOwner]);
 
   useEffect(() => {
     if (config) void refresh();
@@ -288,13 +296,13 @@ export function useWalletData(committedAliases?: CommittedAliases): WalletData {
       deriveWalletPageView({
         configLoaded,
         network: config?.network ?? "testnet",
-        ownerAddress: config?.ownerAddress ?? null,
+        ownerAddress: effectiveOwner,
         account,
         payments,
         aliasEntries,
         latestTransaction,
       }),
-    [account, aliasEntries, config, configLoaded, latestTransaction, payments],
+    [account, aliasEntries, config, configLoaded, effectiveOwner, latestTransaction, payments],
   );
 
   const doRefresh = useCallback(() => {

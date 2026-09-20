@@ -256,6 +256,12 @@ export async function runAgentTurn(
     : undefined;
   const started = performance.now();
   try {
+    // W10b: refresh the account/alias table from `stellar_config` at the start of
+    // every turn. The Rust command now merges the saved recipients, so a "rumuz"
+    // added in the Wallet page resolves on the very next utterance without a
+    // restart. The system prompt names the aliases, so it is rebuilt too.
+    accountsPromise = undefined;
+    systemPromptPromise = undefined;
     // F2: the prompt names the owner and the real aliases, and account phrases
     // ("wallet 2", "ek 2") are normalised before the model sees the transcript.
     const accounts = await loadPromptAccounts();
