@@ -141,4 +141,5 @@
 - ...
 ```
 
-| 2026-09-20 | Dark Polaris product landing page; demo video integration pending | landing worker | review | `backlog/dark-landing.md` | P2 |
+| 2026-09-20 | Dark Autonomy product landing page; demo video integration pending | landing worker | review | `backlog/dark-landing.md` | P2 |
+| 2026-09-20 | GitHub Pages deploy of the Autonomy landing page (PR #44) — reviewed, APPROVE; live at https://n0tnow.github.io/StellarVoiceControlProject/ | DeepSeek reviewer | done | `backlog/pages-deploy-review.md` | P2 |
