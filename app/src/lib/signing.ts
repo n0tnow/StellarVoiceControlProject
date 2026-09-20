@@ -35,6 +35,7 @@ import type { SubmitResult } from "@polaris/stellar";
 
 import type { InvokeFn } from "./approval.ts";
 import type { PaymentStage } from "./turnSession.ts";
+import { resolveWalletSigner } from "./wallet.ts";
 import { webLog } from "./weblog.ts";
 
 /** The Rust `bridge_sign` success shape (`BridgeOutcome` camelCase). */
@@ -140,17 +141,11 @@ export interface SigningDeps {
 export type SignerKind = "embedded" | "freighter";
 
 /**
- * Resolves the configured signer from `stellar_config`. A missing command or a
- * failed read falls back to `freighter` (the historical path), so an older build
- * keeps working; the embedded wallet is the default when the config says so.
+ * Resolves the configured signer through the one shared resolver in
+ * `wallet.ts`, so `getSigner` and this module can never disagree.
  */
 export async function resolveSigner(invokeImpl: InvokeFn): Promise<SignerKind> {
-  try {
-    const config = await invokeImpl<{ signer?: string }>("stellar_config");
-    return config?.signer === "embedded" ? "embedded" : "freighter";
-  } catch {
-    return "freighter";
-  }
+  return resolveWalletSigner(invokeImpl);
 }
 
 /**

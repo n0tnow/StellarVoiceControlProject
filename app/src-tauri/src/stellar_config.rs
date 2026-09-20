@@ -183,8 +183,17 @@ fn from_lookup(
     lookup: impl Fn(&str) -> Option<String>,
     wallet_address: Option<String>,
 ) -> StellarConfig {
+    let signer = resolve_signer(lookup("POLARIS_SIGNER").as_deref());
     let env_owner = lookup("POLARIS_OWNER_ADDRESS").filter(|value| is_public_key(value));
-    let owner = wallet_address.filter(|value| is_public_key(value)).or(env_owner);
+    // The embedded wallet is the owner **only** when it is also the signer: with
+    // `POLARIS_SIGNER=freighter` the owner must stay the env owner, or signing
+    // would go to the browser bridge for a transaction sourced by the embedded G…
+    let wallet_owner = if signer == SIGNER_EMBEDDED {
+        wallet_address.filter(|value| is_public_key(value))
+    } else {
+        None
+    };
+    let owner = wallet_owner.or(env_owner);
     StellarConfig {
         network: lookup("STELLAR_NETWORK").unwrap_or_else(|| DEFAULT_NETWORK.to_string()),
         rpc_url: lookup("STELLAR_RPC_URL").unwrap_or_else(|| DEFAULT_RPC_URL.to_string()),
@@ -193,7 +202,7 @@ fn from_lookup(
         network_passphrase: lookup("STELLAR_NETWORK_PASSPHRASE")
             .unwrap_or_else(|| DEFAULT_NETWORK_PASSPHRASE.to_string()),
         owner_address: owner,
-        signer: resolve_signer(lookup("POLARIS_SIGNER").as_deref()),
+        signer,
         aliases: lookup("POLARIS_ALIASES")
             .map(|raw| parse_aliases(&raw))
             .unwrap_or_default(),
@@ -357,10 +366,19 @@ mod tests {
         );
         assert_eq!(config.owner_address.as_deref(), Some(OWNER));
         assert_eq!(config.signer, "embedded");
-        // An explicit freighter setting still wins over the wallet default.
+        // An explicit freighter setting wins, and the embedded address must NOT
+        // become the owner: signing goes to the browser bridge else every
+        // payment would fail on a source mismatch.
         let explicit = from_pairs_with_wallet(&[("POLARIS_SIGNER", "freighter")], Some(OWNER));
         assert_eq!(explicit.signer, "freighter");
-        assert_eq!(explicit.owner_address.as_deref(), Some(OWNER));
+        assert_eq!(explicit.owner_address, None);
+        // With freighter and an env owner, the env owner is used.
+        let with_env = from_pairs_with_wallet(
+            &[("POLARIS_SIGNER", "freighter"), ("POLARIS_OWNER_ADDRESS", ACC2)],
+            Some(OWNER),
+        );
+        assert_eq!(with_env.signer, "freighter");
+        assert_eq!(with_env.owner_address.as_deref(), Some(ACC2));
         // No wallet still defaults to the embedded signer.
         assert_eq!(from_pairs_with_wallet(&[], None).signer, "embedded");
     }

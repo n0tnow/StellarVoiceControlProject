@@ -13,9 +13,13 @@
 //!   secret is ever written there.
 //! * Each 32-byte Ed25519 seed lives in its own store item, keyed by
 //!   `signer-<address>`. The production store is the macOS login Keychain
-//!   ([`keychain`]); if Keychain access fails the service falls back to a
-//!   `0600` file store under the same directory and says so loudly in
-//!   `wallet_status` (`store: "file (testnet only)"`).
+//!   ([`keychain`]) — the only store by default. The `0600` plaintext file store
+//!   is used **only** when `POLARIS_WALLET_ALLOW_FILE_STORE=1` was set explicitly
+//!   and the Keychain probe failed; without that flag a Keychain failure refuses
+//!   create/import/sign with an actionable error and `wallet_status` reports
+//!   `store: "keychain unavailable"`. Each account records which store holds its
+//!   seed (`store: "keychain" | "file"`), so a seed written during an outage is
+//!   still found after the Keychain returns.
 //! * Seeds and phrases are held in `zeroize` buffers and never logged,
 //!   serialised or returned. `wallet_create` is the single exception: it returns
 //!   the recovery phrase **once** for the user to write down, as the product
@@ -54,9 +58,12 @@ pub const ACCOUNT_PREFIX: &str = "signer-";
 pub const METADATA_FILE: &str = "wallets.json";
 /// Store label reported while the login Keychain serves the seeds.
 pub const STORE_KEYCHAIN: &str = "keychain";
-/// Store label reported when the file fallback is active. Kept explicit so the
-/// UI and the Debug check can shout "testnet only".
-pub const STORE_FILE: &str = "file (testnet only)";
+/// Store label reported when the opt-in plaintext file fallback is active. Kept
+/// loud so the UI and the Debug check can shout "testnet only, plaintext".
+pub const STORE_FILE: &str = "file (testnet only, plaintext)";
+/// Store label reported when the Keychain is unavailable and the plaintext file
+/// store was not opted into: no seed can be written or read.
+pub const STORE_UNAVAILABLE: &str = "keychain unavailable";
 /// The Touch ID reason shown when creating the wallet.
 pub const CREATE_REASON: &str = "Create the Polaris wallet";
 /// The Touch ID reason shown before importing a wallet.
@@ -70,20 +77,32 @@ pub const CHANGED_EVENT: &str = "wallet_changed";
 /// webview and a one-sentence `message` for a non-developer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WalletError {
-    /// The store could not be read or written (Keychain or file).
+    /// The Keychain could not be read or written.
     Storage(String),
+    /// The plaintext file store could not be read or written.
+    FileStorage(String),
+    /// The Keychain is unavailable and the plaintext file store was not opted
+    /// into with `POLARIS_WALLET_ALLOW_FILE_STORE=1`.
+    KeychainUnavailable,
+    /// The account's seed is in the plaintext file store, which is not enabled
+    /// in this run.
+    FileStoreDisabled,
     /// Not a valid `S…` secret seed (length, alphabet, version or checksum).
     InvalidSecret,
     /// Not a valid 12/24-word BIP-39 phrase (word list or checksum).
     InvalidPhrase,
     /// The requested derivation index is out of range.
     InvalidIndex,
+    /// An account label is empty or longer than 40 characters.
+    InvalidLabel,
     /// A wallet (or that account) already exists.
     AlreadyExists,
     /// No wallet is configured for the active signer.
     NoWallet,
     /// The referenced account is not in the metadata file.
     UnknownAccount,
+    /// The active account changed after this transaction was approved.
+    SignerChanged,
     /// The user dismissed the Touch ID prompt.
     Cancelled,
     /// Touch ID was refused or unavailable (not a cancellation).
@@ -96,10 +115,14 @@ impl WalletError {
     /// The contract's stable error kind.
     pub fn kind(&self) -> &'static str {
         match self {
-            Self::Storage(_) => "keychain",
-            Self::InvalidSecret | Self::InvalidPhrase | Self::InvalidIndex => "invalid",
+            Self::Storage(_) | Self::KeychainUnavailable => "keychain",
+            Self::FileStorage(_) | Self::FileStoreDisabled => "file",
+            Self::InvalidSecret | Self::InvalidPhrase | Self::InvalidIndex | Self::InvalidLabel => {
+                "invalid"
+            }
             Self::AlreadyExists => "exists",
             Self::NoWallet | Self::UnknownAccount => "notFound",
+            Self::SignerChanged => "unauthorized",
             Self::Cancelled => "cancelled",
             Self::Unauthorized(_) => "unauthorized",
             Self::Integrity(_) => "invalid",
@@ -110,12 +133,27 @@ impl WalletError {
     pub fn detail(&self) -> String {
         match self {
             Self::Storage(detail) => format!("the wallet store failed: {detail}"),
+            Self::FileStorage(detail) => {
+                format!("the plaintext wallet file store failed: {detail}")
+            }
+            Self::KeychainUnavailable => "the macOS Keychain is unavailable — allow Polaris in \
+                 Keychain Access, or unlock the login keychain"
+                .to_string(),
+            Self::FileStoreDisabled => "this account's seed is in the plaintext file store; set \
+                 POLARIS_WALLET_ALLOW_FILE_STORE=1 to use it"
+                .to_string(),
             Self::InvalidSecret => "that is not a valid Stellar secret key".to_string(),
             Self::InvalidPhrase => "that is not a valid 12 or 24 word recovery phrase".to_string(),
             Self::InvalidIndex => "the account index must be 2,147,483,647 or lower".to_string(),
+            Self::InvalidLabel => {
+                "the account name must be between 1 and 40 characters".to_string()
+            }
             Self::AlreadyExists => "a Polaris wallet already exists".to_string(),
             Self::NoWallet => "no wallet is configured; create or import one first".to_string(),
             Self::UnknownAccount => "that account is not in this wallet".to_string(),
+            Self::SignerChanged => "the active account changed since this payment was approved — \
+                 approve it again"
+                .to_string(),
             Self::Cancelled => "Touch ID was cancelled".to_string(),
             Self::Unauthorized(detail) => format!("Touch ID was not completed: {detail}"),
             Self::Integrity(detail) => {
@@ -132,6 +170,7 @@ impl WalletError {
             Self::NoWallet => "wallet_unavailable",
             Self::Cancelled => "rejected",
             Self::Unauthorized(_) => "not_authorized",
+            Self::SignerChanged => "address_mismatch",
             _ => "error",
         }
     }
@@ -147,8 +186,113 @@ pub trait KeyStore: Send + Sync {
     fn set(&self, id: &str, seed: &[u8; 32]) -> Result<(), WalletError>;
     /// Removes the seed for `id`. A missing item is not an error.
     fn delete(&self, id: &str) -> Result<(), WalletError>;
-    /// Human label for status/Debug (`keychain` or `file (testnet only)`).
+    /// Human label for status/Debug (`keychain`, the loud plaintext label, or
+    /// `keychain unavailable`).
     fn label(&self) -> &'static str;
+}
+
+/// The two seed stores this run may use, plus how availability is reported.
+///
+/// The macOS Keychain is the only default. The `0600` plaintext file store is
+/// used **only** when `POLARIS_WALLET_ALLOW_FILE_STORE=1` was set explicitly and
+/// the Keychain probe failed; without that flag a Keychain failure refuses
+/// create/import/sign with [`WalletError::KeychainUnavailable`]. Every account
+/// records which store holds its seed, so a seed written during an outage is
+/// still found after the Keychain returns.
+pub struct Stores {
+    keychain: Arc<dyn KeyStore>,
+    file: Arc<dyn KeyStore>,
+    keychain_available: bool,
+    file_allowed: bool,
+}
+
+impl Stores {
+    pub fn new(
+        keychain: Arc<dyn KeyStore>,
+        file: Arc<dyn KeyStore>,
+        keychain_available: bool,
+        file_allowed: bool,
+    ) -> Self {
+        Self {
+            keychain,
+            file,
+            keychain_available,
+            file_allowed,
+        }
+    }
+
+    /// The store label `wallet_status` and the Debug check report.
+    pub fn label(&self) -> &'static str {
+        if self.keychain_available {
+            self.keychain.label()
+        } else if self.file_allowed {
+            self.file.label()
+        } else {
+            STORE_UNAVAILABLE
+        }
+    }
+
+    /// `Ok` only while the Keychain serves the seeds; the plaintext fallback and
+    /// the unavailable state are both warnings.
+    pub fn health(&self) -> HealthStatus {
+        if self.keychain_available {
+            HealthStatus::Ok
+        } else {
+            HealthStatus::Warn
+        }
+    }
+
+    /// The store a new seed must go to, or the user-actionable Keychain error.
+    fn write_kind(&self) -> Result<StoreKind, WalletError> {
+        if self.keychain_available {
+            Ok(StoreKind::Keychain)
+        } else if self.file_allowed {
+            Ok(StoreKind::File)
+        } else {
+            Err(WalletError::KeychainUnavailable)
+        }
+    }
+
+    fn get(&self, kind: StoreKind, id: &str) -> Result<Zeroizing<[u8; 32]>, WalletError> {
+        match kind {
+            // A read is attempted even when the startup probe failed: the probe
+            // can be wrong, and the account's metadata says exactly where the
+            // seed lives, so we never wrongly report "seed not found".
+            StoreKind::Keychain => match self.keychain.get(id) {
+                Ok(seed) => Ok(seed),
+                Err(error) if self.keychain_available => Err(error),
+                Err(_) => Err(WalletError::KeychainUnavailable),
+            },
+            StoreKind::File if self.file_allowed => self.file.get(id),
+            StoreKind::File => Err(WalletError::FileStoreDisabled),
+        }
+    }
+
+    fn set(&self, kind: StoreKind, id: &str, seed: &[u8; 32]) -> Result<(), WalletError> {
+        match kind {
+            StoreKind::Keychain => self.keychain.set(id, seed),
+            StoreKind::File => self.file.set(id, seed),
+        }
+    }
+
+    fn delete(&self, kind: StoreKind, id: &str) -> Result<(), WalletError> {
+        match kind {
+            StoreKind::Keychain => self.keychain.delete(id),
+            StoreKind::File if self.file_allowed => self.file.delete(id),
+            StoreKind::File => Err(WalletError::FileStoreDisabled),
+        }
+    }
+}
+
+/// Which seed store holds one account's seed. Persisted (non-secret) in
+/// `wallets.json`; an entry written before this field existed is read as
+/// [`StoreKind::Keychain`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StoreKind {
+    #[default]
+    Keychain,
+    File,
 }
 
 /// One account's non-secret metadata, as persisted in `wallets.json`.
@@ -159,6 +303,9 @@ pub struct AccountMeta {
     pub address: String,
     /// Milliseconds since the Unix epoch.
     pub created: u64,
+    /// Which seed store holds this account's seed. No secret.
+    #[serde(default)]
+    pub store: StoreKind,
 }
 
 /// The metadata file's shape.
@@ -177,7 +324,7 @@ struct Inner {
 
 /// The managed wallet service. All clones (there is one) share state.
 pub struct WalletService {
-    store: Arc<dyn KeyStore>,
+    stores: Stores,
     root: PathBuf,
     inner: Mutex<Inner>,
 }
@@ -206,12 +353,23 @@ pub struct WalletStatus {
 
 /// `wallet_create` result. `recovery_phrase` is the one-time reveal; it is only
 /// ever produced by `wallet_create`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateOutcome {
     pub address: String,
     /// The 24-word BIP-39 phrase, returned once for the user to write down.
     pub recovery_phrase: String,
+}
+
+/// Redacts the recovery phrase from `Debug`, so a stray `{:?}` can never leak it.
+impl std::fmt::Debug for CreateOutcome {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CreateOutcome")
+            .field("address", &self.address)
+            .field("recovery_phrase", &"[redacted]")
+            .finish()
+    }
 }
 
 /// `wallet_import`, `wallet_import_preview` and the other commands' result.
@@ -244,22 +402,22 @@ pub struct SignedTx {
 type ActiveKey = (Zeroizing<[u8; 32]>, [u8; 32], String);
 
 impl WalletService {
-    /// Builds the service over an explicit store and metadata directory. Used by
+    /// Builds the service over explicit stores and a metadata directory. Used by
     /// tests and by [`WalletService::build`].
-    pub fn new(store: Arc<dyn KeyStore>, root: PathBuf) -> Self {
+    pub fn new(stores: Stores, root: PathBuf) -> Self {
         let meta = file::load_metadata(&root);
         Self {
-            store,
+            stores,
             root,
             inner: Mutex::new(Inner { meta }),
         }
     }
 
-    /// Production constructor: probes the Keychain and falls back to the file
-    /// store (loudly) when it is unavailable.
+    /// Production constructor: probes the Keychain; the plaintext file store is
+    /// only constructed as a usable store when the explicit flag is set.
     pub fn build() -> Self {
         let root = default_root();
-        Self::new(keychain::build_store(&root), root)
+        Self::new(keychain::build_stores(&root), root)
     }
 
     fn lock(&self) -> MutexGuard<'_, Inner> {
@@ -300,7 +458,7 @@ impl WalletService {
             signer: self.signer(),
             active,
             count: inner.meta.accounts.len(),
-            store: self.store.label().to_string(),
+            store: self.stores.label().to_string(),
         }
     }
 
@@ -364,7 +522,10 @@ impl WalletService {
 
     /// Writes the seed and the non-secret metadata, making the account active.
     fn persist(&self, seed: &[u8; 32], address: &str, label: Option<&str>) -> Result<(), WalletError> {
-        self.store.set(&account_id(address), seed)?;
+        // The store is chosen before any write, so an unavailable Keychain with
+        // the flag off fails here without touching a seed.
+        let kind = self.stores.write_kind()?;
+        self.stores.set(kind, &account_id(address), seed)?;
         let mut inner = self.lock();
         if inner.meta.accounts.iter().any(|account| account.address == address) {
             return Err(WalletError::AlreadyExists);
@@ -378,6 +539,7 @@ impl WalletService {
             label,
             address: address.to_string(),
             created: now_ms(),
+            store: kind,
         });
         inner.meta.active = Some(address.to_string());
         file::save_metadata(&self.root, &inner.meta)
@@ -416,7 +578,7 @@ impl WalletService {
     pub fn rename(&self, address: &str, label: &str) -> Result<AddressOutcome, WalletError> {
         let label = label.trim();
         if label.is_empty() || label.chars().count() > 40 {
-            return Err(WalletError::InvalidSecret);
+            return Err(WalletError::InvalidLabel);
         }
         let mut inner = self.lock();
         let Some(account) = inner
@@ -440,15 +602,15 @@ impl WalletService {
         address: &str,
         authenticator: &dyn Authenticator,
     ) -> Result<AddressOutcome, WalletError> {
-        if !self
+        // The recorded store is read before the metadata row is dropped.
+        let kind = self
             .lock()
             .meta
             .accounts
             .iter()
-            .any(|account| account.address == address)
-        {
-            return Err(WalletError::UnknownAccount);
-        }
+            .find(|account| account.address == address)
+            .map(|account| account.store)
+            .ok_or(WalletError::UnknownAccount)?;
         authenticate(authenticator, REMOVE_REASON)?;
         let mut inner = self.lock();
         let before = inner.meta.accounts.len();
@@ -460,18 +622,28 @@ impl WalletService {
             inner.meta.active = inner.meta.accounts.first().map(|account| account.address.clone());
         }
         file::save_metadata(&self.root, &inner.meta)?;
-        self.store.delete(&account_id(address))?;
+        self.stores.delete(kind, &account_id(address))?;
         Ok(AddressOutcome {
             address: address.to_string(),
         })
     }
 
-    /// Loads the active seed and public key, or fails closed.
+    /// Loads the active seed and public key, or fails closed. The seed is read
+    /// from the store recorded in the account's metadata, never from "whatever
+    /// store is active now".
     fn active_key(&self) -> Result<ActiveKey, WalletError> {
         let address = self.active_address().ok_or(WalletError::NoWallet)?;
         let public = crate::bridge::strkey::decode_public_key(&address)
             .ok_or_else(|| WalletError::Storage("the active address is corrupt".to_string()))?;
-        let seed = self.store.get(&account_id(&address))?;
+        let kind = self
+            .lock()
+            .meta
+            .accounts
+            .iter()
+            .find(|account| account.address == address)
+            .map(|account| account.store)
+            .ok_or(WalletError::UnknownAccount)?;
+        let seed = self.stores.get(kind, &account_id(&address))?;
         Ok((seed, public, address))
     }
 
@@ -507,16 +679,11 @@ impl WalletService {
                 "No wallet yet — open the Wallet screen to create or import one.",
             );
         };
-        let health = if status.store == STORE_FILE {
-            HealthStatus::Warn
-        } else {
-            HealthStatus::Ok
-        };
         FeatureHealth::new(
             commands::HEALTH_ID,
             "Polaris wallet",
             "W10",
-            health,
+            self.stores.health(),
             format!(
                 "{} ({}) ready (store: {})",
                 short_address(&active.address),
@@ -566,12 +733,16 @@ pub fn default_root() -> PathBuf {
     }
 }
 
-/// `GARX…WCO` — the first and last four characters of an address.
+/// `GARX…WCO` — the first and last four characters of an address. Slices by
+/// `char`, so a hand-edited multi-byte address cannot panic `wallet_health`.
 pub fn short_address(address: &str) -> String {
-    if address.len() <= 10 {
+    let chars: Vec<char> = address.chars().collect();
+    if chars.len() <= 10 {
         return address.to_string();
     }
-    format!("{}…{}", &address[..4], &address[address.len() - 4..])
+    let head: String = chars[..4].iter().collect();
+    let tail: String = chars[chars.len() - 4..].iter().collect();
+    format!("{head}…{tail}")
 }
 
 #[cfg(test)]
@@ -614,23 +785,42 @@ mod tests {
         FakeAuth(Err(AuthError::Cancelled))
     }
 
+    /// Builds a service whose Keychain works and whose plaintext fallback is off.
     fn service() -> (WalletService, Arc<memory::MemoryStore>) {
-        let root = crate::env::temp_dir("wallet");
-        let store = Arc::new(memory::MemoryStore::new());
-        (WalletService::new(store.clone(), root), store)
+        service_with(true, false)
     }
 
-    /// Puts `seed` in the store and makes its address active, without Touch ID.
+    /// Builds a service over two in-memory stores with explicit availability
+    /// flags, returning the Keychain store so tests can inspect it.
+    fn service_with(
+        keychain_available: bool,
+        file_allowed: bool,
+    ) -> (WalletService, Arc<memory::MemoryStore>) {
+        let root = crate::env::temp_dir("wallet");
+        let keychain = Arc::new(memory::MemoryStore::new());
+        let file = Arc::new(memory::MemoryStore::new());
+        let stores = Stores::new(keychain.clone(), file, keychain_available, file_allowed);
+        (WalletService::new(stores, root), keychain)
+    }
+
+    /// Puts `seed` in the Keychain store and makes its address active, without
+    /// Touch ID.
     fn install_seed(wallet: &WalletService, seed: &[u8; 32]) -> String {
         let address = keys::address_of(seed);
-        wallet.store.set(&account_id(&address), seed).unwrap();
+        wallet
+            .stores
+            .keychain
+            .set(&account_id(&address), seed)
+            .unwrap();
         let mut inner = wallet.lock();
         inner.meta.accounts.push(AccountMeta {
             label: "Test".to_string(),
             address: address.clone(),
             created: 0,
+            store: StoreKind::Keychain,
         });
         inner.meta.active = Some(address.clone());
+        file::save_metadata(&wallet.root, &inner.meta).unwrap();
         address
     }
 
@@ -744,12 +934,17 @@ mod tests {
     fn every_error_maps_to_a_contract_kind() {
         for (error, kind) in [
             (WalletError::Storage("x".into()), "keychain"),
+            (WalletError::KeychainUnavailable, "keychain"),
+            (WalletError::FileStorage("x".into()), "file"),
+            (WalletError::FileStoreDisabled, "file"),
             (WalletError::InvalidSecret, "invalid"),
             (WalletError::InvalidPhrase, "invalid"),
             (WalletError::InvalidIndex, "invalid"),
+            (WalletError::InvalidLabel, "invalid"),
             (WalletError::AlreadyExists, "exists"),
             (WalletError::NoWallet, "notFound"),
             (WalletError::UnknownAccount, "notFound"),
+            (WalletError::SignerChanged, "unauthorized"),
             (WalletError::Cancelled, "cancelled"),
             (WalletError::Unauthorized("x".into()), "unauthorized"),
         ] {
@@ -778,8 +973,39 @@ mod tests {
         // The bridge fixture is sourced by a different account.
         assert!(matches!(
             wallet.sign(fixtures::FIXTURE_XDR, PASSPHRASE),
-            Err(WalletError::Integrity(_))
+            Err(WalletError::SignerChanged)
         ));
+    }
+
+    #[test]
+    fn sign_refuses_when_the_active_account_changed_after_approval() {
+        let (wallet, _store) = service();
+        // Two accounts; the approved transaction is sourced by the first.
+        let approved = install_seed(&wallet, &VECTOR_SEED);
+        let approved_public = crate::bridge::strkey::decode_public_key(&approved).unwrap();
+        let approved_xdr = fixtures::fixture_with_source(approved_public, 1);
+        // The user switches to a second account after approving.
+        let other = keys::address_of(&[7u8; 32]);
+        wallet
+            .stores
+            .keychain
+            .set(&account_id(&other), &[7u8; 32])
+            .unwrap();
+        {
+            let mut inner = wallet.lock();
+            inner.meta.accounts.push(AccountMeta {
+                label: "Other".to_string(),
+                address: other.clone(),
+                created: 1,
+                store: StoreKind::Keychain,
+            });
+            inner.meta.active = Some(other);
+        }
+        assert_eq!(
+            wallet.sign(&approved_xdr, PASSPHRASE).unwrap_err(),
+            WalletError::SignerChanged
+        );
+        assert_eq!(WalletError::SignerChanged.bridge_code(), "address_mismatch");
     }
 
     #[test]
@@ -865,7 +1091,7 @@ mod tests {
         );
         assert_eq!(
             wallet.rename(&first, "  ").unwrap_err(),
-            WalletError::InvalidSecret
+            WalletError::InvalidLabel
         );
     }
 
@@ -888,7 +1114,122 @@ mod tests {
     fn a_malformed_metadata_file_does_not_take_the_service_down() {
         let root = crate::env::temp_dir("wallet-meta");
         std::fs::write(root.join(METADATA_FILE), "{ not json").unwrap();
-        let wallet = WalletService::new(Arc::new(memory::MemoryStore::new()), root);
+        let stores = Stores::new(
+            Arc::new(memory::MemoryStore::new()),
+            Arc::new(memory::MemoryStore::new()),
+            true,
+            false,
+        );
+        let wallet = WalletService::new(stores, root);
         assert!(!wallet.exists());
+    }
+
+    #[test]
+    fn status_reports_keychain_unavailable_when_the_flag_is_off() {
+        let (wallet, _) = service_with(false, false);
+        assert_eq!(wallet.status().store, STORE_UNAVAILABLE);
+        assert_eq!(wallet.stores.health(), HealthStatus::Warn);
+    }
+
+    #[test]
+    fn create_refuses_when_the_keychain_is_unavailable_and_the_file_store_is_off() {
+        let (wallet, _) = service_with(false, false);
+        let error = wallet.create(&allow(), None).unwrap_err();
+        assert_eq!(error, WalletError::KeychainUnavailable);
+        assert_eq!(error.kind(), "keychain");
+        assert!(error.detail().contains("Keychain Access"), "{}", error.detail());
+        assert!(error.detail().contains("login keychain"), "{}", error.detail());
+        assert!(!wallet.exists());
+    }
+
+    #[test]
+    fn the_opt_in_flag_stores_in_the_plaintext_file_store() {
+        let root = crate::env::temp_dir("wallet-file");
+        let keychain = Arc::new(memory::MemoryStore::new());
+        let file = Arc::new(file::FileStore::new(root.clone()));
+        let wallet = WalletService::new(Stores::new(keychain, file, false, true), root);
+        let _ = wallet.create(&allow(), Some("Plain")).unwrap();
+        assert_eq!(wallet.status().store, STORE_FILE);
+        assert!(wallet.status().store.contains("plaintext"));
+        assert_eq!(wallet.stores.health(), HealthStatus::Warn);
+        // The metadata records the file store, not the Keychain.
+        let meta = file::load_metadata(&wallet.root);
+        assert_eq!(meta.accounts[0].store, StoreKind::File);
+    }
+
+    #[test]
+    fn a_file_stored_account_signs_after_the_keychain_returns() {
+        // Created during an outage, with the flag on: the seed is in the file
+        // store and the metadata says so.
+        let root = crate::env::temp_dir("wallet-flip");
+        let keychain = Arc::new(memory::MemoryStore::new());
+        let file = Arc::new(memory::MemoryStore::new());
+        let during = WalletService::new(
+            Stores::new(keychain.clone(), file.clone(), false, true),
+            root.clone(),
+        );
+        let address = install_seed(&during, &VECTOR_SEED);
+        {
+            let mut inner = during.lock();
+            inner.meta.accounts[0].store = StoreKind::File;
+        }
+        during
+            .stores
+            .file
+            .set(&account_id(&address), &VECTOR_SEED)
+            .unwrap();
+        during.stores.keychain.delete(&account_id(&address)).ok();
+        file::save_metadata(&root, &during.lock().meta).unwrap();
+        // The seed is not in the Keychain.
+        assert!(keychain.get(&account_id(&address)).is_err());
+
+        // The next run finds the Keychain again; the recorded store still wins.
+        let after = WalletService::new(Stores::new(keychain, file, true, true), root);
+        assert_eq!(after.sign(VECTOR_UNSIGNED, PASSPHRASE).unwrap().tx_hash, VECTOR_HASH);
+    }
+
+    #[test]
+    fn a_keychain_stored_account_signs_when_the_probe_says_unavailable() {
+        // Created while the Keychain worked; a later probe failure must not send
+        // the lookup to the file store and wrongly report "seed not found".
+        let root = crate::env::temp_dir("wallet-reverse");
+        let keychain = Arc::new(memory::MemoryStore::new());
+        let file = Arc::new(memory::MemoryStore::new());
+        let before = WalletService::new(Stores::new(keychain.clone(), file.clone(), true, true), root.clone());
+        let address = install_seed(&before, &VECTOR_SEED);
+        assert!(before.stores.keychain.get(&account_id(&address)).is_ok());
+
+        let after = WalletService::new(Stores::new(keychain, file, false, true), root);
+        assert!(!after.stores.keychain_available);
+        assert_eq!(after.sign(VECTOR_UNSIGNED, PASSPHRASE).unwrap().tx_hash, VECTOR_HASH);
+    }
+
+    #[test]
+    fn existing_metadata_without_a_store_field_reads_as_keychain() {
+        let root = crate::env::temp_dir("wallet-migrate");
+        std::fs::write(
+            root.join(METADATA_FILE),
+            r#"{"active":"GDRXE2BQUC3AZNPVFSCEZ76NJ3WWL25FYFK6RGZGIEKWE4SOOHSUJUJ6","accounts":[{"label":"Old","address":"GDRXE2BQUC3AZNPVFSCEZ76NJ3WWL25FYFK6RGZGIEKWE4SOOHSUJUJ6","created":1}]}"#,
+        )
+        .unwrap();
+        let meta = file::load_metadata(&root);
+        assert_eq!(meta.accounts[0].store, StoreKind::Keychain);
+    }
+
+    #[test]
+    fn short_address_never_panics_on_a_multibyte_address() {
+        assert_eq!(short_address("SHORT"), "SHORT");
+        assert_eq!(short_address("GABC…WXYZ12"), "GABC…YZ12");
+        let multibyte = "Gαβγδεζηθικλμνξο";
+        assert_eq!(short_address(multibyte).chars().count(), 9);
+    }
+
+    #[test]
+    fn create_outcome_debug_redacts_the_phrase() {
+        let (wallet, _) = service();
+        let created = wallet.create(&allow(), None).unwrap();
+        let debug = format!("{created:?}");
+        assert!(!debug.contains(&created.recovery_phrase));
+        assert!(debug.contains("[redacted]"));
     }
 }

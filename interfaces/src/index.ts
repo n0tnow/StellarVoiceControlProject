@@ -355,7 +355,11 @@ export interface StellarConfig {
  * 7b. Embedded wallet (step W10)
  * ------------------------------------------------------------------ */
 
-/** `wallet_status` result. `store` is `keychain` or `file (testnet only)`. */
+/**
+ * `wallet_status` result. `store` is `keychain`, `file (testnet only,
+ * plaintext)` (only with `POLARIS_WALLET_ALLOW_FILE_STORE=1`), or
+ * `keychain unavailable` (no seed can be written or read).
+ */
 export interface WalletStatus {
   signer: "embedded" | "freighter";
   /** The active account, or null when no wallet exists yet. */
@@ -393,6 +397,7 @@ export type WalletErrorKind =
   | "notFound"
   | "cancelled"
   | "keychain"
+  | "file"
   | "unauthorized";
 
 /** The typed rejection shape of the wallet commands. */

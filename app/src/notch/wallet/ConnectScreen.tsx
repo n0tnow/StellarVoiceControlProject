@@ -5,6 +5,7 @@
  */
 import { Button } from "@/components/ui/button";
 
+import { StoreNotice } from "./StoreNotice";
 import { ACTIONS, CARD, ERROR, HINT } from "./styles";
 
 export interface ConnectScreenProps {
@@ -12,9 +13,11 @@ export interface ConnectScreenProps {
   error: string | null;
   onCreate: () => void;
   onImport: () => void;
+  /** The `wallet_status.store` state, so a weaker store is visible up front. */
+  store?: string | null;
 }
 
-export function ConnectScreen({ loading, error, onCreate, onImport }: ConnectScreenProps) {
+export function ConnectScreen({ loading, error, onCreate, onImport, store }: ConnectScreenProps) {
   return (
     <section className={CARD}>
       <h2 className="text-sm font-semibold">Connect your wallet</h2>
@@ -22,6 +25,7 @@ export function ConnectScreen({ loading, error, onCreate, onImport }: ConnectScr
         Create a new testnet wallet or import an existing one. The key is held in
         the macOS Keychain; Polaris never stores a secret after import.
       </p>
+      <StoreNotice store={store} />
       {error !== null ? <p className={ERROR}>{error}</p> : null}
       <div className={ACTIONS}>
         <Button size="sm" onClick={onCreate} disabled={loading}>

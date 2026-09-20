@@ -59,6 +59,7 @@ export function WalletPage() {
           <AccountList
             entries={accounts.entries}
             activeAddress={active.address}
+            store={accounts.status?.store}
             onSelect={(address) => run(walletEngine.select(address))}
             onRename={(address, label) => run(walletEngine.rename(address, label))}
             onRemove={(address) => run(walletEngine.remove(address))}
@@ -73,6 +74,7 @@ export function WalletPage() {
         <ConnectScreen
           loading={accounts.loading}
           error={accounts.error}
+          store={accounts.status?.store}
           onCreate={() => setMode("create")}
           onImport={() => setMode("import")}
         />

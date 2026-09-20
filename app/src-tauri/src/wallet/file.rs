@@ -1,9 +1,10 @@
-//! File-backed metadata and the documented Keychain-fallback seed store (W10).
+//! File-backed metadata and the opt-in plaintext seed store (W10).
 //!
 //! The metadata file (`wallets.json`) is non-secret and always lives here. The
-//! `FileStore` is only used when the macOS Keychain is unavailable; it keeps each
-//! seed in a `0600` file and reports itself as `file (testnet only)` so the user
-//! is never misled about the weaker storage.
+//! `FileStore` is only used when the macOS Keychain is unavailable **and** the
+//! explicit `POLARIS_WALLET_ALLOW_FILE_STORE=1` flag is set; it keeps each seed
+//! in a `0600` file and reports itself as `file (testnet only, plaintext)` so the
+//! user is never misled about the weaker storage.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -48,9 +49,32 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), WalletError> {
         fs::create_dir_all(parent).map_err(storage)?;
     }
     let temp = path.with_extension("tmp");
-    fs::write(&temp, bytes).map_err(storage)?;
+    // Remove any leftover temp first so `mode(0o600)` applies at creation; the
+    // temp file is then `0600` from the start, with no readable window.
+    let _ = fs::remove_file(&temp);
+    write_private(&temp, bytes).map_err(storage)?;
     set_private(&temp)?;
     fs::rename(&temp, path).map_err(storage)
+}
+
+/// Creates (or truncates) `path` with owner-only permissions on unix.
+fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?;
+        file.write_all(bytes)
+    }
+    #[cfg(not(unix))]
+    {
+        fs::write(path, bytes)
+    }
 }
 
 /// Restricts a file to the owner on unix; a no-op elsewhere.
@@ -66,10 +90,11 @@ fn set_private(path: &Path) -> Result<(), WalletError> {
 }
 
 fn storage(error: std::io::Error) -> WalletError {
-    WalletError::Storage(error.to_string())
+    WalletError::FileStorage(error.to_string())
 }
 
-/// A `0600`-file seed store, the explicit fallback when the Keychain is unusable.
+/// A `0600`-file seed store, usable only with the explicit opt-in flag when the
+/// Keychain is unusable.
 pub struct FileStore {
     root: PathBuf,
 }
@@ -90,7 +115,8 @@ impl KeyStore for FileStore {
     fn get(&self, id: &str) -> Result<Zeroizing<[u8; 32]>, WalletError> {
         let path = self.path_for(id);
         let bytes = match fs::read(&path) {
-            Ok(bytes) => bytes,
+            // The buffer holds the seed, so it is wiped on drop.
+            Ok(bytes) => Zeroizing::new(bytes),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 return Err(WalletError::Storage("seed not found".to_string()));
             }
@@ -133,4 +159,54 @@ fn sanitize(id: &str) -> String {
             }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::wallet::{AccountMeta, Metadata, StoreKind};
+
+    #[test]
+    fn metadata_round_trips_with_the_store_field() {
+        let root = crate::env::temp_dir("file-meta");
+        let meta = Metadata {
+            active: Some("GAAA".to_string()),
+            accounts: vec![AccountMeta {
+                label: "Main".to_string(),
+                address: "GAAA".to_string(),
+                created: 7,
+                store: StoreKind::File,
+            }],
+        };
+        save_metadata(&root, &meta).unwrap();
+        assert_eq!(load_metadata(&root), meta);
+    }
+
+    #[test]
+    fn atomic_write_leaves_an_owner_only_file() {
+        let root = crate::env::temp_dir("file-perm");
+        let path = root.join("secret.bin");
+        atomic_write(&path, b"x").unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"x");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+    }
+
+    #[test]
+    fn file_store_round_trips_and_rejects_a_corrupt_seed() {
+        let root = crate::env::temp_dir("file-store");
+        let store = FileStore::new(root.clone());
+        assert!(store.get("signer-x").is_err());
+        store.set("signer-x", &[9u8; 32]).unwrap();
+        assert_eq!(*store.get("signer-x").unwrap(), [9u8; 32]);
+        store.delete("signer-x").unwrap();
+        assert!(store.get("signer-x").is_err());
+        // A short file is a corrupt store, not a seed.
+        fs::write(store.path_for("signer-x"), b"short").unwrap();
+        assert!(store.get("signer-x").is_err());
+    }
 }

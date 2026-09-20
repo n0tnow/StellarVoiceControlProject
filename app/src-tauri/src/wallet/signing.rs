@@ -31,9 +31,10 @@ pub fn sign_transaction(
     let full = verify::decode_envelope(unsigned_xdr).map_err(integrity)?;
     let unsigned = verify::parse_unsigned(&full).map_err(integrity)?;
     if unsigned.source != *public {
-        return Err(WalletError::Integrity(
-            "the transaction source is not the active wallet address".to_string(),
-        ));
+        // The approved transaction was built for the account that was active at
+        // approval time; a different active account now is a refusal, not a
+        // generic integrity failure.
+        return Err(WalletError::SignerChanged);
     }
     let hash = verify::tx_hash(unsigned.body, passphrase);
     let decorated = decorate(seed, &hash);

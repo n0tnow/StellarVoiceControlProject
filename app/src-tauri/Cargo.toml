@@ -60,8 +60,9 @@ subtle = "2.6"
 # Step W10: the wallet inside the app. `bip39` generates and parses the 24-word
 # recovery phrase; `hmac`/`sha2` implement SLIP-0010 ed25519 derivation for the
 # SEP-5 path `m/44'/148'/index'` (no separate derivation crate needed).
-# `zeroize` wipes the seed and phrase buffers after use.
-bip39 = "2.1"
+# `zeroize` wipes the seed and phrase buffers after use; the `zeroize` feature
+# also wipes the parsed mnemonic's word indices.
+bip39 = { version = "2.1", features = ["zeroize"] }
 hmac = "0.12"
 zeroize = "1.8"
 

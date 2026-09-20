@@ -75,6 +75,7 @@ const ERROR_KINDS: readonly WalletErrorKind[] = [
   "notFound",
   "cancelled",
   "keychain",
+  "file",
   "unauthorized",
 ];
 

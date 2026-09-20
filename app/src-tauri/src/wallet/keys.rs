@@ -44,7 +44,9 @@ pub fn generate_phrase() -> Result<Zeroizing<String>, WalletError> {
 pub fn seed_from_phrase(phrase: &str, index: u32) -> Result<Zeroizing<[u8; 32]>, WalletError> {
     let mnemonic = bip39::Mnemonic::parse(phrase.trim())
         .map_err(|_| WalletError::InvalidPhrase)?;
-    let entropy_len = mnemonic.to_entropy().len();
+    // `to_entropy_array` reads the length without allocating a seed-equivalent
+    // `Vec`; only 12-word (128-bit) and 24-word (256-bit) phrases are accepted.
+    let (_, entropy_len) = mnemonic.to_entropy_array();
     if entropy_len != 16 && entropy_len != 32 {
         return Err(WalletError::InvalidPhrase);
     }
@@ -60,7 +62,8 @@ pub fn seed_from_secret(secret: &str) -> Result<Zeroizing<[u8; 32]>, WalletError
     if secret.len() != 56 {
         return Err(WalletError::InvalidSecret);
     }
-    let decoded = base32_decode(secret).ok_or(WalletError::InvalidSecret)?;
+    // The decoded bytes contain the seed, so the buffer is wiped on drop.
+    let decoded = Zeroizing::new(base32_decode(secret).ok_or(WalletError::InvalidSecret)?);
     if decoded.len() != 35 || decoded[0] != SECRET_SEED_VERSION {
         return Err(WalletError::InvalidSecret);
     }

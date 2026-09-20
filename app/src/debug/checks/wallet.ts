@@ -32,6 +32,9 @@ export default {
         status.store === "keychain"
           ? "seed in the macOS Keychain"
           : `seed store: ${status.store}`;
+      // Any store other than the Keychain is a warning: the plaintext fallback
+      // and "keychain unavailable" are both weaker states (MINOR-4).
+      const weakStore = status.store !== "keychain";
 
       const config = await getStellarConfigIfAvailable();
       if (config === null) {
@@ -53,7 +56,7 @@ export default {
         case "ok": {
           const xlm = account.balances.find((balance) => balance.native);
           return makeResult(
-            "ok",
+            weakStore ? "warn" : "ok",
             `${address} active (${note}); XLM ${xlm?.balance ?? "0"} across ${account.balances.length} balance(s)`,
           );
         }

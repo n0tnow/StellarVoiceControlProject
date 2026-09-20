@@ -14,6 +14,7 @@ import { DEFAULT_EXPLORER_BASE, explorerAccountUrl } from "@/lib/history";
 import type { WalletEntry } from "@/lib/wallet";
 import { shortAddress } from "@/panels/wallet/walletModel";
 
+import { StoreNotice } from "./StoreNotice";
 import { ACTIONS, ERROR, FIELD } from "./styles";
 
 export interface AccountListProps {
@@ -22,6 +23,8 @@ export interface AccountListProps {
   onSelect: (address: string) => void;
   onRename: (address: string, label: string) => void;
   onRemove: (address: string) => void;
+  /** The `wallet_status.store` state; a weaker store is shown as a notice. */
+  store?: string | null;
 }
 
 export function AccountList({
@@ -30,6 +33,7 @@ export function AccountList({
   onSelect,
   onRename,
   onRemove,
+  store,
 }: AccountListProps) {
   const [copied, setCopied] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
@@ -45,110 +49,113 @@ export function AccountList({
   };
 
   return (
-    <ul className="page-list" aria-label="Accounts">
-      {entries.map((entry) => {
-        const active = entry.address === activeAddress;
-        return (
-          <li key={entry.address} className="wallet-key">
-            <span className="wallet-key-label">{entry.label ?? "Account"}</span>
-            <code className="wallet-key-value selectable" title={entry.address}>
-              {shortAddress(entry.address)}
-            </code>
-            {active ? <span className="wallet-key-label">active</span> : null}
+    <>
+      <StoreNotice store={store} />
+      <ul className="page-list" aria-label="Accounts">
+        {entries.map((entry) => {
+          const active = entry.address === activeAddress;
+          return (
+            <li key={entry.address} className="wallet-key">
+              <span className="wallet-key-label">{entry.label ?? "Account"}</span>
+              <code className="wallet-key-value selectable" title={entry.address}>
+                {shortAddress(entry.address)}
+              </code>
+              {active ? <span className="wallet-key-label">active</span> : null}
 
-            <button
-              type="button"
-              className="page-icon-button"
-              onClick={() => copy(entry.address)}
-              aria-label={copied === entry.address ? "Copied" : "Copy address"}
-            >
-              {copied === entry.address ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
-            </button>
-            <a
-              className="page-icon-button"
-              href={explorerAccountUrl(DEFAULT_EXPLORER_BASE, entry.address)}
-              target="_blank"
-              rel="noreferrer"
-              aria-label="Open account in explorer"
-            >
-              <ExternalLink aria-hidden="true" />
-            </a>
+              <button
+                type="button"
+                className="page-icon-button"
+                onClick={() => copy(entry.address)}
+                aria-label={copied === entry.address ? "Copied" : "Copy address"}
+              >
+                {copied === entry.address ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
+              </button>
+              <a
+                className="page-icon-button"
+                href={explorerAccountUrl(DEFAULT_EXPLORER_BASE, entry.address)}
+                target="_blank"
+                rel="noreferrer"
+                aria-label="Open account in explorer"
+              >
+                <ExternalLink aria-hidden="true" />
+              </a>
 
-            {editing === entry.address ? (
-              <span className={ACTIONS}>
-                <input
-                  className={FIELD}
-                  value={draftLabel}
-                  onChange={(event) => setDraftLabel(event.target.value)}
-                  aria-label="New label"
-                />
-                <button
-                  type="button"
-                  className="page-icon-button"
-                  aria-label="Save label"
-                  onClick={() => {
-                    onRename(entry.address, draftLabel);
-                    setEditing(null);
-                  }}
-                >
-                  <Check aria-hidden="true" />
-                </button>
-              </span>
-            ) : (
-              <>
-                {!active ? (
+              {editing === entry.address ? (
+                <span className={ACTIONS}>
+                  <input
+                    className={FIELD}
+                    value={draftLabel}
+                    onChange={(event) => setDraftLabel(event.target.value)}
+                    aria-label="New label"
+                  />
                   <button
                     type="button"
                     className="page-icon-button"
-                    onClick={() => onSelect(entry.address)}
-                    aria-label="Use this account"
-                    title="Use this account"
+                    aria-label="Save label"
+                    onClick={() => {
+                      onRename(entry.address, draftLabel);
+                      setEditing(null);
+                    }}
                   >
                     <Check aria-hidden="true" />
                   </button>
-                ) : null}
-                <button
-                  type="button"
-                  className="page-icon-button"
-                  onClick={() => {
-                    setEditing(entry.address);
-                    setDraftLabel(entry.label ?? "");
-                  }}
-                  aria-label="Rename account"
-                >
-                  <Pencil aria-hidden="true" />
-                </button>
-                <button
-                  type="button"
-                  className="page-icon-button"
-                  onClick={() => setRemoving(entry.address)}
-                  aria-label="Remove account"
-                >
-                  <Trash2 aria-hidden="true" />
-                </button>
-              </>
-            )}
+                </span>
+              ) : (
+                <>
+                  {!active ? (
+                    <button
+                      type="button"
+                      className="page-icon-button"
+                      onClick={() => onSelect(entry.address)}
+                      aria-label="Use this account"
+                      title="Use this account"
+                    >
+                      <Check aria-hidden="true" />
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="page-icon-button"
+                    onClick={() => {
+                      setEditing(entry.address);
+                      setDraftLabel(entry.label ?? "");
+                    }}
+                    aria-label="Rename account"
+                  >
+                    <Pencil aria-hidden="true" />
+                  </button>
+                  <button
+                    type="button"
+                    className="page-icon-button"
+                    onClick={() => setRemoving(entry.address)}
+                    aria-label="Remove account"
+                  >
+                    <Trash2 aria-hidden="true" />
+                  </button>
+                </>
+              )}
 
-            {removing === entry.address ? (
-              <span className={ACTIONS}>
-                <span className={ERROR}>Remove this account?</span>
-                <Button
-                  size="sm"
-                  onClick={() => {
-                    onRemove(entry.address);
-                    setRemoving(null);
-                  }}
-                >
-                  Yes, remove
-                </Button>
-                <Button size="sm" variant="ghost" onClick={() => setRemoving(null)}>
-                  Keep
-                </Button>
-              </span>
-            ) : null}
-          </li>
-        );
-      })}
-    </ul>
+              {removing === entry.address ? (
+                <span className={ACTIONS}>
+                  <span className={ERROR}>Remove this account?</span>
+                  <Button
+                    size="sm"
+                    onClick={() => {
+                      onRemove(entry.address);
+                      setRemoving(null);
+                    }}
+                  >
+                    Yes, remove
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => setRemoving(null)}>
+                    Keep
+                  </Button>
+                </span>
+              ) : null}
+            </li>
+          );
+        })}
+      </ul>
+    </>
   );
 }
