@@ -30,6 +30,8 @@
  * and the app. The skip is recorded (see `steps.ts`), and the final page says
  * something different because of it.
  */
+import { useEffect } from "react";
+
 import {
   PERMISSION_KEYS,
   allGranted,
@@ -37,7 +39,7 @@ import {
   type PermissionKey,
   type PermissionsController,
 } from "../usePermissions.ts";
-import type { PermissionStatus } from "../bridge.ts";
+import type { PermissionSnapshot, PermissionStatus } from "../bridge.ts";
 import { CheckIcon } from "../icons.tsx";
 
 /** The row copy. One sentence each, and each one says *why*, never *what*. */
@@ -102,16 +104,26 @@ function PermissionRow({
 export interface PermissionsPageProps {
   /** Whether this page is on screen — gates the poll. See `usePermissions`. */
   readonly active: boolean;
+  /** Whether this gate is already recorded as satisfied in the flow. */
+  readonly passed: boolean;
+  /** Records the gate as satisfied once both permissions read as granted. */
+  readonly onPass: () => void;
   readonly onAdvance: () => void;
   readonly onSkip: () => void;
-  /** Called on each permission's edge into `granted`, for the `check` cue. */
-  readonly onGranted: (key: PermissionKey) => void;
+  /**
+   * Called on each permission's edge into `granted`, for the `check` cue. The
+   * post-grant snapshot rides along so the caller can stay quiet when this
+   * grant completes the set — the gate's own cue covers that moment.
+   */
+  readonly onGranted: (key: PermissionKey, snapshot: PermissionSnapshot) => void;
   /** Whether the user already walked past this gate. */
   readonly skipped: boolean;
 }
 
 export function PermissionsPage({
   active,
+  passed,
+  onPass,
   onAdvance,
   onSkip,
   onGranted,
@@ -119,6 +131,17 @@ export function PermissionsPage({
 }: PermissionsPageProps) {
   const controller = usePermissions(active, onGranted);
   const ready = allGranted(controller.snapshot);
+
+  // A gate whose precondition already holds must still be *recorded* as
+  // satisfied, or `canAdvance` refuses to move while Continue sits there
+  // enabled: the snapshot says granted but the flow never hears about it,
+  // because `onGranted` fires on the edge into `granted` and a Mac that was
+  // set up before this run never produces one. Firing on `ready` covers that
+  // case and the moment the second permission lands; `passStep` is
+  // idempotent, so a repeat costs nothing.
+  useEffect(() => {
+    if (active && ready && !passed) onPass();
+  }, [active, ready, passed, onPass]);
 
   return (
     <>
@@ -138,6 +161,10 @@ export function PermissionsPage({
           />
         ))}
       </div>
+
+      {ready ? (
+        <p className="ob-granted-note">Already granted on this Mac — nothing to do here.</p>
+      ) : null}
 
       <div className="ob-actions">
         <button

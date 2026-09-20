@@ -1,7 +1,11 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "onboarding",
-  "description": "The first-run onboarding window: core IPC, including the `onboarding_permissions` event listener the flow uses to react to permission changes, and the window close permission.",
+  "description": "The first-run onboarding window: core IPC, including the `onboarding_permissions` event listener the flow uses to react to permission changes, the window close permission, and `allow-start-dragging` for the drag strip — `core:window:default` deliberately leaves that one out, so an undecorated window would otherwise be immovable.",
   "windows": ["onboarding"],
-  "permissions": ["core:default", "core:window:allow-close"]
+  "permissions": [
+    "core:default",
+    "core:window:allow-close",
+    "core:window:allow-start-dragging"
+  ]
 }

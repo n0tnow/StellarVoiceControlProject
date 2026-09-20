@@ -43,8 +43,9 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { closeOnboarding, completeOnboarding } from "./bridge.ts";
+import { closeOnboarding, completeOnboarding, type PermissionSnapshot } from "./bridge.ts";
 import { CloseIcon } from "./icons.tsx";
+import { allGranted } from "./usePermissions.ts";
 import { cue, unlockOnFirstGesture } from "./sfx.ts";
 import {
   INITIAL_FLOW,
@@ -88,6 +89,7 @@ interface StagedPage {
 
 /** The sentence a screen reader hears when a gate is satisfied. */
 const PASSED_ANNOUNCEMENTS: Partial<Record<StepId, string>> = {
+  permissions: "Both permissions are granted. You can continue.",
   "push-to-talk": "Push to talk works. You can continue.",
   "type-prompt": "The typed prompt works. You can continue.",
 };
@@ -175,10 +177,19 @@ export function OnboardingRoot() {
     });
   }, []);
 
-  const onGranted = useCallback((key: "microphone" | "accessibility") => {
-    cue("check");
-    setAnnouncement(`${key === "microphone" ? "Microphone" : "Accessibility"} granted.`);
-  }, []);
+  const onGranted = useCallback(
+    (key: "microphone" | "accessibility", snapshot: PermissionSnapshot) => {
+      // The `check` cue marks one permission turning green. When the grant
+      // completes the set, the gate's own `success` cue fires in the same
+      // instant (see `PermissionsPage`), and two cues in one moment read as a
+      // stutter — so the per-permission cue yields and lets the gate speak.
+      if (!allGranted(snapshot)) {
+        cue("check");
+        setAnnouncement(`${key === "microphone" ? "Microphone" : "Accessibility"} granted.`);
+      }
+    },
+    [],
+  );
 
   // `press`, not `complete`: the `complete` cue belongs to *arriving* on the
   // last page, and firing it again on the way out would play the window's most
@@ -245,6 +256,8 @@ export function OnboardingRoot() {
           return (
             <PermissionsPage
               active={active}
+              passed={isPassed(flow, "permissions")}
+              onPass={() => onPass("permissions")}
               skipped={isSkipped(flow, "permissions")}
               onAdvance={onAdvance}
               onSkip={onSkip}
@@ -297,7 +310,7 @@ export function OnboardingRoot() {
               Back
             </button>
           ) : null}
-          <span className="ob-chrome-spacer" />
+          <span className="ob-chrome-spacer" data-tauri-drag-region />
           <button
             type="button"
             className="ob-close"

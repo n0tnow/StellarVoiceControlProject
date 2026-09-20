@@ -83,11 +83,13 @@ export interface PermissionsController {
 /**
  * Reads the permission snapshot and exposes the one action each row needs.
  *
- * `onGranted` fires once per permission, on the edge into `granted`.
+ * `onGranted` fires once per permission, on the edge into `granted`, and hands
+ * the caller the post-grant snapshot so it can tell "one more to go" from "the
+ * set is complete" without re-reading it.
  */
 export function usePermissions(
   active: boolean,
-  onGranted: (key: PermissionKey) => void,
+  onGranted: (key: PermissionKey, snapshot: PermissionSnapshot) => void,
 ): PermissionsController {
   const [snapshot, setSnapshot] = useState<PermissionSnapshot>(UNKNOWN_PERMISSIONS);
   const [pending, setPending] = useState<PermissionKey | null>(null);
@@ -104,7 +106,7 @@ export function usePermissions(
     latest.current = next;
     setSnapshot(next);
     for (const key of PERMISSION_KEYS) {
-      if (previous[key] !== "granted" && next[key] === "granted") grantedRef.current(key);
+      if (previous[key] !== "granted" && next[key] === "granted") grantedRef.current(key, next);
     }
   }, []);
 

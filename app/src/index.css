@@ -1832,6 +1832,15 @@
   color: var(--color-notch-muted);
 }
 
+/* The one-line acknowledgement under the rows: the read says both permissions
+   were granted before this window opened, and the page says so instead of
+   letting two green rows sit above a button the user does not trust. */
+.ob-granted-note {
+  margin: 12px 0 0;
+  font-size: 12px;
+  color: var(--color-notch-muted);
+}
+
 /* ---- lesson status ----------------------------------------------- */
 
 /* A fixed-height slot under the lesson copy. The line inside it changes — prompt,
