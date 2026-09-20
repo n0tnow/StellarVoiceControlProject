@@ -1012,9 +1012,11 @@ impl ApprovalStore {
         Ok(authorized)
     }
 
-    /// Marks a pending request denied and returns its payload hash. Step W11a:
-    /// denying any step of a batch denies the **whole** batch (fail-closed).
-    pub fn deny(&self, id: &str) -> Result<String, DenyError> {
+    /// Marks a pending request denied and returns the payload hashes it rejected.
+    /// Step W11a: denying any step of a batch denies the **whole** batch
+    /// (fail-closed), so every step's hash is returned for its own
+    /// `approval_result` event.
+    pub fn deny(&self, id: &str) -> Result<Vec<String>, DenyError> {
         let now = self.now();
         let mut inner = self.lock();
         if let Some(batch) = inner.batch.as_mut() {
@@ -1039,7 +1041,11 @@ impl ApprovalStore {
                     entry.in_flight = false;
                     entry.reason = Some(DENIED_REASON.to_string());
                 }
-                return Ok(batch.entries[0].request.payload_hash.clone());
+                return Ok(batch
+                    .entries
+                    .iter()
+                    .map(|entry| entry.request.payload_hash.clone())
+                    .collect());
             }
         }
         let entry = inner.current.as_mut().ok_or(DenyError::NotFound)?;
@@ -1056,7 +1062,7 @@ impl ApprovalStore {
         entry.state = ApprovalState::Denied;
         entry.in_flight = false;
         entry.reason = Some(DENIED_REASON.to_string());
-        Ok(entry.request.payload_hash.clone())
+        Ok(vec![entry.request.payload_hash.clone()])
     }
 
     /// The current state of one request (single or batch step), or `None` if the
@@ -1152,12 +1158,12 @@ impl ApprovalStore {
 
     /// Invalidates the current request — and every step of a batch — when the
     /// wallet session locks (W13a): an approval belongs to the session that
-    /// created it, so it may not survive a logout. Returns the first denied
-    /// payload hash so the caller can emit the matching `approval_result`; `None`
-    /// when there was nothing live.
-    pub(crate) fn invalidate_for_lock(&self) -> Option<String> {
+    /// created it, so it may not survive a logout. Returns every denied payload
+    /// hash (one per live step) so the caller can emit a matching
+    /// `approval_result` for each; an empty vec means there was nothing live.
+    pub(crate) fn invalidate_for_lock(&self) -> Vec<String> {
         let mut inner = self.lock();
-        let mut first = None;
+        let mut denied = Vec::new();
         if let Some(entry) = inner.current.as_mut() {
             if matches!(
                 entry.state,
@@ -1166,7 +1172,7 @@ impl ApprovalStore {
                 entry.state = ApprovalState::Denied;
                 entry.in_flight = false;
                 entry.reason = Some(LOCKED_REASON.to_string());
-                first = Some(entry.request.payload_hash.clone());
+                denied.push(entry.request.payload_hash.clone());
             }
         }
         if let Some(batch) = inner.batch.as_mut() {
@@ -1178,13 +1184,11 @@ impl ApprovalStore {
                     entry.state = ApprovalState::Denied;
                     entry.in_flight = false;
                     entry.reason = Some(LOCKED_REASON.to_string());
-                    if first.is_none() {
-                        first = Some(entry.request.payload_hash.clone());
-                    }
+                    denied.push(entry.request.payload_hash.clone());
                 }
             }
         }
-        first
+        denied
     }
 }
 
@@ -1422,14 +1426,16 @@ pub fn approval_deny(
     store: State<'_, ApprovalStore>,
     id: String,
 ) -> Result<ApprovalSnapshot, ApprovalCommandError> {
-    let payload_hash = store.deny(&id)?;
-    events::emit(
-        &app,
-        PolarisEvent::ApprovalResult {
-            payload_hash,
-            approved: false,
-        },
-    );
+    let payload_hashes = store.deny(&id)?;
+    for payload_hash in payload_hashes {
+        events::emit(
+            &app,
+            PolarisEvent::ApprovalResult {
+                payload_hash,
+                approved: false,
+            },
+        );
+    }
     store.snapshot_of(&id).ok_or_else(|| {
         ApprovalCommandError::new(
             ApprovalErrorKind::NotPending,
@@ -1484,7 +1490,10 @@ pub fn approval_begin_batch(
             PolarisEvent::ApprovalRequest {
                 intent: snapshot.intent,
                 summary: snapshot.summary,
-                payload_hash: snapshot.payload_hash,
+                // A batch has no single step digest; the batch id is the
+                // non-empty identifier here, and consumers bind to the per-step
+                // ids carried by the `approval_begin_batch` result.
+                payload_hash: snapshot.id,
             },
         );
     }
@@ -1931,7 +1940,10 @@ mod tests {
     fn deny_moves_a_pending_request_to_denied() {
         let store = ApprovalStore::new();
         let outcome = store.begin(request(XDR_ABC)).unwrap();
-        assert_eq!(store.deny(&outcome.request.id).unwrap(), XDR_ABC_HASH);
+        assert_eq!(
+            store.deny(&outcome.request.id).unwrap(),
+            vec![XDR_ABC_HASH.to_string()]
+        );
         let status = store.status(&outcome.request.id).unwrap();
         assert_eq!(status.state, ApprovalState::Denied);
         assert_eq!(status.reason.as_deref(), Some(DENIED_REASON));
@@ -2083,7 +2095,12 @@ mod tests {
         let (begin, _) = store
             .begin_batch("Enable".to_string(), vec![request(XDR_ABC), request(XDR_REAL)])
             .unwrap();
-        store.deny(&begin.ids[1]).unwrap();
+        let denied = store.deny(&begin.ids[1]).unwrap();
+        // Denying one step denies all, and every step's hash is reported.
+        assert_eq!(
+            denied,
+            vec![XDR_ABC_HASH.to_string(), XDR_REAL_HASH.to_string()]
+        );
         for id in &begin.ids {
             assert_eq!(store.status(id).unwrap().state, ApprovalState::Denied);
             assert!(store.take_authorized(id).is_err());
@@ -2095,7 +2112,11 @@ mod tests {
             .begin_batch("Enable".to_string(), vec![request(XDR_ABC), request(XDR_REAL)])
             .unwrap();
         store.authorize_batch(&begin.batch_id, &FakeAuth::ok()).unwrap();
-        assert!(store.invalidate_for_lock().is_some());
+        let locked = store.invalidate_for_lock();
+        assert_eq!(
+            locked,
+            vec![XDR_ABC_HASH.to_string(), XDR_REAL_HASH.to_string()]
+        );
         for id in &begin.ids {
             assert_eq!(store.status(id).unwrap().state, ApprovalState::Denied);
             assert_eq!(

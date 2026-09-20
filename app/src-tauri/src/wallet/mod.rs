@@ -635,7 +635,8 @@ impl WalletService {
         })
     }
 
-    /// `wallet_remove`, gated by Touch ID. Deletes the seed and the metadata.
+    /// `wallet_remove`, gated by Touch ID. Deletes the seed, the executor key
+    /// (seed and metadata) that belonged to this account, and the metadata row.
     pub fn remove(
         &self,
         address: &str,
@@ -660,8 +661,15 @@ impl WalletService {
         if inner.meta.active.as_deref() == Some(address) {
             inner.meta.active = inner.meta.accounts.first().map(|account| account.address.clone());
         }
+        // The executor seed lives in the same recorded store as the wallet seed;
+        // drop its metadata row and, below, its seed so a later re-import cannot
+        // silently resume unattended signing from the old key.
+        let had_executor = inner.meta.executors.remove(address).is_some();
         file::save_metadata(&self.root, &inner.meta)?;
         self.stores.delete(kind, &account_id(address))?;
+        if had_executor {
+            self.stores.delete(kind, &executor::item_id(address))?;
+        }
         Ok(AddressOutcome {
             address: address.to_string(),
         })
@@ -1112,6 +1120,26 @@ mod tests {
         wallet.remove(&address, &allow()).unwrap();
         assert!(!wallet.exists());
         assert!(store.get(&account_id(&address)).is_err());
+    }
+
+    #[test]
+    fn remove_deletes_the_executor_seed_and_metadata_row() {
+        let (wallet, store) = service();
+        let address = install_seed(&wallet, &VECTOR_SEED);
+        let executor_address = keys::address_of(&[0x33u8; 32]);
+        store.set(&crate::wallet::executor::item_id(&address), &[0x33u8; 32]).unwrap();
+        wallet
+            .lock()
+            .meta
+            .executors
+            .insert(address.clone(), executor_address.clone());
+        file::save_metadata(&wallet.root, &wallet.lock().meta).unwrap();
+
+        wallet.remove(&address, &allow()).unwrap();
+        assert!(store.get(&account_id(&address)).is_err());
+        assert!(store.get(&crate::wallet::executor::item_id(&address)).is_err());
+        let meta = file::load_metadata(&wallet.root);
+        assert!(meta.executors.is_empty());
     }
 
     #[test]
