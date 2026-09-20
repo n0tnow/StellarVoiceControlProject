@@ -55,8 +55,15 @@ chain read (see build evidence); later opens are served from the module cache.
 `app/src/notch/tasks/NewScheduleForm.tsx`.
 
 **Verified.** `npm run check` (all workspaces, tsc), `npm test -w @polaris/app`
-(485/485), `npm test -w @polaris/stellar` (112/112), `npm run build -w
-@polaris/app` (green). No lint is configured in the repo.
+(492/492), `npm run build -w @polaris/app` (green). No lint is configured in the
+repo.
+
+> **Correction (2026-09-20, review follow-up).** The earlier claim
+> `npm test -w @polaris/stellar` (112/112) was wrong: 112 is only the
+> `test:live` suite. The full stellar command runs 8 Vitest suites
+> (219+137+133+112+121+145+25+112 = 1004 tests) **plus** the `node:test` keeper
+> suite (67 tests) = **~1071 tests across suites**. The app count was also
+> understated (485 → 492 with the 7 new `snapshotCache` tests).
 
 **Not verified.** Real WKWebView rendering (no visual-test harness exists in the
 repo), live Tauri IPC / Soroban RPC / Touch ID, and the perceived first-open
@@ -208,24 +215,25 @@ $ caffeinate -i npm run check
 @polaris/app         tsc -p tsconfig.json   ✓
 
 $ caffeinate -i npm test -w @polaris/app
-ℹ tests 485
-ℹ pass 485
+ℹ tests 492
+ℹ pass 492
 ℹ fail 0
 
 $ caffeinate -i npm test -w @polaris/stellar
-Test Files  12 passed (12)
-Tests       112 passed (112)
+8 Vitest suites + the node:test keeper suite = ~1071 tests, all pass
+(112 is only the `test:live` suite)
 
 $ caffeinate -i npm run build -w @polaris/app
-✓ built in 219ms
+✓ built in 261ms
 ```
 
-New tests (10):
-`useTasksData.test.ts` — `tasksViewState` (rows win over loading/error;
-skeleton vs error vs empty).
-`rulesLoad.test.ts` — `probeExecutor` (one call reports support+funding;
-missing command → unsupported; other error rethrown) and `editorSnapshotFrom`
-(all five states, no mock for a real owner, form seeded from chain state).
+Tests cover pure view state (`tasksViewState`), the rules load probe
+(`probeExecutor`, `editorSnapshotFrom`), and — added in the review follow-up —
+the owner-scoped cache/dedupe (`snapshotCache.test.ts`, 7 tests: concurrent
+dedupe; synchronous seed before resolve; different key never serves the old
+snapshot; forced refresh supersedes a stale in-flight read; a failed
+revalidation keeps the last good snapshot; a first-read failure has none;
+`clear` ignores a late in-flight result).
 
 ### Not verified
 
@@ -247,6 +255,69 @@ missing command → unsupported; other error rethrown) and `editorSnapshotFrom`
   icon spins while `refreshing`).
 - The "Remove rule" wording in the brief was interpreted as the existing disable
   path, because no delete intent exists and adding one is out of scope.
+
+## Review follow-up (2026-09-20)
+
+Independent review: `backlog/ui-tasks-rules-pro-review.md` (APPROVE WITH CHANGES).
+Every item below was addressed in this worktree; no other behaviour changed.
+
+### Blocking
+
+1. **Owner/network-scoped caches — FIXED.** Both hooks now use one
+   dependency-free, injectable module, `app/src/notch/data/snapshotCache.ts`
+   (`createSnapshotCache<T>(loader)`); a loader reports the exact key it read
+   (`ownerAddress|networkPassphrase`), and `peek`/`load` never serve a snapshot
+   whose stored key differs from the requested key. The active account is
+   subscribed from `walletSessionStore` via `useActiveOwner`
+   (`useTasksData.ts:148`, `useRulesEditor.ts:84`); a snapshot is keyed in
+   `seedKeyFor` (`useTasksData.ts:160`, `useRulesEditor.ts:164`), both caches are
+   cleared on an owner change (`useTasksData.ts:277`, `useRulesEditor.ts:213`)
+   and `owner` is in the effect deps (`useTasksData.ts:326`,
+   `useRulesEditor.ts:250`). The first frame after a switch is also gated on the
+   owner (`useTasksData.ts:385`, `useRulesEditor.ts:286`) and `run` fails closed
+   if the live owner no longer matches the snapshot (`useRulesEditor.ts:256`).
+2. **Tests for the cache/dedupe — FIXED.**
+   `app/src/notch/data/snapshotCache.test.ts` (7 tests) asserts exactly:
+   (a) two concurrent callers issue one read; (b) a cached snapshot is available
+   synchronously before the next read resolves; (c) a different key never serves
+   the previous snapshot; (d) a forced refresh bypasses a stale in-flight read
+   and its result wins; (e) a failed revalidation keeps the last good snapshot;
+   plus a first-read failure has none, and `clear` ignores a late result. The
+   test-count claim was corrected above.
+
+### Non-blocking
+
+3. **Failed revalidation no longer collapses data — FIXED.** `read.stale` keeps
+   the last good rows/rule and sets a separate `refreshError`
+   (`useTasksData.ts:308`, `useRulesEditor.ts:237`); the pages render a
+   non-destructive `.nr-notice.is-hint` "Couldn't refresh" with a Retry
+   (`TasksPage.tsx:197`, `RulesEditor.tsx:118`, `tasks-rules.css:126`).
+4. **In-flight dedupe cannot stamp a pre-mutation snapshot — FIXED.** Every
+   refresh/mutation passes `{ force: !first }`, which bumps a generation token in
+   `snapshotCache.load`; an older read may not write the cache
+   (`snapshotCache.ts:64-104`; asserted by test (d)).
+5. **`MemoTaskRow` now really memoizes — FIXED.** `onCancel` is a `useCallback`
+   (`TasksPage.tsx:142`) instead of a fresh arrow per render.
+6. **Background refresh no longer clobbers an edited form — FIXED.** A `dirty`
+   ref is set on `patch` (`useRulesEditor.ts:278`) and `apply` only re-seeds
+   `form` when not dirty (`useRulesEditor.ts:201`); it resets on owner change and
+   after a successful publish (`useRulesEditor.ts:214,265`).
+7. **Rules refresh now shows the pending/disabled state — FIXED.** The button is
+   disabled while `refreshing` and spins the icon, mirroring Tasks
+   (`RulesEditor.tsx:111-115`).
+
+### Visual polish (owner feedback)
+
+No dashed outlines remain on either page: scoped `.nr-page` overrides replace
+`task-new`/`rule-add` dashed borders with solid 1px subtle borders and tinted
+surfaces from the existing palette (`tasks-rules.css:130-243`; no new colour).
+The rule row carries an On / Always ask status pill (`RulesEditor.tsx:142`),
+"Advanced" is a quiet chevron disclosure row (`RulesEditor.tsx:204`,
+`tasks-rules.css:164`), "Turn off automatic payments" is a subdued destructive
+text button separated by a hairline rule (`RulesEditor.tsx:215`,
+`tasks-rules.css:195`), and Save/Create is right-aligned in the card
+(`tasks-rules.css:160`). The threshold field keeps its label and in-field `XLM`
+unit. Not visually verified in WKWebView (no harness) — see "Not verified".
 
 ## Suggested Next Step
 
