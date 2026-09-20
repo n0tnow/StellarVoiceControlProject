@@ -5,9 +5,8 @@
 >
 > This README is refreshed by a dedicated agent at the end of every milestone
 > (see `AGENTS.md` §6). It describes the codebase as of **v0.1.0** on
-> `integration/wallet-login`: the notch voice pipeline, the embedded wallet (macOS
-> Keychain, Touch ID, session lock) and the chain lane (guard, SDF anchor, P2P) are
-> wired end to end. Live runs need a human on a Mac.
+> `main`: PR #38 (wallet, notch-only UI and autonomous payments) merged
+> 2026-09-20 via PR #39 (squash commit `2157504`). Live runs need a human on a Mac.
 
 Polaris is a voice-controlled Stellar assistant: hold a global hotkey, speak, and it
 answers and can act on Stellar — pay, set spending rules by voice, schedule payments,
@@ -191,11 +190,16 @@ long operations run under `caffeinate -i` per `AGENTS.md` §4. The desktop shell
 - **Notch voice pipeline**: hold Control+Option → STT → agent loop with short dialogue memory
   → spoken read-back; the typed `polaris-event` stream (`app/src-tauri/src/events.rs` →
   `app/src/lib/polaris.ts`) drives the UI (shape pinned by Rust tests and `interfaces/`).
-- **Embedded wallet**: create/import (BIP-39/SEP-5), seed in the macOS Keychain, local signing,
-  Touch ID gate, `none`/`locked`/`unlocked` session with auto-lock, multi-account, Friendbot,
-  contacts, assets/QR/network.
-- **Approval + autonomy**: card built from the decoded XDR + Touch ID; rules by voice and
-  fail-closed auto-pay via the executor key, bounded on-chain by `polaris_guard`.
+- **Wallet (connect/unlock)**: create/import (BIP-39/SEP-5) or connect an existing wallet,
+  seed in the macOS Keychain, unlock via Touch ID, `none`/`locked`/`unlocked` session with
+  auto-lock, multi-account, Friendbot funding, contacts, assets/QR/network.
+- **Approval + autonomous payments**: card built from the decoded XDR + Touch ID; rules by
+  voice and fail-closed auto-pay via the executor key, bounded on-chain by `polaris_guard`.
+- **Anchor deposit/withdraw (SEP-6)**: SDF test anchor + demo bank loop, preflighted before
+  any value moves; Trade page (Deposit·Withdraw·P2P) in the notch.
+- **P2P escrow**: `polaris_p2p_escrow` contract + client/panel (create/accept/confirm/cancel),
+  trustline ("Add asset") flow for USDC/SRT.
+- **History timeline**: local turn log + Horizon payments merged, filters/search/detail drawer.
 - **Chain lane** (`@polaris/stellar`): payments, guard, schedules + keeper, SDF anchor + demo
   bank, P2P client, read-only SPP.
 

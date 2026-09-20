@@ -23,14 +23,15 @@
 - [x] Repository skeleton created (2026-09-19: npm workspaces — `interfaces/`, `agent/`, `app/`, `stellar/`, `contracts/` + `Makefile`/`scripts/`; report: `backlog/2026-09-19-monorepo-skeleton.md`)
 - [x] model-ladder.md model table filled in (2026-09-19: table + PONG log filled; file is local-only and never committed, see .gitignore)
 
-## Milestone 2 — Vertical Slice 🔲
+## Milestone 2 — Vertical Slice ✅
 > Goal: voice → agent → one real testnet transaction. Deadline: today (hackathon crunch, ~6h blocks).
-- [ ] docs/interfaces.md agreed by both owners (types: Intent, ChainTool, SigningService, PolarisEvent)
-- [ ] Tauri spike: global hotkey + mic capture + Touch ID + Keychain read (Tauri vs Electron decision lands here)
+> Status (2026-09-20): slice complete — PR #38 (wallet, notch-only UI and autonomous payments) merged into `main`.
+- [x] docs/interfaces.md agreed by both owners (types: Intent, ChainTool, SigningService, PolarisEvent) (2026-09-20, PR #38)
+- [x] Tauri spike: global hotkey + mic capture + Touch ID + Keychain read (Tauri vs Electron decision lands here) (2026-09-20, PR #38 — Control+Option hold, cpal capture, biometric gate, Keychain custody)
 - [x] Repository skeleton: app/, agent/, stellar/, contracts/ + CI-less build scripts (2026-09-19, `feat/monorepo-skeleton`)
-- [ ] Voice pipeline: hotkey press/release → STT → agent loop → spoken/displayed answer
-- [ ] Chain tool: "send 10 USDC to <alias>" returns unsigned XDR + decoded summary
-- [ ] Touch ID approval card → signed XDR → testnet tx confirmed (SLICE COMPLETE)
+- [x] Voice pipeline: hotkey press/release → STT → agent loop → spoken/displayed answer (2026-09-20, PR #38)
+- [x] Chain tool: "send 10 USDC to <alias>" returns unsigned XDR + decoded summary (2026-09-20, PR #38)
+- [x] Touch ID approval card → signed XDR → testnet tx confirmed (SLICE COMPLETE) (2026-09-20, PR #38)
 
 ### M2 — Owner A Track: Voice Pipeline, step-by-step 🔲
 > **Superseded (2026-09-20, `integration/wallet-login`).** A2 (agent loop), A3 (TTS) and
@@ -85,6 +86,8 @@
 > `backlog/w1-network-wiring.md`.
 
 > 2026-09-20 — **T1 settings / env / Makefile** (`feat/t1-settings-env`): read-only Settings panel (`voice_health` + `stellar_config` rows with status badges, redacted Copy diagnostics) + `settings` Debug check; `.env` falls back to `~/Library/Application Support/Polaris/.env`; `make build` uses the local Tauri CLI and `make run` launches the bundle from the repo root; all checks/tests/build/clippy green — `backlog/t1-settings-env.md`.
+
+> 2026-09-20 — **PR #38 merged (wallet, notch-only UI and autonomous payments)** via conflict-resolution PR #39 (squash commit `2157504`): voice → agent → chain tool → Touch ID approval → testnet transaction is live on `main`, with the wallet/notch UI and autonomous payments (`polaris_guard` executor). M2 vertical slice marked complete.
 
 #### A0 — Push-to-talk + notch overlay harness ✅
 > Design pivot (2026-09-19): the dashboard/log-pane harness was replaced by the notch

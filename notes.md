@@ -936,3 +936,9 @@
 - **Numbers:** app `tsc` clean; `npm test -w @polaris/app` 437/437 on the rebased branch; `vite build` green with `dist/onboarding.html` and its own `assets/onboarding-*.js` chunk emitted; `cargo test` (Tauri shell) **331 passed / 0 failed / 5 ignored** on main; release bundle built; app launched for the owner's eyeball pass.
 - **Status:** merged (the owner's pass over the six pages, the TCC prompts and the two gesture lessons is the remaining verification)
 
+## 2026-09-20 — PR #38 Merged: Wallet, Notch-Only UI and Autonomous Payments on main
+- **Idea:** Merge the `integration/wallet-login` track (PR #38) into `main` so the vertical slice — voice → agent → chain tool → Touch ID approval → testnet transaction → wallet/notch UI — is live on `main`.
+- **Discussion:** PR #38 could not merge cleanly, so conflict-resolution PR #39 carried it: **13 merge conflicts resolved (7 deletions + 6 content)** — Cargo.toml dependency union, lib.rs onboarding-only window handling with `panels` dropped and `resign_active` restored, ShellSurface sfx + wallet-session integration, vite.config main+onboarding entries, backlog union, regenerated package-lock.json. Both `scripts/check.sh` and `scripts/check.sh --chain` passed, and W-2 Gemini approved the resolution.
+- **Decision:** Squash-merge PR #39 → `main` (commit `2157504`). Backlog rows MERGE-PR38 and REVIEW-PR39 moved to the Completed archive; sprints.md Milestone 2 (Vertical Slice) marked complete.
+- **Status:** decided
+
