@@ -171,3 +171,82 @@ NITS; all three nits fixed).
 
 Verification after fixes: `cargo clippy --all-targets -- -D warnings` clean;
 `cargo test` 329 passed / 0 failed / 5 ignored (was 328; +1 new test).
+
+## Rehearsal mode
+
+- **Date:** 2026-09-20
+- **Worker/Agent:** opencode-go/deepseek-v4.1-flash (worker)
+- **Branch/Worktree:** `feat/onboarding-native` at `.worktrees/onboarding-native`
+- **PR:** none (coordinator opens it; #34 already tracks this branch)
+
+### The decision
+
+The product owner's rule: **the first run is entirely a rehearsal — no real
+operation happens during onboarding.** The onboarding lessons make the user
+physically perform the push-to-talk hold and the double-Control tap so the
+gestures are learned, but a native global hotkey cannot tell "lesson" input from
+"real" input. Left alone, a rehearsal keystroke would run the real pipeline:
+`hotkey::apply` would `capture.start(app)` (write a real WAV to disk, open a
+timing trace, feed STT/agent/TTS) and `notch/tap.rs` would emit `notch_hotkey`
+so the real prompt opened behind the onboarding window.
+
+### What was built
+
+- `onboarding::is_rehearsing(app: &AppHandle) -> bool` — the single predicate.
+  It answers from the onboarding window's **real visibility**
+  (`get_webview_window(WINDOW_LABEL)` + `is_visible()`), is cheap and
+  non-panicking, and on a visibility error returns `false` ("not rehearsing"):
+  a window-server hiccup fails toward normal behaviour, never toward a dead
+  hotkey.
+- `hotkey::apply` — while rehearsing, `Start` and `Stop` are both dropped before
+  any `events::emit`, `capture.start`/`capture.stop`, or
+  `timing::begin_turn`/`timing::mark`. The decision is factored into a pure
+  `surviving_actions(actions, rehearsing) -> Vec<Action>` so it is unit-tested
+  without an `AppHandle`.
+- `notch/tap.rs` — while rehearsing the detector keeps consuming samples but
+  skips the `notch_hotkey` emit, so the notch never proposes its prompt behind
+  the onboarding window.
+
+### Not done (and why)
+
+- The monitors themselves (`hotkey_flags.rs`, `ctrl_tap`) are **not** disabled.
+  The gesture machinery stays running and warm; only the consequences are
+  suppressed. Tearing the monitors down and rebuilding them around onboarding is
+  how this project previously broke notch hover.
+- No UI-supplied "step 3 visible" flag is trusted. The Rust safety gate reads
+  the window's real visibility, never the webview.
+- `capture.rs`, `stt*`, `agent.rs`, `tts*` are untouched.
+
+### The non-obvious coupling (why total silence, not partial)
+
+The onboarding UI does **not** depend on the native events. On branch
+`feat/onboarding-ui`, `app/src/onboarding/useShortcutProbe.ts` subscribes to the
+Tauri events **and** to plain DOM `keydown`/`keyup` on the focused onboarding
+window as redundant sources. The DOM path alone gates both lessons, and the
+onboarding window is the key window while it is up. Suppressing the native side
+therefore costs the lesson nothing and is the only way to guarantee no side
+effect. If that UI is ever "simplified" onto the native events alone, this gate
+must be revisited — called out in the `is_rehearsing` doc comment so the next
+reader sees it.
+
+### Verification
+
+- `cargo clippy --all-targets -- -D warnings` → clean.
+- `cargo test` → **331 passed / 0 failed / 5 ignored** (was 329; +2 new tests:
+  `hotkey::tests::rehearsal_drops_every_action`,
+  `hotkey::tests::normal_mode_keeps_every_action`).
+- Not run: `cargo fmt` — running it revealed the crate has pre-existing,
+  repo-wide rustfmt drift, so formatting the whole tree was out of scope for
+  this change and was reverted. Only the three touched files were modified.
+
+### Unsure / for review
+
+- `is_rehearsing` is called on `apply`, including the watchdog/tick paths, so a
+  visibility lookup happens on any tick that carries actions. The empty-action
+  early return keeps it off idle ticks, but this has not been profiled on a real
+  run; the task accepted "cheap" as a requirement and `is_visible()` is a
+  window-state read, not a syscall-heavy probe.
+- The rehearsal gate is inactive once onboarding is hidden; a user who hides
+  onboarding mid-lesson (rather than finishing) returns to the real pipeline
+  immediately. That matches "while the window is up" in the task and matches the
+  visibility the lessons themselves use.

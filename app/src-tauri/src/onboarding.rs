@@ -355,6 +355,38 @@ pub fn is_visible(app: &AppHandle) -> bool {
         .unwrap_or(false)
 }
 
+/// True while the onboarding window is on screen — the app is in **rehearsal**.
+///
+/// During the first run the user physically performs the push-to-talk hold and
+/// the double-Control tap so the lesson can teach the gestures, and the product
+/// decision is that this run must have **no real side effects**. The hotkey
+/// pipeline is driven by process-wide monitors that fire regardless of which
+/// window is focused, so a rehearsal keystroke would otherwise start a real
+/// capture (a WAV written to disk, a timing trace, the downstream
+/// STT/agent/TTS chain) and a rehearsal tap would open the real notch prompt
+/// behind this window. The consumers therefore go inert while this predicate
+/// is true — see `hotkey::apply` and `notch::tap` — because suppressing the
+/// Rust consequences is the only way to guarantee no side effect. Making the
+/// monitors merely "quiet" would still leave the pipeline able to fire.
+///
+/// ## Why total silence is correct, not partial
+///
+/// The onboarding UI does **not** depend on the native events for its lessons.
+/// `app/src/onboarding/useShortcutProbe.ts` subscribes to both the Tauri events
+/// and plain DOM `keydown`/`keyup` on the focused onboarding window as
+/// redundant sources; the DOM path alone gates both lessons, and the onboarding
+/// window is the key window while it is up. Suppressing the Rust side therefore
+/// costs the lesson nothing. If that UI is ever "simplified" onto the native
+/// events alone, this gate must be revisited — it is a non-obvious coupling.
+///
+/// Cheap and non-panicking because it runs on every hotkey edge: it answers
+/// from the window's real visibility, and a failed visibility query reads as
+/// `false` ("not rehearsing") so a window-server hiccup fails toward normal
+/// behaviour and never toward a dead hotkey.
+pub fn is_rehearsing(app: &AppHandle) -> bool {
+    is_visible(app)
+}
+
 /// True for the onboarding window label. `lib.rs` uses it to decide which
 /// window events need the hide/resign treatment.
 pub fn is_onboarding_label(label: &str) -> bool {
