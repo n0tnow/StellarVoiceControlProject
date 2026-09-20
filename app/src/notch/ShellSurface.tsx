@@ -31,6 +31,8 @@ import type { NavigationRequest, ShellGeometry } from "@polaris/interfaces";
 import { StageLabel } from "@/components/StageLabel";
 import { notchPageFor } from "@/lib/navigation";
 import { didSessionLock, shouldAutoOpenWallet, type WalletSession } from "@/lib/walletSession";
+import { ApprovalOverlay } from "./approval/ApprovalOverlay";
+import { usePendingApproval } from "./approval/usePendingApproval";
 import { BlobatarFace } from "./BlobatarFace";
 import { facePlacementFor, shouldRenderFace } from "./faceState";
 import { listenNotchHover } from "./shellBridge";
@@ -84,6 +86,10 @@ export function ShellSurface({
   // voice): it outranks the ready/error dwell so the chosen screen gets the
   // full panel, while a genuine attention voice turn still takes the surface
   // and hands it back.
+  // W15g: a pending approval owns the notch. The overlay below renders the card
+  // and the pin forces the panel open; suppressing voice attention keeps the
+  // payment turn's compact proposal from shrinking the card away.
+  const approval = usePendingApproval();
   const {
     applied,
     onTransitionEnd,
@@ -91,8 +97,8 @@ export function ShellSurface({
     applyContentHeight,
     dismiss,
   } = useShellState(voiceState, {
-    voiceAttention,
-    pin: panelRequest ? "panel" : "collapsed",
+    voiceAttention: voiceAttention && !approval.visible,
+    pin: panelRequest || approval.visible ? "panel" : "collapsed",
   });
 
   // Page routing for the `panel` state. Owned here (not in the panel) so the
@@ -324,6 +330,9 @@ export function ShellSurface({
           class, so page state survives a close/reopen within the session. */}
       <div className="notch-panel" aria-hidden={applied !== "panel"}>
         <NotchPanel controller={pageController} />
+        {/* W15g: the approval card renders over the page body; no separate
+            approval window exists. */}
+        <ApprovalOverlay approval={approval} />
       </div>
     </section>
   );

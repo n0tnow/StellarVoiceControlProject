@@ -297,6 +297,7 @@
 - [x] (2026-09-20, branch `feat/w15e-rules`) **W15e.** Notch Rules/Tasks redesign: one-control Rules page with live summary + Advanced (auto-pay batch save) and a compact New-schedule reveal on Tasks; check clean, app 442/0 — `backlog/w15e-rules.md`
 - [x] **W15b** Wallet page radically simpler (in-app Fund account, balance hero, two-input Send, compact Contacts + cross-view `polaris:contacts-changed`, Accounts switcher/Manage) — `feat/w15b-wallet`.
 - [x] **W15f** "Ask Polaris" saves/lists/deletes a contact by text/voice (read-only `save_contact`/`list_contacts`/`delete_contact`, secret-key refusal) (`feat/w15f-contact`).
+- [x] **W15g** approval card moved inside the notch (no separate approval window): `notch/approval/**` overlay pins the `panel` and renders over the page body, result dwell then collapse, Touch ID/deny/batch unchanged — `backlog/w15g-approval.md`.
 - [ ] **Open / honest:** SPP **value-moving** integration (needs wallet `signAuthEntry`); **Trade page**; CT (confidential tokens) spike/integration; protocol integration (Soroswap swap **or** DeFindex, not both); **A4 screen reading**; developer mode; MPP; passkey wallet.
 - **Human-verification list (unverified by automation):** real mic + STT, real Touch ID (create/sign/unlock/batch), real Keychain first-access, live anchor payout leg, live `pay_executor`, real notch windows/hover/pin, Friendbot.
 
