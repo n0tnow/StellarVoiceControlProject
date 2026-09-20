@@ -895,3 +895,13 @@
 - **BUG-2:** the voice-strip transition (`width` + `border-radius`, 470 ms, `cubic-bezier(0.32,0.72,0,1)`, `will-change: width`, ear fade, no height tween) is taken from `main` verbatim; the new `panel`/`prompt` states add the height tween in their own rule.
 - **Pointer:** `backlog/2026-09-20-notch-shell-port.md`; `app/src-tauri/src/notch.rs`; `app/src/index.css`.
 - **Status:** decided (BUG-1 "after" recording still pending — machine screen locked mid-verification)
+
+## 2026-09-20 — Polaris Has a Face: `blobatar` in the Expanded Notch
+- **Idea:** The assistant had a voice and a shape but no identity. A `blobatar` (deterministic seeded creature, `blobatar` + `@blobatar/react` 2.7.0, ~7 KB gzipped) now rides the notch status strip's right ear, left of the indicator dots, and holds a pose driven by the voice stage.
+- **Mapping:** no turn → `idle`; `listening` → `surprised` (the roster's only pose that *enlarges* the eyes, so it is unmistakable at 22 px); `thinking` → `thinking` (the only pose whose message is a duration — a two-dot loader on a face that already has two dots); `speaking` → `happy` (the library is pose-only and a blob has no mouth, so "lively" is the honest read for talking, not a fake mouth).
+- **Trap found in the library's own docs (`render.d.ts`):** the pose morph is a CSS transition on 15 registered `--mo-*` custom properties, so it only exists if the element is **not** remounted — "the morph would not be slow or wrong; it would not exist", and every idle loop would restart from phase zero. The face is therefore mounted on the *shell-state* boundary only (`shouldRenderFace`), never per stage. A `key={stage}` would have looked right in a screenshot and been dead in motion.
+- **Palette is locked (`hue: 310`, `tone: 0.12`):** a hashed palette is right for a crowd of user avatars where colour is identity; for one creature on a black shell it is a coin flip between "on brand" and "a random green blob". The name still drives the shape.
+- **Not collapsed, not prompt:** the collapsed shell is the physical camera cutout (no pixels), and the `prompt` state removes the strip from the tree and is content-driven (its height sizes the native window).
+- **Gaze skipped on purpose:** `useGaze` needs `gaze.css` *and* `--mo-track-travel` or it renders and never moves; during a push-to-talk turn the user is talking, not moving the mouse.
+- **Pointer:** `backlog/blobatar-avatar.md`; `app/src/notch/faceState.ts` (pure + tested), `app/src/notch/BlobatarFace.tsx`.
+- **Status:** decided (visual result unverified — the worker cannot see the running app; owner must eyeball colour, crowding and the morph)
