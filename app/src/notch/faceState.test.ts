@@ -5,8 +5,10 @@ import { happy, idle, surprised, thinking } from "blobatar/expression";
 
 import {
   FACE_EXPRESSIONS,
+  FACE_PLACEMENTS,
   faceExpressionFor,
   faceMoodFor,
+  facePlacementFor,
   shouldRenderFace,
   type FaceMood,
 } from "./faceState.ts";
@@ -71,4 +73,44 @@ test("the shell's visual state reaches a pose end to end", () => {
   assert.equal(poseFor("speaking"), happy);
   assert.equal(poseFor("idle"), idle);
   assert.equal(poseFor("error"), idle);
+});
+
+test("the panel gets the large presentation and every other state the strip one", () => {
+  assert.equal(facePlacementFor("panel"), FACE_PLACEMENTS.panel);
+  assert.equal(facePlacementFor("compact"), FACE_PLACEMENTS.strip);
+  // Collapsed never renders a face, but the lookup must still be total rather
+  // than returning undefined for a state it has not heard of.
+  assert.equal(facePlacementFor("collapsed"), FACE_PLACEMENTS.strip);
+  assert.equal(facePlacementFor("some-future-state"), FACE_PLACEMENTS.strip);
+});
+
+test("the panel face is several times the strip face", () => {
+  // The whole fix for "it does not move": the library's idle layer is authored
+  // in viewBox units, so its amplitude in screen pixels is whatever the face is
+  // multiplied by. Measured in the browser, 22px put every ambient channel
+  // between 0.24px and 0.48px — real, running, and far too small to see.
+  assert.ok(FACE_PLACEMENTS.panel.size >= 3 * FACE_PLACEMENTS.strip.size);
+});
+
+test("the strip face stays inside a one-cutout-tall shell", () => {
+  // `compact` is exactly one cutout high (a Rust state-table value, ~32px), so
+  // a larger face would stand proud of the black pill.
+  assert.ok(FACE_PLACEMENTS.strip.size <= 30);
+});
+
+test("every placement asks for a gaze excursion the library can honour", () => {
+  // `--mo-track-travel` is registered with an initial value of 0px: a placement
+  // that forgot `travel` would render a face whose eyes never move, which is
+  // indistinguishable from gaze not being wired at all. The useful band is
+  // roughly 1.5-4 viewBox units; the ceiling is the eyes leaving the body.
+  for (const placement of Object.values(FACE_PLACEMENTS)) {
+    assert.ok(placement.travel >= 1.5 && placement.travel <= 4, String(placement.travel));
+  }
+});
+
+test("the smaller face is given the wider excursion", () => {
+  // travel is in viewBox units, so it already scales with size; this is the
+  // perceptual correction on top - a 28px face needs a near-maximum excursion
+  // before tracking registers at all.
+  assert.ok(FACE_PLACEMENTS.strip.travel > FACE_PLACEMENTS.panel.travel);
 });
