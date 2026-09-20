@@ -142,7 +142,7 @@ describe("anchor:check live mode", () => {
     expect(statusOf(tr.steps, "SEP-1 discovery")).toBe("PASS");
     expect(statusOf(tr.steps, "SEP-10 login")).toBe("PASS");
     const sdf = report.results.find((r) => r.homeDomain === SDF)!;
-    expect(sdf.finalLine).toContain("clearly-fake demo customer");
+    expect(sdf.finalLine).toContain("clearly-fake TEST data");
     expect(sdf.finalLine).toContain("first_name, last_name, email_address");
     const text = lines.join("\n");
     expect(text).toContain("Anchor check (LIVE)");

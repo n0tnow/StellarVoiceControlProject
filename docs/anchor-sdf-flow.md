@@ -1,38 +1,41 @@
 # SDF test anchor (`testanchor.stellar.org`) — verified flow
 
-Verified live 2026-09-20 with in-memory throwaway testnet keys (no owner key, no secret printed).
-Endpoints: `/auth`, `/sep6`, `/sep12`, `/sep38`; signing key `GCHL…33PR`. It also publishes
-`TRANSFER_SERVER_SEP0024`, which this project never uses.
+Verified live 2026-09-20, **both directions**, with in-memory throwaway testnet keys (no owner
+key, no secret printed). Endpoints: `/auth`, `/sep6`, `/sep12`, `/sep38`; signing key `GCHL…33PR`.
+It also publishes `TRANSFER_SERVER_SEP0024`, which this project never uses.
 
-- **SEP-10 login**: `GET /auth?account=G…&home_domain=…` returns a challenge with
-  `minTime = now + 1`, `maxTime = now + 900` (900 s window). Login succeeds with a throwaway
-  or newly-Friendbot-funded account and returns a JWT (never printed).
-- **SEP-6 info**: deposit and withdraw enabled for `SRT`, `USDC`, `native`, `min=1`, `max=10`,
-  no `fee_percent`. Deposit `type` must be `SEPA`/`SWIFT` for USDC/native (400 otherwise); `SRT`
-  accepts `bank_account`. Withdraw accepts `bank_account`.
-- **SEP-38**: quotes `iso4217:USD`/`iso4217:CAD` with `context=sep6`, NOT TRY. The repo session
-  defaults to TRY, so `anchor:e2e` against SDF stops at the quote (`sell_asset not found`).
-- **SEP-12 account KYC**: `GET /customer` → `NEEDS_INFO` requiring exactly `first_name`,
-  `last_name`, `email_address` (~45 other fields optional). A `PUT` with those three returns 202,
-  the next GET is `ACCEPTED`. `SDF_DEMO_CUSTOMER` (`Demo`/`User`/`demo@polaris.invalid`) is
-  auto-filled.
-- **SEP-12 per-transaction KYC**: a deposit/withdraw moves to `pending_customer_info_update`;
-  `GET /customer?transaction_id=…` then requires `address`, `birth_date`, `id_type`
-  (`drivers_license|passport|national_id`), `id_country_code`, `id_issue_date`,
+- **SEP-10 login**: `GET /auth?account=G…&home_domain=…` returns a challenge with `minTime = now+1`,
+  `maxTime = now+900`. Succeeds with a Friendbot-funded throwaway account; returns a JWT (never printed).
+- **SEP-6 info**: deposit/withdraw enabled for `SRT`, `USDC`, `native`, `min=1`, `max=10`.
+  Deposit `type`/`funding_method`: `SRT` accepts `bank_account`; `USDC`/`native` need `SEPA`/`SWIFT`
+  (400 otherwise). Withdraw accepts `bank_account`. This is why the SDF scenario defaults to **SRT**.
+- **SEP-38**: quotes `iso4217:USD`/`iso4217:CAD` with `context=sep6`, NOT TRY (`buy_asset not found`).
+  Delivery method must be omitted or `WIRE`; `bank_account` → `Unsupported sell delivery method`.
+  Live: `10 USD → 62.069 SRT` (fee 1 USD), `10 SRT → 1.3043 USD` (fee 1 SRT).
+- **SEP-12 account KYC**: `GET /customer` → `NEEDS_INFO` requiring `first_name`, `last_name`,
+  `email_address`. A `PUT` with those three returns 202; the next GET is `ACCEPTED`.
+- **SEP-12 per-transaction KYC**: an order first reports `incomplete`, then
+  `pending_customer_info_update`; `GET /customer?transaction_id=…` requires `address`, `birth_date`,
+  `id_type` (`drivers_license|passport|national_id`), `id_country_code`, `id_issue_date`,
   `id_expiration_date`, `id_number` (withdraw also `bank_account_number`, `bank_account_type`,
-  `bank_number`, `bank_branch_number`). These are real identity data — refused with
-  `KycRequiredError`, never fabricated.
-- **Deposit** (manual probe, identity fields supplied): `GET /sep6/deposit?asset_code=SRT&account=G…&amount=10&type=bank_account`
-  → `{id}`; the anchor simulates the off-chain leg itself (no sandbox call). Statuses:
-  `pending_customer_info_update` → `pending_anchor` ("Funds received from user") → `completed` in ~11 s.
-  `amount_in` is `10 iso4217:USD`; `amount_out` is `10 stellar:SRT:…`. 10 SRT arrived on Horizon;
-  deposit tx `4f78a240e69d56e18b29d566b9e59d7a38df82ae7b46d081105b4c40beeb9fe7`
-  (https://stellar.expert/explorer/testnet/tx/4f78a240e69d56e18b29d566b9e59d7a38df82ae7b46d081105b4c40beeb9fe7).
-- **Withdraw**: `GET /sep6/withdraw?asset_code=SRT&account=G…&amount=10&type=bank_account`
-  returns only `{id}`; the anchor defers `account_id`/memo until bank KYC is complete, so the repo's
-  immediate-`account_id` expectation cannot pay it. Not completed here.
+  `bank_number`, `bank_branch_number`). We submit `PUT /customer` with `transaction_id` and resume
+  polling; the anchor may ask in several rounds. These are synthetic values (`SDF_DEMO_CUSTOMER`,
+  TEST DATA — testnet SDF test anchor only, see `scenarios.ts`), never real user data.
+- **Deposit** (`npm run anchor:e2e -w @polaris/stellar -- --home-domain testanchor.stellar.org`):
+  `10 USD` → order → `incomplete` → `pending_customer_info_update` → (KYC) → `pending_anchor` →
+  `completed`; `amount_in 10 iso4217:USD`, `amount_out 10 stellar:SRT:…`; ~10 SRT arrives. Tx
+  `a8e1d27c3977e81276b7a963af96bc34eeda578615e25c6316cea47dfbb8778d`
+  (https://stellar.expert/explorer/testnet/tx/a8e1d27c3977e81276b7a963af96bc34eeda578615e25c6316cea47dfbb8778d).
+- **Withdraw**: `GET /sep6/withdraw` returns only `{id}` (the payout account is DEFERRED). After the
+  order's SEP-12 KYC the transaction exposes `withdraw_anchor_account` + id `memo`; we pay exactly
+  that. `10 SRT` → `pending_anchor` → `completed`; `amount_out 10 iso4217:USD`. Payment tx
+  `14edf23fc718d7fcf1c2c563c0b949611e20be6943307c52e3be4bd166a15a2c`
+  (https://stellar.expert/explorer/testnet/tx/14edf23fc718d7fcf1c2c563c0b949611e20be6943307c52e3be4bd166a15a2c).
+- **Timing**: the full deposit+withdraw e2e takes ~45-47 s end to end on testnet (Friendbot +
+  trustline + two KYC rounds + polling); each leg's final status appears within a few seconds.
 
 **Gotchas**: fund the account first (Friendbot) or requests 404; add the asset trustline before the
 deposit completes or it stalls in `pending_trust`. Issuers: SRT
 `GCDNJUBQSX7AJWLJACMJ7I4BC3Z47BQUTMHEICZLE6MU4KQBRYG5JY6B`, USDC
-`GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5`.
+`GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5`. The withdrawal payout account can take
+a moment to appear after KYC, so the client polls the order before paying.

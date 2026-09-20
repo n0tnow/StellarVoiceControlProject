@@ -4,7 +4,7 @@ import { assertAmount } from "../amount.ts";
 import { describeXdr, configureAnchor, depositTry, withdrawTry } from "../chainTools.ts";
 import { TESTNET_PASSPHRASE } from "../config.ts";
 import { preflight } from "../preflight.ts";
-import { AnchorSession } from "../session.ts";
+import { AnchorSession, type AnchorSessionConfig } from "../session.ts";
 import { runDepositFlow, runWithdrawFlow } from "../flows.ts";
 import { EnvSigner } from "../testing.ts";
 import type { Signer } from "../types.ts";
@@ -134,7 +134,7 @@ function fullWorld(opts: { startTrustline: boolean }) {
   return { ...world, chain, orders };
 }
 
-function newSession(world: ReturnType<typeof fullWorld>, s: Signer = signer) {
+function newSession(world: ReturnType<typeof fullWorld>, s: Signer = signer, extra: Partial<AnchorSessionConfig> = {}) {
   const clock = fakeClock();
   return new AnchorSession({
     signer: s,
@@ -144,6 +144,7 @@ function newSession(world: ReturnType<typeof fullWorld>, s: Signer = signer) {
     friendbotUrl: "https://friendbot.example.test",
     sleep: clock.sleep,
     now: clock.now,
+    ...extra,
   });
 }
 
@@ -228,6 +229,61 @@ describe("AnchorSession", () => {
       expect(op.amount).toBe("1.0000000");
     }
     expect(r.explain.map((x) => x.step)).toContain("withdraw.pay");
+  });
+
+  it("uses the configured fiat and omits the delivery method when none is set (SDF USD quote)", async () => {
+    const world = fullWorld({ startTrustline: true });
+    const session = newSession(world, signer, { fiatCode: "USD", sep38DeliveryMethod: undefined });
+    await session.quoteDeposit("10");
+    const url = new URL(world.calls.at(-1)!.url);
+    expect(url.searchParams.get("sell_asset")).toBe("iso4217:USD");
+    expect(url.searchParams.get("buy_asset")).toBe(`stellar:USDC:${USDC_ISSUER}`);
+    expect(url.searchParams.has("sell_delivery_method")).toBe(false);
+  });
+
+  it("resolves a deferred withdrawal payout account through per-transaction KYC, then pays", async () => {
+    const chain = fakeChain({ account: CLIENT.publicKey(), exists: true, trustline: true, usdc: "2.0000000" });
+    const exp = Math.floor(Date.now() / 1000) + 3600;
+    let kycDone = false;
+    const { fetch } = combine(chain, {
+      [`GET ${HOME}/.well-known/stellar.toml`]: TOML_TEXT,
+      [`GET ${HOME}/auth`]: () => ({ transaction: makeChallenge(), network_passphrase: TESTNET_PASSPHRASE }),
+      [`POST ${HOME}/auth`]: { token: fakeJwt({ sub: CLIENT.publicKey(), exp }) },
+      [`GET ${HOME}/sep12/customer`]: () => (kycDone ? { status: "ACCEPTED" } : { status: "NEEDS_INFO", fields: { address: { optional: false } } }),
+      [`PUT ${HOME}/sep12/customer`]: () => {
+        kycDone = true;
+        return new Response(JSON.stringify({ id: "c" }), { status: 202 });
+      },
+      [`GET ${HOME}/sep6/withdraw`]: { id: "wd_def" },
+      [`GET ${HOME}/sep6/transaction`]: () => ({
+        transaction: {
+          id: "wd_def",
+          kind: "withdrawal",
+          status: chain.state.submitted.length > 0 ? "completed" : "pending_user_transfer_start",
+          withdraw_anchor_account: SERVER.publicKey(),
+          withdraw_memo_type: "id",
+          withdraw_memo: "777",
+        },
+      }),
+    });
+    const clock = fakeClock();
+    const s = countingSigner();
+    const session = new AnchorSession({
+      signer: s,
+      homeDomain: HOME,
+      fetch,
+      horizonUrl: "https://horizon.example.test",
+      friendbotUrl: "https://friendbot.example.test",
+      sleep: clock.sleep,
+      now: clock.now,
+      customerFields: { address: "1 Test Street" },
+    });
+    const w = await session.startWithdraw("1");
+    expect(w.data.accountId).toBe(SERVER.publicKey());
+    expect(w.data.memo).toEqual({ type: "id", value: "777" });
+    const pay = await session.payWithdrawal("1");
+    expect(pay.data.hash).toBe("ab".repeat(32));
+    expect(session.explain.all().map((x) => x.step)).toContain("sep6.withdraw_account");
   });
 
   it("withdraw refuses when the balance is too low (no signing)", async () => {
