@@ -12,7 +12,7 @@
  * without touching this component.
  */
 import { useEffect } from "react";
-import { Clock, History, ShieldCheck, Wallet, X } from "lucide-react";
+import { ArrowLeftRight, Clock, History, Settings, ShieldCheck, Wallet, X } from "lucide-react";
 
 import { NOTCH_PAGES, type NotchPage } from "./notchPage";
 import type { NotchPageController } from "./useNotchPage";
@@ -20,12 +20,16 @@ import { HistoryPage } from "./pages/HistoryPage";
 import { TasksPage } from "./pages/TasksPage";
 import { RulesPage } from "./pages/RulesPage";
 import { WalletPage } from "./pages/WalletPage";
+import { TradePage } from "./pages/TradePage";
+import { SettingsPage } from "./pages/SettingsPage";
 
 const PAGE_META: Record<NotchPage, { label: string; Icon: typeof History }> = {
   history: { label: "History", Icon: History },
   tasks: { label: "Tasks", Icon: Clock },
   rules: { label: "Rules", Icon: ShieldCheck },
   wallet: { label: "Wallet", Icon: Wallet },
+  trade: { label: "Trade", Icon: ArrowLeftRight },
+  settings: { label: "Settings", Icon: Settings },
 };
 
 const PAGE_BODY: Record<NotchPage, () => React.JSX.Element> = {
@@ -33,6 +37,8 @@ const PAGE_BODY: Record<NotchPage, () => React.JSX.Element> = {
   tasks: TasksPage,
   rules: RulesPage,
   wallet: WalletPage,
+  trade: TradePage,
+  settings: SettingsPage,
 };
 
 export interface NotchPanelProps {
