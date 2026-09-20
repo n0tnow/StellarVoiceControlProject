@@ -364,24 +364,8 @@ pub fn is_onboarding_label(label: &str) -> bool {
 /// Creates the window if needed, centers, shows and focuses it, and starts the
 /// permission poll.
 fn open(app: &AppHandle) -> Result<(), String> {
-    match app.get_webview_window(WINDOW_LABEL) {
-        Some(window) => {
-            window
-                .center()
-                .map_err(|error| format!("could not center the onboarding window: {error}"))?;
-            window
-                .show()
-                .map_err(|error| format!("could not show the onboarding window: {error}"))?;
-            window
-                .set_focus()
-                .map_err(|error| format!("could not focus the onboarding window: {error}"))?;
-        }
-        None => {
-            let window = WebviewWindowBuilder::new(
-                app,
-                WINDOW_LABEL,
-                WebviewUrl::App(WINDOW_URL.into()),
-            )
+    if app.get_webview_window(WINDOW_LABEL).is_none() {
+        match WebviewWindowBuilder::new(app, WINDOW_LABEL, WebviewUrl::App(WINDOW_URL.into()))
             .title(WINDOW_TITLE)
             .inner_size(900.0, 640.0)
             .resizable(false)
@@ -397,27 +381,66 @@ fn open(app: &AppHandle) -> Result<(), String> {
             // at the wrong size before its webview has painted (see panels.rs).
             .visible(false)
             .build()
-            .map_err(|error| format!("could not create the onboarding window: {error}"))?;
-            window
-                .show()
-                .map_err(|error| format!("could not show the onboarding window: {error}"))?;
-            window
-                .set_focus()
-                .map_err(|error| format!("could not focus the onboarding window: {error}"))?;
+        {
+            Ok(_) => {}
+            // Lost a create race (two opens at once, e.g. startup racing a
+            // manual open): the winner built exactly this window, so fall
+            // through and focus it instead of reporting a failure. Mirrors
+            // `panels::open_spec`.
+            Err(error) if is_label_collision(&error) => {}
+            Err(error) => {
+                return Err(format!("could not create the onboarding window: {error}"))
+            }
         }
     }
+    show_and_focus(app)?;
     start_permission_poll(app);
     Ok(())
 }
 
+/// Centers, shows and focuses the already-built onboarding window.
+fn show_and_focus(app: &AppHandle) -> Result<(), String> {
+    let window = app
+        .get_webview_window(WINDOW_LABEL)
+        .ok_or_else(|| "the onboarding window is missing".to_string())?;
+    window
+        .center()
+        .map_err(|error| format!("could not center the onboarding window: {error}"))?;
+    window
+        .show()
+        .map_err(|error| format!("could not show the onboarding window: {error}"))?;
+    window
+        .set_focus()
+        .map_err(|error| format!("could not focus the onboarding window: {error}"))?;
+    Ok(())
+}
+
+/// True when a build failed only because another caller created that label
+/// first. Window and webview labels are unique independently, so either kind
+/// means a race, not a real failure (same contract as
+/// `panels::is_label_collision`).
+fn is_label_collision(error: &tauri::Error) -> bool {
+    matches!(
+        error,
+        tauri::Error::WindowLabelAlreadyExists(_) | tauri::Error::WebviewLabelAlreadyExists(_)
+    )
+}
+
 /// Hides the window without destroying it and stops the poll.
 fn hide_window(app: &AppHandle) -> Result<(), String> {
+    let Some(window) = app.get_webview_window(WINDOW_LABEL) else {
+        // No window is nothing visible; stopping the poll keeps the command
+        // idempotent after a close that already tore it down.
+        stop_permission_poll();
+        return Ok(());
+    };
+    // Hide first, stop the poll only after a successful hide: a failed hide
+    // would otherwise strand a visible window whose permission poll is dead,
+    // so the React flow would silently stop updating until the next open.
+    window
+        .hide()
+        .map_err(|error| format!("could not hide the onboarding window: {error}"))?;
     stop_permission_poll();
-    if let Some(window) = app.get_webview_window(WINDOW_LABEL) {
-        window
-            .hide()
-            .map_err(|error| format!("could not hide the onboarding window: {error}"))?;
-    }
     Ok(())
 }
 
@@ -629,5 +652,25 @@ mod tests {
             serde_json::to_string(&state).unwrap(),
             r#"{"completed":true,"version":1}"#
         );
+    }
+
+    #[test]
+    fn concurrent_create_label_collisions_are_recognized() {
+        // Window and webview labels are unique independently, so either kind
+        // means another caller won the create race and we should focus, not
+        // fail (mirrors `panels::is_label_collision`).
+        assert!(is_label_collision(
+            &tauri::Error::WindowLabelAlreadyExists(WINDOW_LABEL.into())
+        ));
+        assert!(is_label_collision(
+            &tauri::Error::WebviewLabelAlreadyExists(WINDOW_LABEL.into())
+        ));
+        // A genuine build failure is not mistaken for a race.
+        assert!(!is_label_collision(&tauri::Error::AssetNotFound(
+            WINDOW_URL.into()
+        )));
+        assert!(!is_label_collision(
+            &tauri::Error::CannotReparentWebviewWindow
+        ));
     }
 }
