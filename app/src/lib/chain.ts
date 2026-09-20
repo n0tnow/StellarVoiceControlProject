@@ -134,7 +134,7 @@ export async function recipientForTypedAddress(address: string): Promise<string>
   const { parseAliasBook } = await import("@polaris/stellar");
   const trimmed = address.trim();
   const name = `to-${trimmed.slice(-24).toLowerCase()}`;
-  const { book } = parseAliasBook({ [name]: trimmed });
+  const { book } = parseAliasBook({ [name]: { address: trimmed, network: "testnet" } });
   const entry = book[name];
   if (!entry || !paymentBook) throw new Error("could not use that address");
   paymentBook[name] = entry;
