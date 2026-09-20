@@ -168,7 +168,14 @@ pub fn run() {
             // First run: show the centered onboarding window when the stored
             // marker is missing or from an older onboarding version. It is the
             // only interactive window Polaris opens without a user gesture.
-            onboarding::open_if_needed(app.handle())?;
+            //
+            // Non-fatal on purpose: onboarding is not essential, and a
+            // transient window-server failure on a fresh install must not stop
+            // Polaris from starting. A failed open just means the user can
+            // re-run it from the same command later.
+            if let Err(error) = onboarding::open_if_needed(app.handle()) {
+                eprintln!("polaris: could not open first-run onboarding: {error}");
+            }
 
             println!(
                 "polaris: notch overlay ready — hold Control+Option (or Control+Option+Space) \
