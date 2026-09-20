@@ -8,7 +8,7 @@
 > `stellar/src/keeper/README.md`, and the source notes for this round.
 > Related: `docs/confidential-payments.md` (privacy modes), `docs/interfaces.md` (reserved seam),
 > `docs/demo-runbook.md` (demo steps).
-> *Last updated: 2026-09-19*
+> *Last updated: 2026-09-20 (PR #29 review round 1: threshold auto-pay marked blocked on the executor route)*
 
 ---
 
@@ -77,14 +77,27 @@ app preference may refuse or ask for more than the chain allows (e.g. an app-sid
 it must never allow something the chain rule forbids. The chain is the last defence against a
 compromised agent.
 
-**App-side USD threshold (implemented, 2026-09-20, `feat/touchid-approval`).** The owner can set a
-local `approvalThresholdUsd` in the Settings panel; a USD-stablecoin payment (`USDC`/`PGUSD`/`USD`,
-treated 1:1 — no price oracle) **strictly below** it skips the Touch ID card entirely. The default is
-`0` = always ask (D10). The chain's own `Approval card required: yes` summary line always wins over the
-preference, and non-USD assets (e.g. XLM) always ask because their USD value is unknown. Being *at* the
-threshold still asks — deliberately stricter than D10b's "at or below". The skip is a webview-side
-convenience in front of the Rust gate; the gate itself is unchanged and fail-closed. Details and code
-pointers: `backlog/touchid-approval.md`, `app/src/lib/approvalPolicy.ts`.
+**App-side USD threshold (partially implemented, 2026-09-20, `feat/touchid-approval`; corrected
+after PR #29 review round 1).** The owner can set a local `approvalThresholdUsd` in the Settings
+panel; a USD-stablecoin payment (`USDC`/`PGUSD` — exactly what the chain asset registry in
+`stellar/src/payments/assets.ts` pins, treated 1:1 with 7 decimals; no price oracle) **strictly
+below** it is marked *auto-eligible* in the log. **Today an auto-eligible payment still shows the
+Touch ID card** — this is deliberate interim behaviour, not a bug: the only signing leg in the app
+is the Touch ID gate + Freighter `bridge_sign`, which requires a gate-registered approval id, so an
+approval that skipped the gate could never execute (it previously settled as `executed` with no
+transaction — the bug the review caught). The intended auto path is the **executor route** of this
+very document (D10b): a chain-built `pay_executor` XDR signed by the registered executor key, with
+the guard contract enforcing `auto_approve_limit` on-chain (`contracts/polaris_guard/src/lib.rs`
+`pay_executor`). That leg is not wired in the app (no executor secret in the shell; the payment tool
+never receives an `approvalProfile`, so `DEFAULT_APPROVAL_PROFILE` = `always_ask` always resolves
+`pay_owner`); it is tracked as a backlog item in `backlog/touchid-approval.md` §6. Note the
+asymmetry this exposes: `pay_owner` **skips** the agent-facing guardrails (`auto_approve_limit`,
+`known_recipients_only`, `allowed_assets`) by design — the on-chain auto-approve limit applies to
+the executor route only, and the `Approval card required: yes` summary line currently appears on
+every guarded payment (meaning "owner-signed route", not "the chain forbade auto-approval"). The
+default is `0` = always ask (D10); being *at* the threshold still asks — deliberately stricter than
+D10b's "at or below". The gate itself is unchanged and fail-closed. Details and code pointers:
+`backlog/touchid-approval.md`, `app/src/lib/approvalPolicy.ts`.
 
 **Normative rule — `daily_limit` is the mandate.** The UI must present `daily_limit` as "how much the
 agent may spend per day unattended", and `auto_approve_limit` only as "how big one unattended payment
