@@ -11,10 +11,14 @@
  */
 import type { Offer, OfferState } from "@polaris/stellar";
 
+import type { HorizonAccountDetail } from "./walletAssets.ts";
+
 /** Raw token units per whole token (the demo stablecoin uses 7 decimals). */
 export const RAW_UNITS_PER_TOKEN = 10_000_000n;
 /** Kurus per Turkish lira. */
 export const KURUS_PER_LIRA = 100n;
+/** The asset codes the P2P rail can escrow (the pinned payments registry). */
+export const P2P_ASSET_CODES: readonly string[] = ["XLM", "USDC", "PGUSD"];
 
 /** Whose side of an offer the viewer is on. */
 export type P2pRole = "seller" | "buyer" | "other";
@@ -67,6 +71,63 @@ export function formatRate(amountRaw: bigint, priceKurus: bigint): string {
   // Display-only: rounds the rate down to whole TRY per token.
   const kurusPerToken = (priceKurus * RAW_UNITS_PER_TOKEN) / amountRaw;
   return `${formatTry(kurusPerToken)} TRY/token`;
+}
+
+/* ------------------------------------------------------------------ *
+ * Seller preflight (task W17b)
+ * ------------------------------------------------------------------ */
+
+/** The outcome of checking the seller can back an offer before it is built. */
+export type P2pPreflight =
+  | { ok: true; asset: string }
+  | { ok: false; asset: string; message: string };
+
+/** Raw units (7 decimals) of a Horizon decimal string; `0n` when malformed. */
+export function rawFromDecimal(value: string): bigint {
+  const match = /^(\d+)(?:\.(\d+))?$/.exec(value.trim());
+  if (!match) return 0n;
+  const fraction = (match[2] ?? "").slice(0, 7).padEnd(7, "0");
+  return BigInt(match[1] ?? "0") * RAW_UNITS_PER_TOKEN + BigInt(fraction);
+}
+
+/**
+ * The asset codes the wallet actually holds (a positive Horizon balance), in
+ * the registry's order. Falls back to `["XLM"]` so the sell form always has a
+ * choice.
+ */
+export function heldP2pAssets(detail: HorizonAccountDetail | null): string[] {
+  if (!detail) return ["XLM"];
+  const held = new Set(
+    detail.balances
+      .filter((line) => rawFromDecimal(line.balance) > 0n)
+      .map((line) => line.code.toUpperCase()),
+  );
+  const codes = P2P_ASSET_CODES.filter((code) => held.has(code));
+  return codes.length > 0 ? codes : ["XLM"];
+}
+
+/**
+ * Checks a seller can escrow `neededRaw` units of `asset`, from an injected
+ * Horizon account read. A missing trustline or a short balance is a plain
+ * sentence, so the caller refuses before opening an approval card.
+ */
+export function checkHeldBalance(
+  detail: HorizonAccountDetail,
+  asset: string,
+  neededRaw: bigint,
+): P2pPreflight {
+  const code = asset.trim().toUpperCase();
+  if (!P2P_ASSET_CODES.includes(code)) {
+    return { ok: false, asset, message: `The P2P rail cannot sell ${asset}.` };
+  }
+  const line = detail.balances.find((balance) => balance.code.toUpperCase() === code);
+  if (!line) {
+    return { ok: false, asset: code, message: `Your wallet has no ${code} trustline yet.` };
+  }
+  if (rawFromDecimal(line.balance) < neededRaw) {
+    return { ok: false, asset: code, message: `Not enough ${code} in your wallet.` };
+  }
+  return { ok: true, asset: code };
 }
 
 function plural(value: number, unit: string): string {

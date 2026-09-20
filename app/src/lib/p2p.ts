@@ -15,7 +15,8 @@ import type { ChainTool, ChainToolResult } from "@polaris/interfaces";
 import type { Offer, P2pCall, P2pClient } from "@polaris/stellar";
 
 import { getStellarConfig } from "@/lib/stellarConfig";
-import { formatTokenAmount } from "@/lib/p2pView";
+import { checkHeldBalance, formatTokenAmount, P2P_ASSET_CODES, type P2pPreflight } from "@/lib/p2pView";
+import { fetchAccountDetail, type HorizonAccountDetail } from "@/lib/walletAssets";
 
 /** Error shape the execution seam recognises as a missing-config refusal. */
 function notConfigured(message: string): Error & { code: "not_configured" } {
@@ -30,6 +31,8 @@ export interface P2pContext {
   owner: string;
   /** Network passphrase used to derive the token SAC contract id. */
   networkPassphrase: string;
+  /** Horizon base URL, for the seller's balance/trustline preflight. */
+  horizonUrl: string;
 }
 
 let contextPromise: Promise<P2pContext> | undefined;
@@ -59,7 +62,12 @@ export function getP2pContext(): Promise<P2pContext> {
       networkPassphrase: config.networkPassphrase,
       source: config.ownerAddress,
     });
-    return { client, owner: config.ownerAddress, networkPassphrase: config.networkPassphrase };
+    return {
+      client,
+      owner: config.ownerAddress,
+      networkPassphrase: config.networkPassphrase,
+      horizonUrl: config.horizonUrl,
+    };
   })();
   return contextPromise.catch((error: unknown) => {
     contextPromise = undefined;
@@ -79,6 +87,73 @@ async function tokenSac(asset: string, networkPassphrase: string): Promise<strin
 
 /** The default offer lifetime in seconds (mirrors `@polaris/stellar`). */
 export const P2P_OFFER_TTL_SECONDS = 86_400n;
+
+/* ------------------------------------------------------------------ *
+ * Seller preflight (balance / trustline) — task W17b
+ * ------------------------------------------------------------------ */
+
+export { heldP2pAssets } from "@/lib/p2pView";
+export type { P2pPreflight } from "@/lib/p2pView";
+
+/**
+ * Checks the seller holds enough of `asset` to escrow `amount`, from an
+ * injected Horizon account read. A missing trustline or a short balance is a
+ * plain sentence, so the caller refuses before opening an approval card.
+ */
+export async function checkOfferBalance(
+  detail: HorizonAccountDetail,
+  asset: string,
+  amount: string,
+): Promise<P2pPreflight> {
+  const { guard } = await import("@polaris/stellar");
+  let needed: bigint;
+  try {
+    needed = guard.toRawUnits(amount.trim());
+  } catch {
+    return { ok: false, asset, message: `Enter a valid ${asset} amount.` };
+  }
+  return checkHeldBalance(detail, asset, needed);
+}
+
+/**
+ * Reads the owner's Horizon account and checks it can back the offer. Any read
+ * failure is fail-closed: the seller is told the balance could not be read
+ * rather than being sent into an approval card that will fail on-chain.
+ */
+export async function preflightOffer(asset: string, amount: string): Promise<P2pPreflight> {
+  const config = await getStellarConfig();
+  if (!config.ownerAddress) {
+    return { ok: false, asset, message: "No wallet is active." };
+  }
+  const result = await fetchAccountDetail(config.horizonUrl, config.ownerAddress);
+  if (result.status === "not_found") {
+    return { ok: false, asset, message: "Your wallet has no funds on this network yet." };
+  }
+  if (result.status === "offline") {
+    return { ok: false, asset, message: `Could not read your wallet balance: ${result.message}` };
+  }
+  return checkOfferBalance(result.detail, asset, amount);
+}
+
+/**
+ * Maps each pinned asset's SAC contract id to its code, so the offer list can
+ * label an offer by the token it actually escrows.
+ */
+export async function p2pAssetCodeByToken(networkPassphrase: string): Promise<Record<string, string>> {
+  const { defaultAssetRegistry, toSdkAsset } = await import("@polaris/stellar");
+  const registry = defaultAssetRegistry();
+  const out: Record<string, string> = {};
+  for (const code of P2P_ASSET_CODES) {
+    const spec = registry.get(code);
+    if (!spec) continue;
+    try {
+      out[toSdkAsset(spec).contractId(networkPassphrase)] = spec.code;
+    } catch {
+      // Skip an unresolvable spec; the label falls back to a short token id.
+    }
+  }
+  return out;
+}
 
 /** Builds the unsigned `create_offer` call from a validated form/intent. */
 export async function createP2pOfferCall(
@@ -149,7 +224,11 @@ export const p2pOfferTool: ChainTool = async (intent) => {
   if (typeof intent.priceTry !== "string") {
     throw new Error("p2p_offer requires a TRY price");
   }
-  return asToolResult(await createP2pOfferCall(intent.asset, intent.amount, intent.priceTry));
+  const pre = await preflightOffer(intent.asset, intent.amount);
+  if (!pre.ok) {
+    throw new Error(pre.message);
+  }
+  return asToolResult(await createP2pOfferCall(pre.asset, intent.amount, intent.priceTry));
 };
 
 /** Voice tool: "take offer 3". Fetches the terms so the card shows what is taken. */

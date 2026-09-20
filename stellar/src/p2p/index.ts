@@ -19,7 +19,14 @@ export {
   normalizeOfferState,
   type P2pWriteFunction,
 } from "./describe.ts";
-export { P2pRefusal, asP2pRefusal, isP2pRefusal, type P2pRefusalCode } from "./errors.ts";
+export {
+  P2pRefusal,
+  asP2pRefusal,
+  isP2pRefusal,
+  p2pErrorMessage,
+  type P2pErrorContext,
+  type P2pRefusalCode,
+} from "./errors.ts";
 export { OFFER_STATES } from "./types.ts";
 export type {
   Offer,

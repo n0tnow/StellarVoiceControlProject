@@ -2,15 +2,19 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { Offer, OfferState } from "@polaris/stellar";
+import type { HorizonAccountDetail } from "./walletAssets.ts";
 import {
   actionHint,
   actionLabel,
+  checkHeldBalance,
   formatExpiresIn,
   formatRate,
   formatTokenAmount,
   formatTry,
+  heldP2pAssets,
   nextActions,
   offerView,
+  rawFromDecimal,
   roleOf,
   shortAddress,
 } from "./p2pView.ts";
@@ -97,4 +101,66 @@ test("offerView assembles the row and resolves the seller label", () => {
   assert.equal(view.role, "seller");
   assert.deepEqual(view.actions, ["cancel"]);
   assert.equal(view.expiresIn, "1d 0h");
+});
+
+/* ------------------------------------------------------------------ *
+ * Seller preflight (task W17b)
+ * ------------------------------------------------------------------ */
+
+const ISSUER = "G" + "C".repeat(55);
+
+/** A Horizon account detail with the given balance lines, no float. */
+function account(balances: { code: string; balance: string }[]): HorizonAccountDetail {
+  return {
+    sequence: "1",
+    subentryCount: balances.length,
+    numSponsoring: 0,
+    numSponsored: 0,
+    balances: balances.map((line) => ({
+      assetType: line.code === "XLM" ? "native" : "credit_alphanum4",
+      code: line.code,
+      issuer: line.code === "XLM" ? null : ISSUER,
+      balance: line.balance,
+      native: line.code === "XLM",
+      limit: line.code === "XLM" ? null : "922337203685.4775807",
+    })),
+  };
+}
+
+test("rawFromDecimal parses a Horizon string without a float", () => {
+  assert.equal(rawFromDecimal("100.0000000"), 100_0000000n);
+  assert.equal(rawFromDecimal("0.0000001"), 1n);
+  assert.equal(rawFromDecimal("0"), 0n);
+  assert.equal(rawFromDecimal("not a number"), 0n);
+});
+
+test("heldP2pAssets lists positive pinned balances, natives first, else XLM", () => {
+  assert.deepEqual(heldP2pAssets(null), ["XLM"]);
+  assert.deepEqual(
+    heldP2pAssets(account([{ code: "XLM", balance: "5.0000000" }, { code: "USDC", balance: "0.0000000" }])),
+    ["XLM"],
+  );
+  assert.deepEqual(
+    heldP2pAssets(account([{ code: "USDC", balance: "10.0000000" }, { code: "XLM", balance: "5" }])),
+    ["XLM", "USDC"],
+  );
+  assert.deepEqual(heldP2pAssets(account([{ code: "W8USD", balance: "3" }])), ["XLM"]);
+});
+
+test("checkHeldBalance refuses a missing trustline, a short balance, and an unsupported asset", () => {
+  const onlyXlm = account([{ code: "XLM", balance: "5" }]);
+  assert.deepEqual(checkHeldBalance(onlyXlm, "USDC", 100_0000000n), {
+    ok: false,
+    asset: "USDC",
+    message: "Your wallet has no USDC trustline yet.",
+  });
+
+  const someUsdc = account([{ code: "USDC", balance: "10" }]);
+  assert.deepEqual(checkHeldBalance(someUsdc, "usdc", 100_0000000n), {
+    ok: false,
+    asset: "USDC",
+    message: "Not enough USDC in your wallet.",
+  });
+  assert.deepEqual(checkHeldBalance(someUsdc, "USDC", 5_0000000n), { ok: true, asset: "USDC" });
+  assert.equal(checkHeldBalance(someUsdc, "W8USD", 1n).ok, false);
 });
