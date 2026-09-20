@@ -10,15 +10,18 @@
     "preview": "vite preview",
     "check": "tsc -p tsconfig.json",
     "test": "node --test \"src/**/*.test.ts\"",
+    "icon": "node scripts/generate-icon.mjs",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build"
   },
   "dependencies": {
+    "@blobatar/react": "2.7.0",
     "@polaris/agent": "*",
     "@polaris/interfaces": "*",
     "@polaris/stellar": "*",
     "@tauri-apps/api": "2.11.1",
+    "blobatar": "2.7.0",
     "class-variance-authority": "0.7.1",
     "clsx": "2.1.1",
     "lucide-react": "1.47.0",

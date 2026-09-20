@@ -276,51 +276,108 @@
   }
 }
 
-.notch-indicator {
-  position: relative;
+/* ------------------------------------------------------------------ *
+ * Polaris' face.
+ *
+ * One element, two presentations. It is a direct child of `.notch` and is
+ * never moved in the DOM (that would remount it and destroy the pose morph,
+ * the idle phase and the gaze position — see `BlobatarFace`), so *this* is
+ * where it is moved: absolutely positioned, with every state class supplying
+ * its own box. All four properties tween on the shell's own curve, so the
+ * face travels between the ear and the panel's nav header with the notch
+ * rather than jumping when the state flips.
+ *
+ * `--face-size` is set inline by the component from the tested placement
+ * table, so the size cannot drift between the stylesheet and the module that
+ * chooses the gaze excursion to match it.
+ * ------------------------------------------------------------------ */
+.notch-face {
+  position: absolute;
+  z-index: 2;
+  left: var(--face-left);
+  top: var(--face-top);
+  width: var(--face-size);
+  height: var(--face-size);
   display: flex;
   align-items: center;
   justify-content: center;
-  grid-column: 3;
-  justify-self: end;
-  gap: 4px;
-  width: 26px;
-  height: 20px;
-  flex-shrink: 0;
+  pointer-events: none;
+  opacity: 0;
+  transition:
+    left var(--shell-motion) var(--shell-ease),
+    top var(--shell-motion) var(--shell-ease),
+    width var(--shell-motion) var(--shell-ease),
+    height var(--shell-motion) var(--shell-ease),
+    opacity var(--shell-motion) var(--shell-ease);
 }
 
-.notch-indicator::before {
-  content: "";
-  position: absolute;
-  /* Sized to the 32 pt shell so the wash fades out inside it instead of being
-     cut off square by `.notch-content`'s overflow clip. */
-  width: 96px;
-  height: 38px;
-  border-radius: 50%;
-  background: radial-gradient(ellipse, #b91bae5c, #9417a426 45%, transparent 72%);
-  transform: translate(16px, 3px);
+/* The SVG fills the box. The component deliberately passes no `size`, so the
+   element's own attributes never change between states — only this box does,
+   and a box can transition where a `width` attribute cannot. */
+.notch-face > svg {
+  width: 100%;
+  height: 100%;
+  /* No `filter: drop-shadow(...)` here. A halo on a face that sits inside
+     `.notch-content`'s `overflow: hidden` is clipped square at the strip's
+     edge — the same trap `.notch-indicator::before` used to carry a comment
+     about. The creature is pale on black and needs no help separating. */
 }
 
-.notch-indicator span {
-  z-index: 1;
-  width: 4px;
-  height: 4px;
-  border-radius: 4px;
-  background: var(--color-notch-accent);
-  box-shadow: 0 0 12px #f05adc70;
+/* The face fades in with the shell rather than appearing fully formed at the
+   end of the tween, and it is genuinely one beat late: the delay is the second
+   <time> in the shorthand. (A single <time> binds to duration and leaves the
+   delay at 0s, which is how the first cut of this promised a beat it never
+   took.) */
+.notch:not(.shell-collapsed) .notch-face {
+  opacity: 1;
+  transition-delay: 90ms;
 }
 
-.state-recording .notch-indicator span,
+/* Voice states: alone in the right ear, as large as a one-cutout-tall shell
+   can hold. `--cutout-height` is the shell's height here, so the 2px inset
+   above and below is all the room there is. */
+.notch .notch-face {
+  --face-left: calc(100% - var(--face-size) - 16px);
+  --face-top: calc((var(--cutout-height) - var(--face-size)) / 2);
+}
+
+/* The panel: the identity mark at the top of the LEFT nav column, above
+   History / Tasks / Rules / Wallet and visible on all four pages. Centred on
+   the nav's fixed 128px column (see `.notch-panel-inner`) rather than on the
+   content column, so it never costs the page body a header band. */
+.notch.shell-panel .notch-face {
+  --face-left: calc((128px - var(--face-size)) / 2);
+  --face-top: calc(var(--cutout-height) + 12px);
+}
+
+/* The panel has no status strip. Its "Ready" label is a voice-state affordance
+   and in `panel` it would paint over the nav column's own header (the face).
+   `display: none` rather than `opacity: 0` so it also leaves the accessibility
+   tree, not just the view. Every other state keeps its strip exactly as it was;
+   the face is a sibling of this node, so hiding it does not touch the face. */
+.notch.shell-panel .notch-content {
+  display: none;
+}
+
+/* The nav header the face sits in. Reserved rather than overlaid: the face is
+   absolutely positioned (it has to be, to survive the state change without a
+   remount), so nothing else can push the nav buttons out from under it.
+   Derived from the face's own size so the two cannot drift. The content
+   column is untouched: removing the old header band returns the ~124px it was
+   eating to `.panel-body`'s natural padding, so each page's toolbar and rows
+   sit where they did before the face existed. */
+.notch.shell-panel .panel-nav {
+  padding-top: calc(var(--face-size) + 28px);
+}
+
 .state-recording .prompt-voice span {
   animation: listen 850ms ease-in-out infinite alternate;
 }
 
-.state-recording .notch-indicator span:nth-child(2),
 .state-recording .prompt-voice span:nth-child(2) {
   animation-delay: -300ms;
 }
 
-.state-recording .notch-indicator span:nth-child(3),
 .state-recording .prompt-voice span:nth-child(3) {
   animation-delay: -550ms;
 }
@@ -331,23 +388,17 @@
    restart or jump as the turn advances between those stages. Kept as a single
    rule so the two states cannot drift apart. (A9 dropped the `checking` state:
    the intent-validation step is synchronous and unreadable.) */
-.state-transcribing .notch-indicator span,
 .state-transcribing .prompt-voice span,
-.state-speaking .notch-indicator span,
 .state-speaking .prompt-voice span {
   animation: listen 1150ms ease-in-out infinite alternate;
 }
 
-.state-transcribing .notch-indicator span:nth-child(2),
 .state-transcribing .prompt-voice span:nth-child(2),
-.state-speaking .notch-indicator span:nth-child(2),
 .state-speaking .prompt-voice span:nth-child(2) {
   animation-delay: -380ms;
 }
 
-.state-transcribing .notch-indicator span:nth-child(3),
 .state-transcribing .prompt-voice span:nth-child(3),
-.state-speaking .notch-indicator span:nth-child(3),
 .state-speaking .prompt-voice span:nth-child(3) {
   animation-delay: -700ms;
 }
@@ -376,7 +427,7 @@
   color: var(--color-notch-muted);
 }
 
-.state-error .notch-indicator span {
+.state-error .prompt-voice span {
   background: #ffb0c5;
 }
 
@@ -1208,11 +1259,15 @@
     animation: none;
   }
 
-  .state-recording .notch-indicator span,
+  /* The face's own loops and pose morph are already dropped by
+     `blobatar/motion.css`, which honours the same query internally. This is
+     only our own travel between the ear and the panel's nav header. */
+  .notch-face {
+    transition: none;
+  }
+
   .state-recording .prompt-voice span,
-  .state-transcribing .notch-indicator span,
   .state-transcribing .prompt-voice span,
-  .state-speaking .notch-indicator span,
   .state-speaking .prompt-voice span {
     animation: none;
   }
