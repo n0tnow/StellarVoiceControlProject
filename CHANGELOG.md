@@ -36,6 +36,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
   dedicated writer thread over a bounded channel instead of doing disk I/O under a mutex, and a
   stream failure tears the stream down so the next hold works instead of wedging in `recording`.
 
+## [0.2.1] - 2026-09-20
+
+### Changed
+- The TR mock anchor (`tr-mock-anchor.fly.dev`, TRY <-> USDC) is the default anchor; the SDF test
+  anchor stays the automatic fallback (#43).
+
+### Fixed
+- macOS bundle is now signed ad hoc as a whole bundle (`signingIdentity: "-"`, hardened runtime off).
+  The previous DMG carried only a linker signature, so a downloaded copy was reported as "damaged".
+  Hardened runtime stays off because the app has no microphone entitlement.
+
 ## [0.1.0] - 2026-09-19
 
 First code milestone: the monorepo skeleton plus a testnet-deployed on-chain guard,
