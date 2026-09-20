@@ -7,6 +7,7 @@ import {
   EMPTY_FORM,
   UNSUPPORTED_EXECUTOR,
   editorSnapshotFrom,
+  ownerGuardAllows,
   probeExecutor,
 } from "./rulesLoad.ts";
 
@@ -31,6 +32,20 @@ function state(overrides: Partial<SecurityState> = {}): SecurityState {
     ...overrides,
   };
 }
+
+/* ------------------------------------------------------------------ *
+ * ownerGuardAllows — env-only builds stay usable, account switches block
+ * ------------------------------------------------------------------ */
+
+test("ownerGuardAllows lets a snapshot through when no live owner is known", () => {
+  assert.equal(ownerGuardAllows(null, OWNER), true);
+  assert.equal(ownerGuardAllows(null, null), true);
+});
+
+test("ownerGuardAllows lets a snapshot through for the same owner, blocks another", () => {
+  assert.equal(ownerGuardAllows(OWNER, OWNER), true);
+  assert.equal(ownerGuardAllows(OWNER, EXECUTOR), false);
+});
 
 /* ------------------------------------------------------------------ *
  * probeExecutor — ONE executor_status call, not two

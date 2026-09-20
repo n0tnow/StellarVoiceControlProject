@@ -28,6 +28,7 @@ import { createSnapshotCache, type SnapshotLoad } from "../data/snapshotCache.ts
 import {
   EMPTY_FORM,
   editorSnapshotFrom,
+  ownerGuardAllows,
   probeExecutor,
   type EditorSnapshot,
   type RulesLoadState,
@@ -253,7 +254,7 @@ export function useRulesEditor(): RulesEditorData {
     async (next: RulesForm, source: string) => {
       // Fail closed: never act with a snapshot read for a different account.
       const liveOwner = walletSessionStore.getSnapshot().session?.active?.address ?? null;
-      if (!security || security.owner !== liveOwner) return;
+      if (!security || !ownerGuardAllows(liveOwner, security.owner)) return;
       setBusy(true);
       setMessage(null);
       setResultHash(null);
@@ -283,7 +284,7 @@ export function useRulesEditor(): RulesEditorData {
     state,
     detail,
     // Gate the first frame after an account switch: never paint/act on another owner's rule.
-    security: security !== null && security.owner === owner ? security : null,
+    security: security !== null && ownerGuardAllows(owner, security.owner) ? security : null,
     form,
     patch,
     contacts,

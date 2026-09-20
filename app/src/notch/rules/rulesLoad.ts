@@ -17,6 +17,17 @@ import { rulesFormFromState, type RulesForm } from "./rulesModel.ts";
 /** Which of the page's five states is showing. */
 export type RulesLoadState = "loading" | "ready" | "unconfigured" | "not_set_up" | "error";
 
+/**
+ * Whether a snapshot read for `snapshotOwner` may be shown/acted on under the
+ * live wallet owner. Fail closed on a real account switch (different owners),
+ * but allow when the wallet engine is absent and no live owner is known (a
+ * build configured only by `POLARIS_OWNER_ADDRESS`): `null` means "unknown",
+ * not "different". Pure so the guard is tested without a runtime.
+ */
+export function ownerGuardAllows(liveOwner: string | null, snapshotOwner: string | null): boolean {
+  return liveOwner === null || snapshotOwner === liveOwner;
+}
+
 /** The form a fresh editor starts from (the page never invents a rule). */
 export const EMPTY_FORM: RulesForm = {
   mode: "always_ask",
