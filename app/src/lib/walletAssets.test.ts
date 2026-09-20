@@ -6,11 +6,15 @@ import {
   fetchAccountDetail,
   formatReserved,
   formatStellarAmount,
+  hasTrustline,
   mapAccountDetail,
   requestFriendbotFund,
   reservedTenths,
   shortIssuer,
   sortAccountBalances,
+  trustlineRows,
+  TRUSTLINE_ASSETS,
+  USDC_FAUCET_URL,
   type HorizonAccountBalance,
 } from "./walletAssets.ts";
 
@@ -114,4 +118,33 @@ test("Friendbot funding calls the faucet in-process with the public address", as
   });
   assert.equal(unreachable.status, "failed");
   if (unreachable.status === "failed") assert.match(unreachable.message, /timeout/);
+});
+
+test("the Add-asset catalog marks only the held trustlines as added", () => {
+  const detail = mapAccountDetail({
+    balances: [
+      { asset_type: "native", balance: "100.0000000" },
+      {
+        asset_type: "credit_alphanum4",
+        asset_code: "USDC",
+        asset_issuer: "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+        balance: "5.0000000",
+      },
+    ],
+  });
+  assert.deepEqual(
+    trustlineRows(detail).map((row) => [row.code, row.added]),
+    [
+      ["USDC", true],
+      ["SRT", false],
+    ],
+  );
+  assert.equal(trustlineRows(null)[0]?.added, false);
+  assert.equal(hasTrustline(detail, "usdc"), true);
+  assert.equal(hasTrustline(detail, "SRT"), false);
+  assert.deepEqual(
+    TRUSTLINE_ASSETS.map((asset) => asset.code),
+    ["USDC", "SRT"],
+  );
+  assert.equal(USDC_FAUCET_URL, "https://faucet.circle.com/");
 });

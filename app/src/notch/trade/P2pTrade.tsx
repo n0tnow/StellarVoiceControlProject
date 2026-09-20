@@ -21,6 +21,7 @@ import {
   preflightOffer,
 } from "@/lib/p2p";
 import { actionLabel, offerView, shortAddress, type OfferView } from "@/lib/p2pView";
+import { runAddTrustline } from "@/lib/trustline";
 import { useTxRun } from "@/lib/useTxRun";
 import { fetchAccountDetail, type HorizonAccountDetail } from "@/lib/walletAssets";
 import { ExplorerLink } from "@/notch/ExplorerLink";
@@ -40,7 +41,8 @@ interface Row {
   view: OfferView;
 }
 
-type Notice = { kind: "ok" | "error"; message: string } | null;
+/** `addAsset` is the code to offer an "Add <asset>" action for a missing trustline. */
+type Notice = { kind: "ok" | "error"; message: string; addAsset?: string } | null;
 
 export function P2pTrade() {
   const [rows, setRows] = useState<Row[]>([]);
@@ -123,6 +125,27 @@ export function P2pTrade() {
     [run, load],
   );
 
+  /** Adds a missing trustline through the shared approval pipeline, then reloads. */
+  const addTrustline = useCallback(
+    async (code: string): Promise<void> => {
+      setBusy(true);
+      setSubmittedHash(null);
+      try {
+        const outcome = await runAddTrustline(code);
+        if (outcome.status === "submitted") {
+          setNotice({ kind: "ok", message: `${code} added to your wallet.` });
+          setSubmittedHash(outcome.txHash);
+          await load();
+        } else {
+          setNotice({ kind: "error", message: outcome.detail });
+        }
+      } finally {
+        setBusy(false);
+      }
+    },
+    [load],
+  );
+
   const onAccept = (offer: Offer): void => {
     const intent: Intent = {
       kind: "p2p_accept",
@@ -156,7 +179,9 @@ export function P2pTrade() {
         ? await checkOfferBalance(detail, asset, tokens)
         : await preflightOffer(asset, tokens);
       if (!pre.ok) {
-        setNotice({ kind: "error", message: pre.message });
+        // A missing trustline is the one refusal the user can fix in place.
+        const addAsset = /trustline yet/i.test(pre.message) ? pre.asset : undefined;
+        setNotice({ kind: "error", message: pre.message, ...(addAsset ? { addAsset } : {}) });
         return;
       }
       const intent: Intent = {
@@ -270,6 +295,19 @@ export function P2pTrade() {
             <>
               {" "}
               <ExplorerLink target={submittedHash} kind="tx" />
+            </>
+          ) : null}
+          {notice.kind === "error" && notice.addAsset ? (
+            <>
+              {" "}
+              <button
+                type="button"
+                className="text-[11px] text-notch-accent underline"
+                disabled={busy}
+                onClick={() => void addTrustline(notice.addAsset as string)}
+              >
+                Add {notice.addAsset}
+              </button>
             </>
           ) : null}
         </p>
