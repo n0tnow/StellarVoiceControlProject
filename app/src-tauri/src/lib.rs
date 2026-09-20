@@ -20,6 +20,7 @@ mod health;
 mod hotkey;
 mod hotkey_flags;
 mod notch;
+mod onboarding;
 mod panels;
 mod stellar_config;
 mod stt;
@@ -30,7 +31,7 @@ mod types;
 mod voice_health;
 mod weblog;
 
-use tauri::Manager;
+use tauri::{AppHandle, Manager};
 
 pub use commands::{AppInfo, NETWORK};
 pub use events::{AgentStage, HotkeyState, PolarisEvent, SpeechState, POLARIS_EVENT_NAME};
@@ -64,6 +65,18 @@ pub fn run() {
             notch::notch_simulate_hover,
             hotkey::hotkey_permission,
             panels::open_panel,
+            // First-run onboarding: the focusable window, the permission probes
+            // and prompts, the System Settings deep links and the marker file
+            // (see `onboarding.rs`).
+            onboarding::onboarding_state,
+            onboarding::onboarding_open,
+            onboarding::onboarding_close,
+            onboarding::onboarding_complete,
+            onboarding::onboarding_reset,
+            onboarding::onboarding_permissions,
+            onboarding::onboarding_request_microphone,
+            onboarding::onboarding_request_accessibility,
+            onboarding::onboarding_open_settings,
             stellar_config::stellar_config,
             approval::approval_begin,
             approval::approval_authorize,
@@ -94,22 +107,11 @@ pub fn run() {
         // focus back and resume the monitor.
         .on_window_event(|window, event| {
             panels::handle_window_event(window, event);
-            if matches!(event, tauri::WindowEvent::CloseRequested { .. })
-                && panels::is_panel_label(window.label())
-            {
-                let app = window.app_handle();
-                let closing = window.label();
-                let another_visible = panels::PANELS.iter().any(|spec| {
-                    spec.label != closing
-                        && app
-                            .get_webview_window(spec.label)
-                            .and_then(|panel| panel.is_visible().ok())
-                            .unwrap_or(false)
-                });
-                if !another_visible {
-                    if let Err(error) = notch::resign_active(app) {
-                        eprintln!("polaris: could not resign active after a panel closed: {error}");
-                    }
+            onboarding::handle_window_event(window, event);
+            if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
+                let label = window.label();
+                if panels::is_panel_label(label) || onboarding::is_onboarding_label(label) {
+                    resign_after_interactive_close(window.app_handle(), label);
                 }
             }
         })
@@ -162,6 +164,11 @@ pub fn run() {
             // and registers the double-Control detector that proposes the folded
             // `prompt` shell state.
             notch::setup(app)?;
+
+            // First run: show the centered onboarding window when the stored
+            // marker is missing or from an older onboarding version. It is the
+            // only interactive window Polaris opens without a user gesture.
+            onboarding::open_if_needed(app.handle())?;
 
             println!(
                 "polaris: notch overlay ready — hold Control+Option (or Control+Option+Space) \
@@ -229,3 +236,36 @@ fn apply_activation_policy(app: &mut tauri::App) {
 /// on every platform.
 #[cfg(not(target_os = "macos"))]
 fn apply_activation_policy(_app: &mut tauri::App) {}
+
+/// Whether any interactive window other than `closing` is still visible.
+///
+/// Panels and the onboarding window both activate this accessory app when they
+/// open, which pauses the global `mouseMoved` monitor the hover feature needs.
+/// The app must therefore stay active while one of them is still up, and only
+/// the last one to hide hands focus back ([`notch::resign_active`]).
+fn any_other_interactive_visible(app: &AppHandle, closing: &str) -> bool {
+    let panel_visible = panels::PANELS.iter().any(|spec| {
+        spec.label != closing
+            && app
+                .get_webview_window(spec.label)
+                .and_then(|panel| panel.is_visible().ok())
+                .unwrap_or(false)
+    });
+    panel_visible || (closing != onboarding::WINDOW_LABEL && onboarding::is_visible(app))
+}
+
+/// Resigns Polaris from the active state when `closing` was the last interactive
+/// window.
+///
+/// Shared by the window-event callback (a panel or the onboarding close button)
+/// and the onboarding commands, which hide the window without raising a window
+/// event. `closing` is always a panel label or [`onboarding::WINDOW_LABEL`]; the
+/// helper only checks whether any *other* interactive window remains.
+pub(crate) fn resign_after_interactive_close(app: &AppHandle, closing: &str) {
+    if any_other_interactive_visible(app, closing) {
+        return;
+    }
+    if let Err(error) = notch::resign_active(app) {
+        eprintln!("polaris: could not resign active after an interactive window closed: {error}");
+    }
+}

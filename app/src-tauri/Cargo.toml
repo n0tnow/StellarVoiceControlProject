@@ -92,3 +92,10 @@ objc2-local-authentication = { version = "0.3", default-features = false, featur
 # Accessibility consent prompt.
 block2 = "0.6"
 core-foundation = "0.10"
+# First-run onboarding: the microphone TCC status and prompt
+# (`AVCaptureDevice.authorizationStatusForMediaType:` /
+# `requestAccessForMediaType:completionHandler:`). Same objc2 0.6.x generation
+# as the crates above. Default features are off so the capture-device surface
+# does not drag in `objc2-image-io` / `objc2-media-toolbox`, which onboarding
+# never touches.
+objc2-av-foundation = { version = "0.3", default-features = false, features = ["std", "AVCaptureDevice", "AVMediaFormat", "block2"] }

@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "onboarding",
+  "description": "The first-run onboarding window: core IPC, including the `onboarding_permissions` event listener the flow uses to react to permission changes, and the window close permission.",
+  "windows": ["onboarding"],
+  "permissions": ["core:default", "core:window:allow-close"]
+}
