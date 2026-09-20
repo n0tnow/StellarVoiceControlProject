@@ -64,6 +64,7 @@ pub fn run() {
             notch::shell_commit_state,
             notch::shell_resize_content,
             notch::shell_set_pinned,
+            notch::shell_request_keyboard,
             notch::notch_hover_health,
             notch::notch_simulate_hover,
             hotkey::hotkey_permission,

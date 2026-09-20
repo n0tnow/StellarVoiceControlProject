@@ -15,6 +15,7 @@ import { useEffect } from "react";
 import { ArrowLeftRight, Clock, History, Settings, ShieldCheck, Wallet, X } from "lucide-react";
 
 import { NOTCH_PAGES, type NotchPage } from "./notchPage";
+import { requestShellKeyboard } from "./shellBridge";
 import type { NotchPageController } from "./useNotchPage";
 import { HistoryPage } from "./pages/HistoryPage";
 import { TasksPage } from "./pages/TasksPage";
@@ -46,6 +47,25 @@ export interface NotchPanelProps {
   controller: NotchPageController;
 }
 
+/** Elements a person types into; clicking one asks Rust for keyboard focus. */
+const TEXT_FIELD = "input:not([type=checkbox]):not([type=radio]):not([type=button]), textarea, select, [contenteditable=true]";
+
+/**
+ * The hover-opened panel is not keyboard-focusable (hovering must never steal
+ * the keyboard from the user's app). Clicking a field is the explicit request:
+ * Rust makes the overlay focusable for this panel session and the field is
+ * re-focused once the window is key.
+ */
+function grantKeyboardOnFieldClick(event: React.PointerEvent<HTMLElement>): void {
+  const field = (event.target as HTMLElement).closest<HTMLElement>(TEXT_FIELD);
+  if (!field) return;
+  void requestShellKeyboard()
+    .then((granted) => {
+      if (granted) field.focus();
+    })
+    .catch((error: unknown) => console.warn("keyboard focus request failed", error));
+}
+
 export function NotchPanel({ controller }: NotchPanelProps) {
   const { page, setNotchPage, close } = controller;
   const ActivePage = PAGE_BODY[page];
@@ -61,7 +81,7 @@ export function NotchPanel({ controller }: NotchPanelProps) {
   }, [close]);
 
   return (
-    <div className="notch-panel-inner">
+    <div className="notch-panel-inner" onPointerDownCapture={grantKeyboardOnFieldClick}>
       <nav className="panel-nav" aria-label="Notch pages">
         {NOTCH_PAGES.map((name) => {
           const { label, Icon } = PAGE_META[name];

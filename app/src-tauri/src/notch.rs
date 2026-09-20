@@ -861,6 +861,24 @@ impl ShellRuntime {
         self.lock().pinned = pinned;
     }
 
+    /// Grants the native window keyboard input for the **active** interactive
+    /// state (a text field inside the panel was clicked). Returns whether the
+    /// state accepts it. The grant is per state activation: `set_active` and the
+    /// forced collapse reset `focusable`, so leaving the panel always hands the
+    /// keyboard back.
+    pub fn request_keyboard(&self) -> bool {
+        let mut rt = self.lock();
+        let interactive = rt
+            .geometry
+            .states
+            .get(rt.active_index)
+            .is_some_and(|state| state.interactive);
+        if interactive {
+            rt.focusable = true;
+        }
+        interactive
+    }
+
     /// True while a UI-held gate owns the shell.
     pub fn is_pinned(&self) -> bool {
         self.lock().pinned
@@ -1475,6 +1493,24 @@ pub async fn shell_set_pinned(app: AppHandle, pinned: bool) -> Result<(), String
         let runtime = handle.state::<ShellRuntime>();
         runtime.set_pinned(pinned);
         Ok(())
+    })
+    .await
+}
+
+/// A text field inside the interactive panel was clicked: give the overlay
+/// keyboard focus so it can be typed into. The hover-opened panel is otherwise
+/// not focusable (hovering must never steal the keyboard from the user's app);
+/// only an explicit click on a field asks for it. The grant ends with the state.
+#[tauri::command]
+pub async fn shell_request_keyboard(app: AppHandle) -> Result<bool, String> {
+    let handle = app.clone();
+    on_main(&app, move || {
+        let runtime = handle.state::<ShellRuntime>();
+        let granted = runtime.request_keyboard();
+        if granted {
+            sync_native_focusability(&handle)?;
+        }
+        Ok(granted)
     })
     .await
 }

@@ -74,6 +74,15 @@ export async function setShellPinned(pinned: boolean): Promise<void> {
 }
 
 /**
+ * Asks Rust to make the overlay keyboard-focusable because a text field inside
+ * the panel was clicked. The hover-opened panel is not focusable by itself, so
+ * without this no field can be typed into.
+ */
+export async function requestShellKeyboard(): Promise<boolean> {
+  return invoke<boolean>("shell_request_keyboard");
+}
+
+/**
  * Cursor hover changes, debounced in Rust (only emitted on an inside/outside
  * change). Dwell timing is left to React.
  */
