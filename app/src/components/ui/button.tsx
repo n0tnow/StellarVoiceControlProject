@@ -1,7 +1,8 @@
 import { cva, type VariantProps } from "class-variance-authority";
-import type { ButtonHTMLAttributes } from "react";
+import type { ButtonHTMLAttributes, MouseEvent } from "react";
 
 import { cn } from "@/lib/utils";
+import { playSfx } from "@/lib/sfx";
 
 /**
  * shadcn/ui-style button, vendored by hand so the skeleton has no generated
@@ -39,8 +40,21 @@ export interface ButtonProps
   extends ButtonHTMLAttributes<HTMLButtonElement>,
     VariantProps<typeof buttonVariants> {}
 
-export function Button({ className, variant, size, type = "button", ...props }: ButtonProps) {
-  return <button type={type} className={cn(buttonVariants({ variant, size }), className)} {...props} />;
+export function Button({ className, variant, size, type = "button", onClick, ...props }: ButtonProps) {
+  // Every button in the app shares this one cue: a shared `press` here beats
+  // each of the ~16 call sites remembering to wire its own.
+  const handleClick = (event: MouseEvent<HTMLButtonElement>): void => {
+    playSfx("press");
+    onClick?.(event);
+  };
+  return (
+    <button
+      type={type}
+      className={cn(buttonVariants({ variant, size }), className)}
+      onClick={handleClick}
+      {...props}
+    />
+  );
 }
 
 export { buttonVariants };
