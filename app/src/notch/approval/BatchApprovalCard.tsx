@@ -58,20 +58,20 @@ export function BatchApprovalCard({
     <div
       role="group"
       aria-label="Batch approval"
-      className="space-y-3 rounded-xl border border-polaris-line bg-polaris-panel p-4 shadow-2xl"
+      className="rule-card space-y-3"
     >
       {deciding && remainingMs !== null ? (
-        <div className="h-1 overflow-hidden rounded-full bg-white/10" aria-hidden="true">
-          <div
-            className="h-full bg-polaris-accent transition-[width] duration-1000 ease-linear"
+        <div className="wallet-budget-bar" aria-hidden="true">
+          <span
+            className="transition-[width] duration-1000 ease-linear"
             style={{ width: `${pct}%` }}
           />
         </div>
       ) : null}
 
       <div className="flex items-baseline justify-between gap-2">
-        <p className="text-base font-semibold leading-tight">{snapshot.summary.title}</p>
-        <span className="shrink-0 text-[11px] text-polaris-muted">
+        <p className="text-sm font-semibold leading-tight">{snapshot.summary.title}</p>
+        <span className="shrink-0 text-[11px] text-notch-muted">
           {batch.count} steps · 1 approval
         </span>
       </div>
@@ -79,18 +79,18 @@ export function BatchApprovalCard({
       <ol className="space-y-2">
         {batch.steps.map((step, index) => (
           <li key={`${index}-${step.title}`} className="flex gap-3 text-sm">
-            <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-white/10 text-[11px] font-semibold text-polaris-text">
+            <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-white/10 text-[11px] font-semibold text-notch-text">
               {index + 1}
             </span>
-            <span className="font-medium text-polaris-text">{step.title}</span>
+            <span className="font-medium text-notch-text">{step.title}</span>
           </li>
         ))}
       </ol>
 
       {showDetails ? (
-        <div className="rounded-md border border-polaris-line bg-black/20 p-2">
-          <p className="text-[10px] uppercase tracking-wide text-polaris-muted">Approval id</p>
-          <p className="selectable break-all font-mono text-[11px] text-polaris-text">
+        <div className="rounded-lg bg-black/40 p-2">
+          <p className="text-[10px] uppercase tracking-wide text-notch-muted">Approval id</p>
+          <p className="selectable break-all font-mono text-[11px] text-notch-text">
             {snapshot.id}
           </p>
         </div>
@@ -99,20 +99,20 @@ export function BatchApprovalCard({
       <button
         type="button"
         onClick={() => setShowDetails((open) => !open)}
-        className="text-[11px] text-polaris-muted transition-colors hover:text-polaris-text"
+        className="text-[11px] text-notch-muted transition-colors hover:text-notch-text"
       >
         {showDetails ? "Hide details" : "Details"}
       </button>
 
       {hint !== null ? (
-        <p className="rounded-md border border-polaris-line bg-black/20 px-2 py-1 text-[11px] text-polaris-muted">
+        <p className="rounded-lg bg-black/40 px-2 py-1 text-[11px] text-notch-muted">
           {hint}
         </p>
       ) : null}
 
       <div className="flex gap-2">
         <Button
-          variant="default"
+          variant="notch"
           size="md"
           className="flex-1"
           disabled={!canApprove}
@@ -122,7 +122,7 @@ export function BatchApprovalCard({
           {stage === "authorizing" ? "Waiting for Touch ID…" : "Approve all with Touch ID"}
         </Button>
         <div ref={denyRef} className="flex-1">
-          <Button variant="outline" size="md" className="w-full" disabled={!deciding} onClick={onDeny}>
+          <Button variant="notchOutline" size="md" className="w-full" disabled={!deciding} onClick={onDeny}>
             Deny
           </Button>
         </div>

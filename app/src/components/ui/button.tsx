@@ -25,6 +25,12 @@ const buttonVariants = cva(
         outline: "border border-polaris-line text-polaris-text hover:bg-white/5",
         ghost: "text-polaris-muted hover:bg-white/5 hover:text-polaris-text",
         danger: "bg-polaris-danger/90 text-slate-950 hover:bg-polaris-danger",
+        /* The notch palette: the same near-white primary and white-alpha
+           outline the onboarding uses on its black card, for surfaces that
+           belong to the notch itself (wallet unlock, approval) rather than to
+           the cockpit's sky-blue token set. */
+        notch: "bg-notch-text text-black hover:bg-white",
+        notchOutline: "border border-white/15 text-notch-text hover:bg-white/5",
       },
       size: {
         sm: "h-8 px-3 text-xs",

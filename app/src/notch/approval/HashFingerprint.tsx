@@ -28,12 +28,12 @@ export function HashFingerprint({ hash }: { hash: string }) {
       onClick={onCopy}
       title={hash}
       aria-label={`Copy full payload hash ${hash}`}
-      className="flex w-full items-center justify-between gap-2 rounded-md border border-polaris-line bg-black/20 px-2 py-1 text-left transition-colors hover:bg-white/5"
+      className="flex w-full items-center justify-between gap-2 rounded-lg bg-black/40 px-2 py-1 text-left transition-colors hover:bg-white/5"
     >
-      <span className="selectable font-mono text-[11px] text-polaris-text">
+      <span className="selectable font-mono text-[11px] text-notch-text">
         {fingerprint(hash)}
       </span>
-      <span className="text-[10px] uppercase tracking-wide text-polaris-muted">
+      <span className="text-[10px] uppercase tracking-wide text-notch-muted">
         {copied ? "Copied" : "Copy"}
       </span>
     </button>
