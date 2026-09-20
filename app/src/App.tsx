@@ -13,7 +13,7 @@ import { applyNavigation } from "@/lib/navigation";
 import { speakSentence, speakTurnResult } from "@/lib/speech";
 import { failureSentence, submittedSentence } from "@polaris/agent";
 import { TurnFlow } from "@/lib/turnFlow";
-import { decideWalletGateForTurn, requestWalletPage } from "@/lib/walletGate";
+import { decideWalletGateForTurn } from "@/lib/walletGate";
 import {
   recordTurnAnswer,
   recordTurnOutcome,
@@ -311,7 +311,14 @@ export default function App() {
             if (disposed || !isCurrentTurn(sessionRef.current, turnId)) return;
             if (gate.block) {
               void speakSentence(gate.sentence, run.outcome.language);
-              requestWalletPage();
+              // NAV: reuse the voice-navigation mechanism so the notch selects
+              // the Wallet page and pins the panel (ShellSurface applies notch
+              // targets); `applyNavigation` is a no-op for a notch page.
+              setNavigation({
+                target: "wallet",
+                spoken: gate.sentence,
+                ...(run.outcome.language ? { language: run.outcome.language } : {}),
+              });
               recordTurnOutcome(logId, { label: "failed: Connect wallet" });
               dispatchTurn({ type: "failed", label: "Connect wallet" });
               return;

@@ -19,7 +19,6 @@ import { useCallback, useEffect, useState, type CSSProperties } from "react";
 import type { NavigationRequest, ShellGeometry } from "@polaris/interfaces";
 
 import { StageLabel } from "@/components/StageLabel";
-import { onWalletPageRequest } from "@/lib/walletGate";
 import { notchPageFor } from "@/lib/navigation";
 import { MoreMenu } from "./MoreMenu";
 import { NotchPanel } from "./NotchPanel";
@@ -102,13 +101,6 @@ export function ShellSurface({
       setPanelRequest(false);
     }
   }, [navigation, closePanel, setNotchPage]);
-
-  // W10b: the onboarding gate asks the shell to show the Wallet page when a
-  // value-moving intent arrives with no wallet connected. The shell owns the
-  // page state, so it listens for that request and routes it through the same
-  // controller the nav uses.
-  const { setNotchPage } = pageController;
-  useEffect(() => onWalletPageRequest(() => setNotchPage("wallet")), [setNotchPage]);
 
   // `PromptPanel` measures the body below the top inset; the state's min/max
   // are **whole-shell** heights, so add the inset before reporting. It is the
