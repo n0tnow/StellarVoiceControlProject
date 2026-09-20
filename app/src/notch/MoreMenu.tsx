@@ -15,6 +15,7 @@ import { useEffect, useRef, useState } from "react";
 import { Ellipsis } from "lucide-react";
 
 import { MORE_MENU, quitPolaris, openPanel, type MoreMenuEntry } from "@/lib/panels";
+import { playSfx } from "@/lib/sfx";
 
 function runEntry(entry: MoreMenuEntry): void {
   if ("quit" in entry) {
@@ -82,7 +83,10 @@ export function MoreMenu() {
               ref={index === 0 ? firstItemRef : undefined}
               type="button"
               role="menuitem"
+              onMouseEnter={() => playSfx("hover")}
+              onFocus={() => playSfx("hover")}
               onClick={() => {
+                playSfx("select");
                 setOpen(false);
                 runEntry(entry);
               }}
