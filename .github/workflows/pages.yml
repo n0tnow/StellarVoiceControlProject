@@ -1,0 +1,42 @@
+# Publishes the standalone landing page (landing/) to GitHub Pages.
+#
+# The site is plain HTML + CSS with no build step, so the job only uploads the
+# directory as-is. Pages must be set to "GitHub Actions" as its source in the
+# repository settings (Settings → Pages → Build and deployment → Source).
+name: Deploy landing page
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "landing/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time; never cancel a run that is already publishing.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: landing
+
+      - id: deployment
+        uses: actions/deploy-pages@v4
