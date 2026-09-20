@@ -18,6 +18,7 @@
 | 2026-09-19 | Notch overlay rendering — native window vs. web overlay | research worker (codex) | [docs/reports/2026-09-19-notch-overlay-research.md](2026-09-19-notch-overlay-research.md) | notch, overlay, nswindow, tauri, macos, hud |
 | 2026-09-19 | Speech-to-text options — whisper.cpp / whisper-rs and model choice | research worker (opencode) | [docs/reports/2026-09-19-stt-whisper.md](2026-09-19-stt-whisper.md) | stt, whisper, whisper-rs, metal, on-device, latency |
 | 2026-09-19 | Modifier-only hotkey (Control+Option hold) feasibility | research worker (opencode) | [docs/reports/2026-09-19-modifier-only-hotkey.md](2026-09-19-modifier-only-hotkey.md) | hotkey, modifier, flagschanged, accessibility, tcc, push-to-talk |
+| 2026-09-20 | Repository cleanup — branches, tags, GitHub Pages deployment | Claude Opus 5 (coordinator) | [docs/reports/2026-09-20-repo-cleanup.md](2026-09-20-repo-cleanup.md) | cleanup, branches, tags, github-pages, landing, recovery-shas, wrap-up |
 
 ---
 
