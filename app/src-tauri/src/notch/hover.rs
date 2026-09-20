@@ -144,6 +144,29 @@ pub fn teardown(app: &AppHandle) {
     );
 }
 
+/// Forwards one cursor sample to the webview's gaze driver, in the webview's
+/// client coordinates.
+///
+/// Only while a face-bearing state (`compact`/`panel`) is active: the overlay
+/// runs all day and `mouseMoved` fires per move, so forwarding unconditionally
+/// would pay one `NSWindow.frame` read and one IPC message per move for a face
+/// that is not on screen. This stays event-driven — the one monitor is still the
+/// one monitor, and nothing here caches a sample to re-read on a timer.
+fn emit_gaze_cursor(app: &AppHandle, runtime: &ShellRuntime, x: f64, y: f64) {
+    if !matches!(runtime.active_state_name(), "compact" | "panel") {
+        return;
+    }
+    // The monitor callbacks run on the AppKit main thread, which is where
+    // `window::frame` must read the `NSWindow`; a failure (off the main thread,
+    // or no window yet) simply drops the sample.
+    let Ok(frame) = super::window::frame(app) else {
+        return;
+    };
+    // AppKit's origin is bottom-left and `y` grows up; the webview's is
+    // top-left and `y` grows down.
+    crate::events::emit_notch_cursor(app, x - frame.x, frame.y + frame.height - y);
+}
+
 /// One cursor sample from the monitor callback. Cheap by design: a hit-test plus
 /// (only on a change) one Tauri emit and one terminal line.
 fn observe(app: &AppHandle) {
@@ -157,6 +180,7 @@ fn observe(app: &AppHandle) {
         return;
     };
     let (x, y) = platform::cursor_location();
+    emit_gaze_cursor(app, &runtime, x, y);
     if let Some(inside) = runtime.observe_cursor(x, y, now) {
         if let Some(hover) = app.try_state::<HoverRuntime>() {
             hover.note_inside(inside);

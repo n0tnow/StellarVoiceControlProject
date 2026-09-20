@@ -26,6 +26,25 @@ pub struct NotchHover {
     pub inside: bool,
 }
 
+/// Separate channel for the raw cursor position (round-3 gaze fix). It is the
+/// same global `mouseMoved` monitor's sample that hover uses, forwarded to the
+/// webview so the gaze driver has a cursor stream without relying on DOM
+/// pointer events, which a click-through overlay never receives. Deliberately
+/// not on `POLARIS_EVENT_NAME`: it is shell-only and fires per move, gated in
+/// `notch::hover` to the states that actually draw the face.
+pub const NOTCH_CURSOR_EVENT_NAME: &str = "notch_cursor";
+
+/// Payload of [`NOTCH_CURSOR_EVENT_NAME`]: the cursor in the webview's client
+/// coordinates (CSS pixels from the viewport's top-left, `y` growing downward),
+/// which Rust derives from the AppKit screen sample and the overlay window's
+/// frame.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotchCursor {
+    pub x: f64,
+    pub y: f64,
+}
+
 /// Separate channel for the hotkey-sourced shell mode (folded A6 prompt). Shell
 /// state is a shell concern, so it stays off `POLARIS_EVENT_NAME`; the payload
 /// is deliberately a boolean proposal the reducer resolves, not a command.
@@ -165,6 +184,14 @@ pub fn emit(app: &AppHandle, event: PolarisEvent) {
 pub fn emit_notch_hover(app: &AppHandle, inside: bool) {
     if let Err(error) = app.emit(NOTCH_HOVER_EVENT_NAME, &NotchHover { inside }) {
         eprintln!("polaris: failed to emit notch_hover: {error}");
+    }
+}
+
+/// Pushes one cursor sample to the shell for the gaze driver. Same failure
+/// policy as [`emit`]: a lost sample must never be fatal.
+pub fn emit_notch_cursor(app: &AppHandle, x: f64, y: f64) {
+    if let Err(error) = app.emit(NOTCH_CURSOR_EVENT_NAME, &NotchCursor { x, y }) {
+        eprintln!("polaris: failed to emit notch_cursor: {error}");
     }
 }
 
@@ -317,6 +344,12 @@ mod tests {
     fn hover_event_matches_the_ts_shape() {
         let json = serde_json::to_string(&NotchHover { inside: true }).unwrap();
         assert_eq!(json, r#"{"inside":true}"#);
+    }
+
+    #[test]
+    fn cursor_event_matches_the_ts_shape() {
+        let json = serde_json::to_string(&NotchCursor { x: 12.5, y: -3.0 }).unwrap();
+        assert_eq!(json, r#"{"x":12.5,"y":-3.0}"#);
     }
 
     #[test]

@@ -9,7 +9,7 @@
  * ## One element, two presentations
  *
  * The face is small and alone in the status strip's right ear during a voice
- * turn, and large in the panel's header band while the panel is open. Those are
+ * turn, and large in the panel's nav header while the panel is open. Those are
  * two very different places on screen, and the obvious implementation — render
  * it inside the strip in one state and inside the panel in the other — is the
  * one thing that must not be done.
@@ -60,10 +60,33 @@
  * directly beats an inherited inline value, and the symptom of getting that
  * wrong is indistinguishable from not having wired gaze at all.
  *
- * `lookAt: "pointer"` is declarative and re-applied whenever it changes, unlike
- * the driver's construction-time `target`. The driver itself is built once per
- * mounted element (the hook keys it to the callback ref, not to the options), so
- * changing `travel` between presentations re-aims nothing.
+ * ### The target is the native cursor, not `"pointer"`
+ *
+ * `lookAt: "pointer"` is wrong here. It arms the driver with a `pointermove`
+ * listener on the document, and this overlay window does not receive pointer
+ * events until something makes it interactive: it is click-through by default —
+ * which is exactly *why* hover expansion is driven by the native monitor in
+ * `src-tauri/src/notch/hover.rs` and not by CSS `:hover`. So the driver ran and
+ * maintained its custom properties correctly, and yet the eyes only began to
+ * track after the panel had been clicked. The fix removes the dependency
+ * entirely: Rust already runs one global `mouseMoved` monitor (the only cursor
+ * monitor there is), and `hover.rs` now emits each sample on `notch_cursor` in
+ * the webview's client coordinates. This component subscribes and re-aims the
+ * driver with `lookAt(point)`.
+ *
+ * It calls the hook's returned `lookAt` **function**, not the `lookAt={{x, y}}`
+ * option, and not for style. The option is applied from a React effect, so a
+ * point that changes on every mouse move would be a render per move; the
+ * library provides the stable function as its documented seam for exactly a
+ * target that changes on every input. Either way the driver, which holds the
+ * eyes' current position, is never rebuilt — that is the invariant that matters,
+ * and rebuilding it would snap the eyes to centre. The point is compared by
+ * coordinates inside the driver, so a sample that has not moved re-aims nothing.
+ *
+ * A subscription rather than a declared target also means the driver is aimed
+ * only by real cursor events: when the monitor is quiet (the app is active and
+ * the global monitor is paused), the eyes hold their last position rather than
+ * springing back to centre.
  *
  * ## Reduced motion
  *
@@ -84,6 +107,9 @@
 import "blobatar/motion.css";
 import "blobatar/gaze.css";
 
+import { useEffect } from "react";
+import type { UnlistenFn } from "@tauri-apps/api/event";
+
 import { Blobatar } from "@blobatar/react";
 import { useGaze } from "@blobatar/react/gaze";
 
@@ -95,6 +121,7 @@ import {
   faceMoodFor,
   type FacePlacement,
 } from "./faceState";
+import { listenNotchCursor } from "./shellBridge";
 import type { VoiceStage } from "./shellState";
 
 export interface BlobatarFaceProps {
@@ -106,7 +133,31 @@ export interface BlobatarFaceProps {
 
 export function BlobatarFace({ stage, placement }: BlobatarFaceProps) {
   const mood = faceMoodFor(stage);
-  const { ref } = useGaze({ travel: placement.travel, lookAt: "pointer" });
+  const { ref, lookAt } = useGaze({ travel: placement.travel });
+
+  // The native cursor stream (see "Gaze" above). `lookAt` is stable for the
+  // life of the component, so this subscribes exactly once; the hook queues the
+  // point until the driver exists, so a sample that arrives before the SVG
+  // mounts is remembered rather than dropped.
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: UnlistenFn | undefined;
+    void listenNotchCursor((point) => {
+      if (!disposed) lookAt(point);
+    })
+      .then((fn) => {
+        if (disposed) fn();
+        else unlisten = fn;
+      })
+      .catch((error: unknown) => {
+        console.warn("notch cursor unavailable", error);
+      });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [lookAt]);
+
   return (
     /* The box is sized by the stylesheet from `--face-size`, which the shell
        sets from this same placement — geometry is the shell's to publish, as it

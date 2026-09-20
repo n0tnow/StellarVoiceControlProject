@@ -13,6 +13,16 @@ import type { ShellGeometry, ShellStateGeometry } from "@polaris/interfaces";
 /** Separate Tauri event channel for cursor hover (not part of `PolarisEvent`). */
 export const NOTCH_HOVER_EVENT_NAME = "notch_hover";
 
+/**
+ * Separate Tauri event channel for the raw cursor position (not part of
+ * `PolarisEvent`). The overlay is click-through until a state makes it
+ * interactive, so the webview never receives `pointermove` on its own — the
+ * global `mouseMoved` monitor is the only cursor stream there is, and this
+ * carries its samples to the webview's gaze driver. High-frequency by nature;
+ * Rust emits it only while a shell state that draws the face is active.
+ */
+export const NOTCH_CURSOR_EVENT_NAME = "notch_cursor";
+
 /** Separate Tauri event channel for the hotkey-sourced shell mode (folded A6). */
 export const NOTCH_HOTKEY_EVENT_NAME = "notch_hotkey";
 
@@ -66,6 +76,35 @@ export async function listenNotchHover(
       handler(inside);
     } else {
       console.warn("dropped malformed notch_hover", message.payload);
+    }
+  });
+}
+
+/**
+ * A cursor sample in the webview's own client coordinates (CSS pixels from the
+ * viewport's top-left), as Rust converts it from the global monitor's AppKit
+ * screen coordinates using the overlay window's frame.
+ */
+export interface NotchCursorPoint {
+  x: number;
+  y: number;
+}
+
+/**
+ * The raw cursor position from the global mouse monitor, for the gaze driver.
+ * Unlike `notch_hover` this fires on every move, not only on an edge; malformed
+ * payloads are dropped with a warning rather than fed to the driver.
+ */
+export async function listenNotchCursor(
+  handler: (point: NotchCursorPoint) => void,
+): Promise<UnlistenFn> {
+  return listen<{ x?: unknown; y?: unknown }>(NOTCH_CURSOR_EVENT_NAME, (message) => {
+    const x = message.payload?.x;
+    const y = message.payload?.y;
+    if (typeof x === "number" && typeof y === "number") {
+      handler({ x, y });
+    } else {
+      console.warn("dropped malformed notch_cursor", message.payload);
     }
   });
 }
