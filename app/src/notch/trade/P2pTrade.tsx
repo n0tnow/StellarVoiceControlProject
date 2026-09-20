@@ -8,18 +8,27 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import type { Intent } from "@polaris/interfaces";
-import type { Offer, P2pCall } from "@polaris/stellar";
+import { p2p, type Offer, type P2pCall } from "@polaris/stellar";
 
 import { Button } from "@/components/ui/button";
-import { buildP2pActionCall, createP2pOfferCall, getP2pContext } from "@/lib/p2p";
-import { actionLabel, offerView, type OfferView } from "@/lib/p2pView";
+import {
+  buildP2pActionCall,
+  checkOfferBalance,
+  createP2pOfferCall,
+  getP2pContext,
+  heldP2pAssets,
+  p2pAssetCodeByToken,
+  preflightOffer,
+} from "@/lib/p2p";
+import { actionLabel, offerView, shortAddress, type OfferView } from "@/lib/p2pView";
 import { useTxRun } from "@/lib/useTxRun";
+import { fetchAccountDetail, type HorizonAccountDetail } from "@/lib/walletAssets";
 import { ExplorerLink } from "@/notch/ExplorerLink";
 
 import { validateOfferInputs } from "./tradeModel";
 
-/** The token sold on the P2P rail (mirrors the P2P panel). */
-const SELL_ASSET = "USDC";
+/** The fallback token shown before the wallet's held assets are known. */
+const DEFAULT_SELL_ASSET = "XLM";
 /** `list_open` clamps the page size to 20. */
 const PAGE_SIZE = 20;
 
@@ -33,10 +42,6 @@ interface Row {
 
 type Notice = { kind: "ok" | "error"; message: string } | null;
 
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 export function P2pTrade() {
   const [rows, setRows] = useState<Row[]>([]);
   const [loading, setLoading] = useState(true);
@@ -46,21 +51,34 @@ export function P2pTrade() {
   const [showSell, setShowSell] = useState(false);
   const [amount, setAmount] = useState("");
   const [price, setPrice] = useState("");
+  const [asset, setAsset] = useState(DEFAULT_SELL_ASSET);
+  const [heldAssets, setHeldAssets] = useState<string[]>([DEFAULT_SELL_ASSET]);
+  const [detail, setDetail] = useState<HorizonAccountDetail | null>(null);
+  const [codeByToken, setCodeByToken] = useState<Record<string, string>>({});
   const { run } = useTxRun();
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
       const ctx = await getP2pContext();
-      const page = await ctx.client.listOpen(1n, PAGE_SIZE);
+      const [page, account, codes] = await Promise.all([
+        ctx.client.listOpen(1n, PAGE_SIZE),
+        fetchAccountDetail(ctx.horizonUrl, ctx.owner),
+        p2pAssetCodeByToken(ctx.networkPassphrase),
+      ]);
       const byId = new Map<string, Offer>();
       for (const offer of page) byId.set(offer.id.toString(), offer);
       const now = Math.floor(Date.now() / 1000);
       setRows([...byId.values()].map((offer) => ({ offer, view: offerView(offer, ctx.owner, now) })));
+      setCodeByToken(codes);
+      const held = account.status === "ok" ? heldP2pAssets(account.detail) : [DEFAULT_SELL_ASSET];
+      setDetail(account.status === "ok" ? account.detail : null);
+      setHeldAssets(held);
+      setAsset((current) => (held.includes(current) ? current : (held[0] ?? DEFAULT_SELL_ASSET)));
       setNotice(null);
     } catch (error) {
       setRows([]);
-      setNotice({ kind: "error", message: messageOf(error) });
+      setNotice({ kind: "error", message: p2p.p2pErrorMessage(error) });
     } finally {
       setLoading(false);
     }
@@ -70,8 +88,16 @@ export function P2pTrade() {
     void load();
   }, [load]);
 
+  /** The code escrowed by an offer, or a short token id when it is not pinned. */
+  const tokenLabel = (token: string): string => codeByToken[token] ?? shortAddress(token);
+
   const runCall = useCallback(
-    async (callPromise: Promise<P2pCall>, intent: Intent, label: string): Promise<boolean> => {
+    async (
+      callPromise: Promise<P2pCall>,
+      intent: Intent,
+      label: string,
+      assetCode: string,
+    ): Promise<boolean> => {
       setBusy(true);
       setSubmittedHash(null);
       try {
@@ -88,7 +114,7 @@ export function P2pTrade() {
         setNotice({ kind: "error", message: outcome?.detail ?? "The transaction was not submitted." });
         return false;
       } catch (error) {
-        setNotice({ kind: "error", message: messageOf(error) });
+        setNotice({ kind: "error", message: p2p.p2pErrorMessage(error, { asset: assetCode }) });
         return false;
       } finally {
         setBusy(false);
@@ -100,36 +126,59 @@ export function P2pTrade() {
   const onAccept = (offer: Offer): void => {
     const intent: Intent = {
       kind: "p2p_accept",
-      asset: SELL_ASSET,
+      asset: tokenLabel(offer.token),
       amount: "0",
       offerId: Number(offer.id),
       source: "trade-page",
     };
-    void runCall(buildP2pActionCall("accept", offer), intent, `Accept offer #${offer.id}`);
+    void runCall(
+      buildP2pActionCall("accept", offer),
+      intent,
+      `Accept offer #${offer.id}`,
+      tokenLabel(offer.token),
+    );
   };
 
   const check = validateOfferInputs(amount, price);
+  /** The validation label, with the selected asset (the model defaults to USDC). */
+  const inputMessage = check.ok ? "" : check.message.replace("USDC", asset);
 
   const onSell = async (): Promise<void> => {
     if (!check.ok || busy) return;
     const tokens = amount.trim();
     const priceTry = price.trim();
-    const intent: Intent = {
-      kind: "p2p_offer",
-      asset: SELL_ASSET,
-      amount: tokens,
-      priceTry,
-      source: "trade-page",
-    };
-    const ok = await runCall(
-      createP2pOfferCall(SELL_ASSET, tokens, priceTry),
-      intent,
-      `Sell ${tokens} ${SELL_ASSET}`,
-    );
-    if (ok) {
-      setShowSell(false);
-      setAmount("");
-      setPrice("");
+    setBusy(true);
+    setSubmittedHash(null);
+    try {
+      // Preflight the seller's balance/trustline, so a doomed tx never reaches
+      // the approval card. Fail-closed: an unreadable balance blocks the offer.
+      const pre = detail
+        ? await checkOfferBalance(detail, asset, tokens)
+        : await preflightOffer(asset, tokens);
+      if (!pre.ok) {
+        setNotice({ kind: "error", message: pre.message });
+        return;
+      }
+      const intent: Intent = {
+        kind: "p2p_offer",
+        asset: pre.asset,
+        amount: tokens,
+        priceTry,
+        source: "trade-page",
+      };
+      const ok = await runCall(
+        createP2pOfferCall(pre.asset, tokens, priceTry),
+        intent,
+        `Sell ${tokens} ${pre.asset}`,
+        pre.asset,
+      );
+      if (ok) {
+        setShowSell(false);
+        setAmount("");
+        setPrice("");
+      }
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -165,9 +214,27 @@ export function P2pTrade() {
             void onSell();
           }}
         >
-          <div className="flex items-start gap-2">
+          <div className="flex flex-wrap items-start gap-2">
+            <label className="w-24 text-[11px] text-notch-muted">
+              Asset
+              {heldAssets.length > 1 ? (
+                <select
+                  className={INPUT}
+                  value={asset}
+                  onChange={(event) => setAsset(event.target.value)}
+                >
+                  {heldAssets.map((code) => (
+                    <option key={code} value={code}>
+                      {code}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <span className={`${INPUT} block text-notch-text`}>{asset}</span>
+              )}
+            </label>
             <label className="flex-1 text-[11px] text-notch-muted">
-              Amount ({SELL_ASSET})
+              Amount ({asset})
               <input
                 className={INPUT}
                 value={amount}
@@ -191,7 +258,7 @@ export function P2pTrade() {
             <Button type="submit" size="sm" disabled={!check.ok || busy}>
               Create offer
             </Button>
-            {!check.ok ? <span className="text-[11px] text-polaris-warn">{check.message}</span> : null}
+            {!check.ok ? <span className="text-[11px] text-polaris-warn">{inputMessage}</span> : null}
           </div>
         </form>
       ) : null}
@@ -221,7 +288,7 @@ export function P2pTrade() {
             >
               <span className="min-w-0">
                 <span className="block truncate">
-                  {row.view.amount} {SELL_ASSET} · {row.view.priceTry} TRY
+                  {row.view.amount} {tokenLabel(row.offer.token)} · {row.view.priceTry} TRY
                 </span>
                 <span className="block text-[10px] text-notch-muted">
                   seller {row.view.sellerLabel}
