@@ -79,12 +79,7 @@ a:focus-visible {
   font-size:32px;
   line-height:1
 }
-.brand-dot {
-  font-size:10px;
-  align-self:flex-start;
-  margin-top:7px;
-  margin-left:-5px
-}
+
 nav {
   display:flex;
   align-items:center;
@@ -740,4 +735,13 @@ footer {
   color:#9da596;
   margin:18px 0 -12px;
   letter-spacing:.3px
+}
+
+@media (max-width: 600px) {
+  .floating-label {
+    display: none;
+  }
+  .hero-bottom {
+    padding-top: 12px;
+  }
 }
