@@ -946,3 +946,8 @@
 - **Decision:** Squash-merge PR #39 → `main` (commit `2157504`). Backlog rows MERGE-PR38 and REVIEW-PR39 moved to the Completed archive; sprints.md Milestone 2 (Vertical Slice) marked complete.
 - **Status:** decided
 
+
+## 2026-09-21 — README Authors Section
+- **Idea:** Make it obvious on the repo page that the project was built by two people.
+- **Decision:** Added an `## Authors` section at the end of `README.md` (avatar table, GitHub links, main areas). Ownership lines were checked against `git log` / `git shortlog` per directory rather than the original split alone: the wallet track (Touch ID, wallet-backed notch pages, SPP) is credited to Bilal alongside the chain side.
+- **Status:** decided

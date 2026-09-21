@@ -280,3 +280,12 @@ Long operations run under `caffeinate -i` per the project rules in [`AGENTS.md`]
 - [`docs/approval-and-scheduling.md`](docs/approval-and-scheduling.md) — approval and scheduling decisions; [`docs/confidential-payments.md`](docs/confidential-payments.md) — privacy designs.
 - [`docs/anchor-sdf-flow.md`](docs/anchor-sdf-flow.md) — the verified SDF anchor flow; [`docs/demo-script.md`](docs/demo-script.md) — the live demo script.
 - [`notes.md`](notes.md) — decision history; [`sprints.md`](sprints.md) — milestones; [`backlog.md`](backlog.md) + [`backlog/`](backlog/) — open work and worker reports; [`docs/reports/`](docs/reports/) — research archive.
+
+## Authors
+
+Autonomy was built by a two-person team:
+
+| | Author | Main areas |
+|---|---|---|
+| <img src="https://github.com/n0tnow.png?size=80" width="60" alt="Bilal Kaya"> | **Bilal Kaya** — [@n0tnow](https://github.com/n0tnow) | Chain side: the `polaris_guard` Soroban rule engine and `polaris_p2p_escrow` contract, the `stellar/` layer (SEP-6 anchor client, keeper, P2P client), and the wallet track (embedded wallet, Touch ID approval, wallet-backed notch pages, private payments panel) |
+| <img src="https://github.com/fthsrbst.png?size=80" width="60" alt="Fatih Serbest"> | **Fatih Serbest** — [@fthsrbst](https://github.com/fthsrbst) | Desktop app: the monorepo and Tauri shell scaffold, the voice pipeline (hotkey, STT, LLM intent, TTS), the notch UI (shell, panels, avatar, first-run onboarding, UI sounds), the macOS Developer ID signing and notarization pipeline, and the landing page with its GitHub Pages deploy |
